@@ -141,7 +141,7 @@ constexpr size_t CONFIG_MAX_INSTANCES = 64;
 
 // The maximum number of bones that can be associated with a single renderable.
 // We store 32 bytes per bone. Must be a power-of-two, and must fit within CONFIG_MINSPEC_UBO_SIZE.
-constexpr size_t CONFIG_MAX_BONE_COUNT = 256;
+constexpr size_t CONFIG_MAX_BONE_COUNT = 512;
 
 // The maximum number of morph targets associated with a single renderable.
 // Note that ES3.0 only guarantees 256 layers in an array texture.
