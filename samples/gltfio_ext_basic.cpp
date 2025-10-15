@@ -38,6 +38,7 @@
 
 #include <filament/Camera.h>
 #include <filament/Engine.h>
+#include <filament/LightManager.h>
 #include <filament/Scene.h>
 #include <filament/Skybox.h>
 #include <filament/View.h>
@@ -52,6 +53,7 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
+#include <algorithm>
 
 #include "generated/resources/resources.h"
 #include "materials/uberarchive.h"
@@ -76,7 +78,7 @@ struct App {
     Skybox* skybox = nullptr;
 };
 
-static const char* MODEL_PATH = "../third_party/models/ecorche/ecorche_jpeg_compressed.glb";
+static const char* MODEL_PATH = "../../third_party/models/ecorche/ecorche_jpeg_compressed.glb";
 
 // Helper: Read file into memory
 static std::vector<uint8_t> readFile(const char* path) {
@@ -153,6 +155,16 @@ int main(int argc, char** argv) {
         scene->setSkybox(app.skybox);
         view->setPostProcessingEnabled(false);
 
+        // Add directional light (CRITICAL for rendering PBR materials!)
+        Entity light = EntityManager::get().create();
+        LightManager::Builder(LightManager::Type::DIRECTIONAL)
+            .color({0.98, 0.92, 0.89})
+            .intensity(110000.0f)
+            .direction({0.6, -1.0, -0.8})
+            .castShadows(true)
+            .build(*engine, light);
+        scene->addEntity(light);
+
         std::cout << "\n=== gltfio_ext Basic Workflow Demo ===" << std::endl;
         std::cout << "Demonstrating: Load glTF → Extract skeleton/animation/mesh → Play\n" << std::endl;
 
@@ -184,15 +196,18 @@ int main(int argc, char** argv) {
         }
         std::cout << "  Skeleton loaded: " << app.skeleton->getBoneCount() << " bones" << std::endl;
 
-        // Step 4: Load animation
-        std::cout << "[4/6] Loading animation from glTF..." << std::endl;
+        // Step 4: Load animations (loads all animations from glTF file)
+        std::cout << "[4/6] Loading animations from glTF..." << std::endl;
         app.animation = app.loader->loadAnimation(buffer.data(), buffer.size());
         if (!app.animation) {
-            std::cerr << "Failed to load animation" << std::endl;
+            std::cerr << "Failed to load animations" << std::endl;
             return;
         }
-        std::cout << "  Animation loaded: \"" << app.animation->getName()
-                  << "\" (duration: " << app.animation->getDuration() << "s)" << std::endl;
+        std::cout << "  Loaded " << app.animation->getAnimationCount() << " animation(s)" << std::endl;
+        if (app.animation->getAnimationCount() > 0) {
+            std::cout << "  Animation 0: \"" << app.animation->getAnimationName(0)
+                      << "\" (duration: " << app.animation->getAnimationDuration(0) << "s)" << std::endl;
+        }
 
         // Step 5: Load mesh
         std::cout << "[5/6] Loading mesh from glTF..." << std::endl;
@@ -215,27 +230,79 @@ int main(int argc, char** argv) {
         app.mesh->uploadResources();
         std::cout << " done" << std::endl;
 
+        // DEBUG: Check mesh properties
+        auto bbox = app.mesh->getBoundingBox();
+        std::cout << "  Mesh BoundingBox: min(" << bbox.min.x << ", " << bbox.min.y << ", " << bbox.min.z
+                  << "), max(" << bbox.max.x << ", " << bbox.max.y << ", " << bbox.max.z << ")" << std::endl;
+
+        Entity meshEntity = app.mesh->getRenderableEntity();
+        std::cout << "  Mesh Entity ID: " << meshEntity.getId() << std::endl;
+
+        auto& rm = engine->getRenderableManager();
+        auto renderableInstance = app.mesh->getRenderableInstance();
+        if (renderableInstance) {
+            std::cout << "  Renderable instance is VALID" << std::endl;
+            size_t primCount = rm.getPrimitiveCount(renderableInstance);
+            std::cout << "  Primitive count: " << primCount << std::endl;
+        } else {
+            std::cout << "  WARNING: Renderable instance is INVALID" << std::endl;
+        }
+
         // Bind mesh to skeleton
         if (app.mesh->bindSkeleton(app.skeleton)) {
             std::cout << "  ✓ Mesh bound to skeleton" << std::endl;
+        } else {
+            std::cout << "  WARNING: Failed to bind mesh to skeleton" << std::endl;
+            std::cout << "  Setting identity matrices as fallback (model will display in bind pose)" << std::endl;
+
+            // FALLBACK: Set identity matrices so model at least displays in bind pose
+            auto& rm = engine->getRenderableManager();
+            auto renderableInstance = app.mesh->getRenderableInstance();
+            if (renderableInstance) {
+                size_t boneCount = app.skeleton->getBoneCount();
+                std::vector<math::mat4f> identityMatrices(boneCount);
+                for (size_t i = 0; i < boneCount; ++i) {
+                    identityMatrices[i] = math::mat4f();  // Identity matrix
+                }
+                rm.setBones(renderableInstance, identityMatrices.data(), boneCount);
+                std::cout << "  Set " << boneCount << " identity bone matrices" << std::endl;
+            }
         }
 
         // Add mesh to scene
-        scene->addEntity(app.mesh->getRenderableEntity());
+        scene->addEntity(meshEntity);
         std::cout << "  ✓ Mesh added to scene" << std::endl;
 
-        // Step 6: Create animator and play
+        // Step 6: Create animator and play the first animation
         std::cout << "[6/6] Starting animation playback..." << std::endl;
         app.animator = StandaloneAnimator::create(*engine);
         app.animator->bindSkeleton(app.skeleton);
-        int animId = app.animator->playAnimation(app.animation, 1.0f, true);
-        std::cout << "  Animation playing (ID: " << animId << ", looping)\n" << std::endl;
+
+        // Play the first animation (index 0)
+        if (app.animation->getAnimationCount() > 0) {
+            int animId = app.animator->playAnimation(app.animation, 0, 1.0f, true);
+            std::cout << "  Animation playing (ID: " << animId << ", animIndex: 0, looping)\n" << std::endl;
+        } else {
+            std::cout << "  WARNING: No animations to play\n" << std::endl;
+        }
 
         // Setup camera
         app.camera = EntityManager::get().create();
         app.cam = engine->createCamera(app.camera);
         app.cam->setProjection(45.0, 1.0, 0.1, 100.0);
-        app.cam->lookAt({0, 1.5, 3}, {0, 1, 0}, {0, 1, 0});
+
+        // Calculate camera position based on bounding box
+        float3 center = (bbox.min + bbox.max) * 0.5f;
+        float3 size = bbox.max - bbox.min;
+        float maxDim = std::max(std::max(size.x, size.y), size.z);
+        float distance = maxDim * 2.5f; // 2.5x the size to see the whole model
+
+        float3 cameraPos = center + float3(0, 0, distance);
+        app.cam->lookAt(cameraPos, center, {0, 1, 0});
+
+        std::cout << "  Camera: pos(" << cameraPos.x << ", " << cameraPos.y << ", " << cameraPos.z
+                  << "), lookAt(" << center.x << ", " << center.y << ", " << center.z << ")" << std::endl;
+
         view->setCamera(app.cam);
 
         std::cout << "Setup complete. Watch the skeletal animation!" << std::endl;

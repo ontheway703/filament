@@ -50,8 +50,11 @@ int main() {
 
     // 2. 创建动画 - 包含3个通道：TRANSLATION + ROTATION + SCALE
     FAnimationAsset* anim = new FAnimationAsset();
-    anim->mName = CString("MultiChannelTest");
-    anim->mDuration = 1.0f;
+
+    // 创建SingleAnimation
+    SingleAnimation singleAnim;
+    singleAnim.mName = CString("MultiChannelTest");
+    singleAnim.mDuration = 1.0f;
 
     // Sampler 1: TRANSLATION (0,0,0) -> (1,0,0)
     Sampler translateSampler;
@@ -62,7 +65,7 @@ int main() {
         1.0f, 0.0f, 0.0f   // t=1
     };
     translateSampler.interpolation = Sampler::LINEAR;
-    anim->mSamplers.push_back(translateSampler);
+    singleAnim.mSamplers.push_back(translateSampler);
 
     // Sampler 2: ROTATION (identity) -> (90度绕Z轴)
     Sampler rotateSampler;
@@ -75,7 +78,7 @@ int main() {
         q1.x, q1.y, q1.z, q1.w
     };
     rotateSampler.interpolation = Sampler::LINEAR;
-    anim->mSamplers.push_back(rotateSampler);
+    singleAnim.mSamplers.push_back(rotateSampler);
 
     // Sampler 3: SCALE (1,1,1) -> (2,2,2)
     Sampler scaleSampler;
@@ -86,33 +89,40 @@ int main() {
         2.0f, 2.0f, 2.0f   // t=1
     };
     scaleSampler.interpolation = Sampler::LINEAR;
-    anim->mSamplers.push_back(scaleSampler);
+    singleAnim.mSamplers.push_back(scaleSampler);
 
     // 添加3个通道
     Channel transChannel;
-    transChannel.sampler = &anim->mSamplers[0];
+    transChannel.sampler = &singleAnim.mSamplers[0];
     transChannel.targetBoneName = "test_bone";
     transChannel.transformType = Channel::TRANSLATION;
-    anim->mChannels.push_back(transChannel);
+    singleAnim.mChannels.push_back(transChannel);
 
     Channel rotChannel;
-    rotChannel.sampler = &anim->mSamplers[1];
+    rotChannel.sampler = &singleAnim.mSamplers[1];
     rotChannel.targetBoneName = "test_bone";
     rotChannel.transformType = Channel::ROTATION;
-    anim->mChannels.push_back(rotChannel);
+    singleAnim.mChannels.push_back(rotChannel);
 
     Channel scaleChannel;
-    scaleChannel.sampler = &anim->mSamplers[2];
+    scaleChannel.sampler = &singleAnim.mSamplers[2];
     scaleChannel.targetBoneName = "test_bone";
     scaleChannel.transformType = Channel::SCALE;
-    anim->mChannels.push_back(scaleChannel);
+    singleAnim.mChannels.push_back(scaleChannel);
+
+    // 将SingleAnimation添加到AnimationAsset
+    anim->mAnimations.push_back(singleAnim);
+
+    // 缓存动画名称
+    anim->mAnimationNames.push_back(anim->mAnimations[0].mName.c_str());
+    anim->mAnimationNames.push_back(nullptr);
 
     std::cout << "✓ Animation created with 3 channels (T + R + S)" << std::endl;
 
     // 3. 创建animator并播放
     StandaloneAnimator* animator = StandaloneAnimator::create(*engine);
     animator->bindSkeleton(skeleton);
-    int animId = animator->playAnimation(anim, 1.0f, false);
+    int animId = animator->playAnimation(anim, 0, 1.0f, false);
 
     std::cout << "\n--- Frame-by-Frame Analysis ---" << std::endl;
 
@@ -191,19 +201,28 @@ int main() {
 
     // 创建只有TRANSLATION的动画
     FAnimationAsset* animSingle = new FAnimationAsset();
-    animSingle->mName = CString("SingleChannelTest");
-    animSingle->mDuration = 1.0f;
-    animSingle->mSamplers.push_back(translateSampler);  // 复用sampler
+
+    SingleAnimation singleAnimObj;
+    singleAnimObj.mName = CString("SingleChannelTest");
+    singleAnimObj.mDuration = 1.0f;
+    singleAnimObj.mSamplers.push_back(translateSampler);  // 复用sampler
 
     Channel singleChannel;
-    singleChannel.sampler = &animSingle->mSamplers[0];
+    singleChannel.sampler = &singleAnimObj.mSamplers[0];
     singleChannel.targetBoneName = "test_bone2";
     singleChannel.transformType = Channel::TRANSLATION;
-    animSingle->mChannels.push_back(singleChannel);
+    singleAnimObj.mChannels.push_back(singleChannel);
+
+    // 将SingleAnimation添加到AnimationAsset
+    animSingle->mAnimations.push_back(singleAnimObj);
+
+    // 缓存动画名称
+    animSingle->mAnimationNames.push_back(animSingle->mAnimations[0].mName.c_str());
+    animSingle->mAnimationNames.push_back(nullptr);
 
     StandaloneAnimator* animator2 = StandaloneAnimator::create(*engine);
     animator2->bindSkeleton(skeleton2);
-    animator2->playAnimation(animSingle, 1.0f, false);
+    animator2->playAnimation(animSingle, 0, 1.0f, false);
     animator2->update(0.5f);
 
     TransformManager::Instance ti2 = tm.getInstance(bone2);

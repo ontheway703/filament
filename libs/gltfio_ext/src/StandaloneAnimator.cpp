@@ -218,11 +218,12 @@ void StandaloneAnimator::bindSkeleton(SkeletonAsset* skeleton) noexcept {
     // 重新绑定所有动画的通道（建立名称→索引映射）
     for (auto& state : mImpl->animations) {
         auto* animAsset = static_cast<FAnimationAsset*>(state.animation);
+        const auto& singleAnim = animAsset->mAnimations[state.animIndex];
 
         state.boundChannels.clear();
-        state.boundChannels.reserve(animAsset->mChannels.size());
+        state.boundChannels.reserve(singleAnim.mChannels.size());
 
-        for (const auto& srcChannel : animAsset->mChannels) {
+        for (const auto& srcChannel : singleAnim.mChannels) {
             int boneIndex = skeleton->getBoneIndex(srcChannel.targetBoneName.c_str());
             if (boneIndex >= 0) {
                 BoundChannel bound;
@@ -250,14 +251,22 @@ void StandaloneAnimator::bindSkeleton(SkeletonAsset* skeleton) noexcept {
     }
 }
 
-int StandaloneAnimator::playAnimation(AnimationAsset* animation, float weight, bool loop) noexcept {
+int StandaloneAnimator::playAnimation(AnimationAsset* animation, size_t animIndex, float weight, bool loop) noexcept {
     if (!mImpl->skeleton) {
         GLTFIO_EXT_WARN("No skeleton bound to animator");
         return -1;
     }
 
+    // 验证animIndex有效性
+    auto* animAsset = static_cast<FAnimationAsset*>(animation);
+    if (animIndex >= animAsset->mAnimations.size()) {
+        GLTFIO_EXT_WARN("Invalid animation index: " << animIndex << " (count: " << animAsset->mAnimations.size() << ")");
+        return -1;
+    }
+
     AnimationState state;
     state.animation = animation;
+    state.animIndex = animIndex;
     state.time = 0.0f;
     state.weight = weight;
     state.loop = loop;
@@ -265,10 +274,10 @@ int StandaloneAnimator::playAnimation(AnimationAsset* animation, float weight, b
     state.id = mImpl->nextAnimationId++;
 
     // 绑定通道（名称→索引映射）
-    auto* animAsset = static_cast<FAnimationAsset*>(animation);
-    state.boundChannels.reserve(animAsset->mChannels.size());
+    const auto& singleAnim = animAsset->mAnimations[animIndex];
+    state.boundChannels.reserve(singleAnim.mChannels.size());
 
-    for (const auto& srcChannel : animAsset->mChannels) {
+    for (const auto& srcChannel : singleAnim.mChannels) {
         int boneIndex = mImpl->skeleton->getBoneIndex(srcChannel.targetBoneName.c_str());
         if (boneIndex >= 0) {
             BoundChannel bound;
@@ -306,15 +315,6 @@ void StandaloneAnimator::stopAnimation(int animationId) noexcept {
     mImpl->animations.erase(it, mImpl->animations.end());
 }
 
-void StandaloneAnimator::setAnimationWeight(int animationId, float weight) noexcept {
-    for (auto& state : mImpl->animations) {
-        if (state.id == animationId) {
-            state.weight = weight;
-            break;
-        }
-    }
-}
-
 void StandaloneAnimator::update(float deltaTime) noexcept {
     if (!mImpl->skeleton) {
         return;
@@ -328,7 +328,7 @@ void StandaloneAnimator::update(float deltaTime) noexcept {
 
         state.time += deltaTime;
 
-        float duration = state.animation->getDuration();
+        float duration = state.animation->getAnimationDuration(state.animIndex);
         if (state.loop && state.time > duration) {
             state.time = std::fmod(state.time, duration);
         }

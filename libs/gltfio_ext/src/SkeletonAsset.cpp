@@ -213,14 +213,6 @@ int SkeletonAsset::getBoneIndex(const char* boneName) const noexcept {
     return (it != self->mBoneNameToIndex.end()) ? static_cast<int>(it->second) : -1;
 }
 
-const char* SkeletonAsset::getBoneName(size_t boneIndex) const noexcept {
-    auto* self = static_cast<const FSkeletonAsset*>(this);
-    if (boneIndex >= self->mBoneNames.size()) {
-        return nullptr;
-    }
-    return self->mBoneNames[boneIndex].c_str();
-}
-
 Entity SkeletonAsset::getBoneEntity(size_t boneIndex) const noexcept {
     auto* self = static_cast<const FSkeletonAsset*>(this);
     if (boneIndex >= self->mBoneEntities.size()) {
@@ -232,23 +224,6 @@ Entity SkeletonAsset::getBoneEntity(size_t boneIndex) const noexcept {
 const mat4f* SkeletonAsset::getInverseBindMatrices() const noexcept {
     auto* self = static_cast<const FSkeletonAsset*>(this);
     return self->mInverseBindMatrices.empty() ? nullptr : self->mInverseBindMatrices.data();
-}
-
-Entity SkeletonAsset::getRoot() const noexcept {
-    auto* self = static_cast<const FSkeletonAsset*>(this);
-    return self->mRoot;
-}
-
-bool SkeletonAsset::validateBoneIndices(const uint16_t* indices, size_t count) const noexcept {
-    auto* self = static_cast<const FSkeletonAsset*>(this);
-    const size_t boneCount = self->mBoneEntities.size();
-
-    for (size_t i = 0; i < count; ++i) {
-        if (indices[i] >= boneCount) {
-            return false;
-        }
-    }
-    return true;
 }
 
 } // namespace filament::gltfio

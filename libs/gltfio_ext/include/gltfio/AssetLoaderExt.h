@@ -34,7 +34,6 @@ namespace filament::gltfio {
 class SkeletonAsset;
 class MeshAsset;
 class AnimationAsset;
-class AnimationPack;
 
 /**
  * AssetLoaderExt配置结构
@@ -52,18 +51,21 @@ struct AssetConfigurationExt {
  *
  * 核心功能：
  * - loadSkeleton()：加载骨骼层级结构和绑定姿态
- * - loadAnimation()：加载单个动画数据
- * - loadAnimationPack()：加载文件中的所有动画
+ * - loadAnimation()：加载glTF文件中的所有动画数据
  * - loadMesh()：加载蒙皮网格（需要uploadResources上传GPU）
  *
  * 典型用法：
  * @code
  *   AssetLoaderExt* loader = AssetLoaderExt::create(config);
  *   SkeletonAsset* skeleton = loader->loadSkeleton(data, size);
- *   AnimationAsset* anim = loader->loadAnimation(data, size);
+ *   AnimationAsset* animations = loader->loadAnimation(data, size);
  *   MeshAsset* mesh = loader->loadMesh(data, size);
  *   mesh->uploadResources();  // 上传GPU资源
  *   mesh->bindSkeleton(skeleton);
+ *
+ *   // 播放指定动画
+ *   int idleIdx = animations->findAnimationIndex("idle");
+ *   animator->playAnimation(animations, idleIdx, 1.0f, true);
  * @endcode
  */
 class UTILS_PUBLIC AssetLoaderExt {
@@ -101,26 +103,17 @@ public:
     MeshAsset* loadMesh(const uint8_t* bytes, uint32_t nbytes);
 
     /**
-     * 从glTF数据中加载第一个动画
+     * 从glTF数据中加载所有动画
      * @param bytes glTF文件数据
      * @param nbytes 数据大小
-     * @return 动画资产，失败返回nullptr
+     * @return 动画资产（包含glTF文件中的所有动画），失败返回nullptr
+     * @note AnimationAsset是容器，存储glTF文件中的所有动画，通过索引访问
      */
     AnimationAsset* loadAnimation(const uint8_t* bytes, uint32_t nbytes);
-
-    /**
-     * 从glTF数据中加载所有动画（打包）
-     * @param bytes glTF文件数据
-     * @param nbytes 数据大小
-     * @return 动画包，失败返回nullptr
-     * @note 适合需要管理多个动画的场景（如角色动画库）
-     */
-    AnimationPack* loadAnimationPack(const uint8_t* bytes, uint32_t nbytes);
 
     void destroySkeleton(SkeletonAsset* skeleton);
     void destroyMesh(MeshAsset* mesh);
     void destroyAnimation(AnimationAsset* animation);
-    void destroyAnimationPack(AnimationPack* pack);
 
 protected:
     AssetLoaderExt() noexcept = default;

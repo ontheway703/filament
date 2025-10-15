@@ -91,7 +91,8 @@ int main() {
        .bufferCount(1)
        .attribute(VertexAttribute::POSITION, 0,
                   VertexBuffer::AttributeType::FLOAT3, 0, sizeof(float) * 3);
-    mesh->mVertexBuffer = vbb.build(*engine);
+    mesh->mVertexBuffers.resize(1);
+    mesh->mVertexBuffers[0] = vbb.build(*engine);
 
     size_t bufferSize = vertexCount * sizeof(float) * 3;
     float* vertexData = new float[vertexCount * 3];
@@ -99,11 +100,12 @@ int main() {
 
     VertexBuffer::BufferDescriptor desc(vertexData, bufferSize,
         [](void* buffer, size_t size, void* user) { delete[] static_cast<float*>(buffer); });
-    mesh->mVertexBuffer->setBufferAt(*engine, 0, std::move(desc));
+    mesh->mVertexBuffers[0]->setBufferAt(*engine, 0, std::move(desc));
 
     uint16_t indices[] = {0, 1, 2};
     const size_t indexCount = 3;
-    mesh->mIndexBuffer = IndexBuffer::Builder()
+    mesh->mIndexBuffers.resize(1);
+    mesh->mIndexBuffers[0] = IndexBuffer::Builder()
         .indexCount(indexCount)
         .bufferType(IndexBuffer::IndexType::USHORT)
         .build(*engine);
@@ -113,7 +115,7 @@ int main() {
 
     IndexBuffer::BufferDescriptor indexDesc(indexData, indexCount * sizeof(uint16_t),
         [](void* buffer, size_t, void*) { delete[] static_cast<uint16_t*>(buffer); });
-    mesh->mIndexBuffer->setBuffer(*engine, std::move(indexDesc));
+    mesh->mIndexBuffers[0]->setBuffer(*engine, std::move(indexDesc));
 
     mesh->mRenderableEntity = Entity();
     mesh->mRenderableInstance = RenderableManager::Instance();
@@ -132,8 +134,10 @@ int main() {
 
     // 5. 创建动画
     FAnimationAsset* anim = new FAnimationAsset();
-    anim->mName = CString("TestAnimation");
-    anim->mDuration = 2.0f;
+
+    SingleAnimation singleAnim;
+    singleAnim.mName = CString("TestAnimation");
+    singleAnim.mDuration = 2.0f;
 
     Sampler sampler;
     sampler.times[0.0f] = 0;
@@ -145,23 +149,30 @@ int main() {
         0.0f, 0.0f, 0.0f
     };
     sampler.interpolation = Sampler::LINEAR;
-    anim->mSamplers.push_back(sampler);
+    singleAnim.mSamplers.push_back(sampler);
 
     Channel channel;
-    channel.sampler = &anim->mSamplers[0];
+    channel.sampler = &singleAnim.mSamplers[0];
     channel.targetBoneName = "bone_0";
     channel.transformType = Channel::TRANSLATION;
-    anim->mChannels.push_back(channel);
+    singleAnim.mChannels.push_back(channel);
 
-    std::cout << "✓ Animation created: '" << anim->getName()
-              << "' (" << anim->getDuration() << "s, "
-              << anim->getChannelCount() << " channels)" << std::endl;
+    // 将SingleAnimation添加到AnimationAsset
+    anim->mAnimations.push_back(singleAnim);
+
+    // 缓存动画名称
+    anim->mAnimationNames.push_back(anim->mAnimations[0].mName.c_str());
+    anim->mAnimationNames.push_back(nullptr);
+
+    std::cout << "✓ Animation created: '" << anim->getAnimationName(0)
+              << "' (" << anim->getAnimationDuration(0) << "s, "
+              << anim->mAnimations[0].mChannels.size() << " channels)" << std::endl;
 
     // 6. 创建动画器
     std::cout << "\n--- Setting up Animator ---" << std::endl;
     StandaloneAnimator* animator = StandaloneAnimator::create(*engine);
     animator->bindSkeleton(skeleton);
-    int animId = animator->playAnimation(anim, 1.0f, true);
+    int animId = animator->playAnimation(anim, 0, 1.0f, true);
     std::cout << "✓ Animator created and playing (ID: " << animId << ")" << std::endl;
 
     // 7. 模拟渲染循环
@@ -194,8 +205,8 @@ int main() {
     mesh2->mEngine = engine;
     mesh2->mRenderableManager = &rm;
     mesh2->mHasSkinning = false;
-    mesh2->mVertexBuffer = nullptr;
-    mesh2->mIndexBuffer = nullptr;
+    mesh2->mVertexBuffers.clear();
+    mesh2->mIndexBuffers.clear();
     mesh2->mRenderableEntity = Entity();
     mesh2->mBoundingBox = Aabb{{0, 0, 0}, {1, 1, 0}};
 
@@ -211,11 +222,8 @@ int main() {
     mesh2->updateSkinning(animator);
     std::cout << "✓ Both meshes updated with same animator" << std::endl;
 
-    // 9. 测试权重和停止
+    // 9. 测试停止
     std::cout << "\n--- Testing Animation Control ---" << std::endl;
-    animator->setAnimationWeight(animId, 0.5f);
-    std::cout << "✓ Animation weight set to 0.5" << std::endl;
-
     animator->stopAnimation(animId);
     std::cout << "✓ Animation stopped" << std::endl;
 

@@ -63,7 +63,8 @@ struct BoundChannel {
 
 // 动画播放状态
 struct AnimationState {
-    AnimationAsset* animation;
+    AnimationAsset* animation;   // 动画资产（包含多个动画）
+    size_t animIndex = 0;         // 当前播放的动画索引
     float time = 0.0f;
     float weight = 1.0f;
     bool loop = true;

@@ -4,12 +4,11 @@
  *
  * ========== 核心设计 ==========
  *
- * AssetLoaderExt提供5个独立的加载函数：
+ * AssetLoaderExt提供4个独立的加载函数：
  * 1. loadSkeleton(): 加载骨骼层级（从glTF skin）
  * 2. loadMesh(): 加载蒙皮网格（从glTF meshes）
- * 3. loadAnimation(): 加载单个动画（从glTF animations[0]）
- * 4. loadAnimationPack(): 加载所有动画（从glTF animations[*]）
- * 5. destroyXxx(): 销毁对应资源
+ * 3. loadAnimation(): 加载所有动画（从glTF animations[*]）
+ * 4. destroyXxx(): 销毁对应资源
  *
  * 每个函数的工作流程：
  * 1. 使用cgltf解析glTF数据（cgltf_parse）
@@ -33,6 +32,12 @@
  * A: Filament风格：裸指针 + 显式destroy函数
  *    - 清晰的所有权（调用者负责销毁）
  *    - 与Filament其他API一致（Engine, MaterialInstance等）
+ *
+ * Q: 为什么loadAnimation()加载所有动画而非单个？
+ * A: glTF本身支持多个动画（idle/walk/run等）：
+ *    - 一次性加载避免重复解析glTF数据
+ *    - "多个"是"单个"的超集（N=1时等同于单个动画）
+ *    - AnimationAsset本身就是容器，通过索引访问各个动画
  */
 
 #include <gltfio/AssetLoaderExt.h>
@@ -40,7 +45,6 @@
 #include "FSkeletonAsset.h"
 #include "FMeshAsset.h"
 #include "FAnimationAsset.h"
-#include "FAnimationPack.h"
 
 #include <filament/Engine.h>
 #include <filament/TransformManager.h>
@@ -192,10 +196,9 @@ AnimationAsset* AssetLoaderExt::loadAnimation(const uint8_t* bytes, uint32_t nby
         return nullptr;
     }
 
-    // 4. 加载第一个动画
-    const cgltf_animation* anim = &data->animations[0];
+    // 4. 创建AnimationAsset并加载所有动画
     FAnimationAsset* animAsset = new FAnimationAsset();
-    bool success = animAsset->loadFromGltfAnimation(anim);
+    bool success = animAsset->loadFromGltfData(data);
 
     cgltf_free(data);
 
@@ -205,62 +208,6 @@ AnimationAsset* AssetLoaderExt::loadAnimation(const uint8_t* bytes, uint32_t nby
     }
 
     return animAsset;
-}
-
-AnimationPack* AssetLoaderExt::loadAnimationPack(const uint8_t* bytes, uint32_t nbytes) {
-    // 1. 解析glTF
-    cgltf_options options = {};
-    cgltf_data* data = nullptr;
-    cgltf_result result = cgltf_parse(&options, bytes, nbytes, &data);
-
-    if (result != cgltf_result_success) {
-        GLTFIO_EXT_WARN("Failed to parse glTF data");
-        return nullptr;
-    }
-
-    // 2. 加载缓冲区
-    result = cgltf_load_buffers(&options, data, nullptr);
-    if (result != cgltf_result_success) {
-        GLTFIO_EXT_WARN("Failed to load glTF buffers");
-        cgltf_free(data);
-        return nullptr;
-    }
-
-    // 3. 检查动画
-    if (data->animations_count == 0) {
-        GLTFIO_EXT_WARN("No animations found in glTF file");
-        cgltf_free(data);
-        return nullptr;
-    }
-
-    // 4. 创建AnimationPack
-    FAnimationPack* pack = new FAnimationPack();
-    pack->mAnimations.reserve(data->animations_count);
-    pack->mAnimationNames.reserve(data->animations_count);
-
-    // 5. 加载所有动画
-    for (size_t i = 0; i < data->animations_count; ++i) {
-        const cgltf_animation* anim = &data->animations[i];
-        FAnimationAsset* animAsset = new FAnimationAsset();
-
-        if (animAsset->loadFromGltfAnimation(anim)) {
-            pack->mAnimations.push_back(animAsset);
-            pack->mAnimationNames.push_back(animAsset->getName());
-        } else {
-            GLTFIO_EXT_WARN("Failed to load animation, skipping");
-            delete animAsset;
-        }
-    }
-
-    cgltf_free(data);
-
-    if (pack->mAnimations.empty()) {
-        GLTFIO_EXT_WARN("No valid animations loaded");
-        delete pack;
-        return nullptr;
-    }
-
-    return pack;
 }
 
 void AssetLoaderExt::destroySkeleton(SkeletonAsset* skeleton) {
@@ -273,10 +220,6 @@ void AssetLoaderExt::destroyMesh(MeshAsset* mesh) {
 
 void AssetLoaderExt::destroyAnimation(AnimationAsset* animation) {
     delete static_cast<FAnimationAsset*>(animation);
-}
-
-void AssetLoaderExt::destroyAnimationPack(AnimationPack* pack) {
-    delete static_cast<FAnimationPack*>(pack);
 }
 
 } // namespace filament::gltfio

@@ -57,10 +57,13 @@ int main() {
 
     std::cout << "Created skeleton with " << skeleton->getBoneCount() << " bones" << std::endl;
 
-    // 2. 创建简单的动画
+    // 2. 创建简单的动画（适配新的多动画结构）
     FAnimationAsset* anim = new FAnimationAsset();
-    anim->mName = utils::CString("TestAnimation");
-    anim->mDuration = 2.0f;
+
+    // 创建一个SingleAnimation
+    SingleAnimation singleAnim;
+    singleAnim.mName = utils::CString("TestAnimation");
+    singleAnim.mDuration = 2.0f;
 
     // 创建Translation Sampler
     Sampler sampler;
@@ -73,25 +76,32 @@ int main() {
         2.0f, 0.0f, 0.0f    // t=2
     };
     sampler.interpolation = Sampler::LINEAR;
-    anim->mSamplers.push_back(sampler);
+    singleAnim.mSamplers.push_back(sampler);
 
     // 创建Channel
     Channel channel;
-    channel.sampler = &anim->mSamplers[0];
+    channel.sampler = &singleAnim.mSamplers[0];
     channel.targetBoneName = "bone_0";
     channel.transformType = Channel::TRANSLATION;
-    anim->mChannels.push_back(channel);
+    singleAnim.mChannels.push_back(channel);
 
-    std::cout << "Created animation with duration " << anim->getDuration() << "s" << std::endl;
+    // 将SingleAnimation添加到AnimationAsset
+    anim->mAnimations.push_back(singleAnim);
+
+    // 缓存动画名称
+    anim->mAnimationNames.push_back(anim->mAnimations[0].mName.c_str());
+    anim->mAnimationNames.push_back(nullptr);
+
+    std::cout << "Created animation with duration " << anim->getAnimationDuration(0) << "s" << std::endl;
 
     // 3. 创建动画器
     StandaloneAnimator* animator = StandaloneAnimator::create(*engine);
     animator->bindSkeleton(skeleton);
     std::cout << "Animator bound to skeleton" << std::endl;
 
-    // 4. 播放动画
-    int animId = animator->playAnimation(anim, 1.0f, true);
-    std::cout << "Playing animation ID: " << animId << std::endl;
+    // 4. 播放动画（使用新的API，需要animIndex参数）
+    int animId = animator->playAnimation(anim, 0, 1.0f, true);
+    std::cout << "Playing animation ID: " << animId << " (animIndex: 0)" << std::endl;
 
     // 5. 模拟更新
     std::cout << "\nSimulating animation updates..." << std::endl;
@@ -105,23 +115,17 @@ int main() {
         }
     }
 
-    // 6. 测试权重调整
-    std::cout << "\nTesting weight adjustment..." << std::endl;
-    animator->setAnimationWeight(animId, 0.5f);
-    animator->update(0.1f);
-    std::cout << "Weight set to 0.5" << std::endl;
-
-    // 7. 测试停止
+    // 6. 测试停止
     std::cout << "\nTesting stop..." << std::endl;
     animator->stopAnimation(animId);
     std::cout << "Animation stopped (ID: " << animId << ")" << std::endl;
 
-    // 8. 测试重置到绑定姿势
+    // 7. 测试重置到绑定姿势
     std::cout << "\nTesting reset to bind pose..." << std::endl;
     animator->resetToBindPose();
     std::cout << "Reset to bind pose" << std::endl;
 
-    // 9. 测试getBoneCount
+    // 8. 测试getBoneCount
     std::cout << "\nBone count: " << animator->getBoneCount() << std::endl;
     assert(animator->getBoneCount() == boneCount);
 

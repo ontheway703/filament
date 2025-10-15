@@ -18,8 +18,8 @@
  * gltfio_ext_equipment - Animation switching demonstration
  *
  * This sample demonstrates:
- * 1. Loading multiple animations from a single glTF file (AnimationPack)
- * 2. Runtime animation switching
+ * 1. Loading multiple animations from a single glTF file (AnimationAsset)
+ * 2. Runtime animation switching using animation indices
  * 3. Seamless transition between different animations
  *
  * The model has 3 animations: Pull, Push, Squat
@@ -32,7 +32,6 @@
 #include <gltfio/StandaloneAnimator.h>
 #include <gltfio/SkeletonAsset.h>
 #include <gltfio/AnimationAsset.h>
-#include <gltfio/AnimationPack.h>
 #include <gltfio/MeshAsset.h>
 #include <gltfio/MaterialProvider.h>
 
@@ -67,13 +66,13 @@ struct App {
     MaterialProvider* materials = nullptr;
 
     SkeletonAsset* skeleton = nullptr;
-    AnimationPack* animPack = nullptr;
+    AnimationAsset* animations = nullptr;  // Contains multiple animations
     MeshAsset* mesh = nullptr;
     StandaloneAnimator* animator = nullptr;
 
     int currentAnimId = -1;
     float timeSinceLastSwitch = 0.0f;
-    int animIndex = 0;
+    size_t animIndex = 0;  // Current animation index
 
     Camera* cam = nullptr;
     Entity camera;
@@ -186,17 +185,16 @@ int main(int argc, char** argv) {
         }
         std::cout << "  Skeleton loaded: " << app.skeleton->getBoneCount() << " bones" << std::endl;
 
-        // Step 4: Load ALL animations using AnimationPack
-        std::cout << "[4/5] Loading animation pack..." << std::endl;
-        app.animPack = app.loader->loadAnimationPack(buffer.data(), buffer.size());
-        if (!app.animPack) {
+        // Step 4: Load ALL animations (AnimationAsset contains multiple animations)
+        std::cout << "[4/5] Loading animations..." << std::endl;
+        app.animations = app.loader->loadAnimation(buffer.data(), buffer.size());
+        if (!app.animations) {
             std::cerr << "Failed to load animations" << std::endl;
             return;
         }
-        std::cout << "  Loaded " << app.animPack->getAnimationCount() << " animations:" << std::endl;
-        for (size_t i = 0; i < app.animPack->getAnimationCount(); ++i) {
-            AnimationAsset* anim = app.animPack->getAnimation(i);
-            std::cout << "    [" << i << "] \"" << (anim ? anim->getName() : "unnamed") << "\"" << std::endl;
+        std::cout << "  Loaded " << app.animations->getAnimationCount() << " animations:" << std::endl;
+        for (size_t i = 0; i < app.animations->getAnimationCount(); ++i) {
+            std::cout << "    [" << i << "] \"" << app.animations->getAnimationName(i) << "\"" << std::endl;
         }
 
         // Step 5: Load and bind mesh
@@ -216,10 +214,9 @@ int main(int argc, char** argv) {
         app.animator = StandaloneAnimator::create(*engine);
         app.animator->bindSkeleton(app.skeleton);
 
-        if (app.animPack->getAnimationCount() > 0) {
-            AnimationAsset* firstAnim = app.animPack->getAnimation(0);
-            app.currentAnimId = app.animator->playAnimation(firstAnim, 1.0f, true);
-            std::cout << "\n  ▶ Now playing: \"" << (firstAnim ? firstAnim->getName() : "unnamed") << "\"" << std::endl;
+        if (app.animations->getAnimationCount() > 0) {
+            app.currentAnimId = app.animator->playAnimation(app.animations, 0, 1.0f, true);
+            std::cout << "\n  ▶ Now playing: \"" << app.animations->getAnimationName(0) << "\"" << std::endl;
         }
 
         // Setup camera
@@ -231,7 +228,7 @@ int main(int argc, char** argv) {
 
         std::cout << "\nDemo behavior:" << std::endl;
         std::cout << "  - Animation switches every 3 seconds" << std::endl;
-        std::cout << "  - Cycling through: " << app.animPack->getAnimationCount() << " animations\n" << std::endl;
+        std::cout << "  - Cycling through: " << app.animations->getAnimationCount() << " animations\n" << std::endl;
     };
 
     auto cleanup = [&app](Engine* engine, View*, Scene*) {
@@ -243,7 +240,7 @@ int main(int argc, char** argv) {
 
         if (app.loader) {
             if (app.mesh) app.loader->destroyMesh(app.mesh);
-            if (app.animPack) app.loader->destroyAnimationPack(app.animPack);
+            if (app.animations) app.loader->destroyAnimation(app.animations);
             if (app.skeleton) app.loader->destroySkeleton(app.skeleton);
             AssetLoaderExt::destroy(&app.loader);
         }
@@ -258,7 +255,7 @@ int main(int argc, char** argv) {
     };
 
     FilamentApp::get().animate([&app](Engine* engine, View* view, double now) {
-        if (app.animator && app.mesh && app.animPack) {
+        if (app.animator && app.mesh && app.animations) {
             // Update animation
             app.animator->update(0.016f);
             app.mesh->updateSkinning(app.animator);
@@ -272,12 +269,11 @@ int main(int argc, char** argv) {
                 app.animator->stopAnimation(app.currentAnimId);
 
                 // Switch to next animation
-                app.animIndex = (app.animIndex + 1) % app.animPack->getAnimationCount();
-                AnimationAsset* nextAnim = app.animPack->getAnimation(app.animIndex);
-                app.currentAnimId = app.animator->playAnimation(nextAnim, 1.0f, true);
+                app.animIndex = (app.animIndex + 1) % app.animations->getAnimationCount();
+                app.currentAnimId = app.animator->playAnimation(app.animations, app.animIndex, 1.0f, true);
 
                 std::cout << "\n[Animation Switch] ▶ Now playing: \""
-                          << (nextAnim ? nextAnim->getName() : "unnamed") << "\"" << std::endl;
+                          << app.animations->getAnimationName(app.animIndex) << "\"" << std::endl;
             }
         }
     });

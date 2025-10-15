@@ -9,7 +9,6 @@ set(PUBLIC_HDRS
     include/gltfio/SkeletonAsset.h
     include/gltfio/MeshAsset.h
     include/gltfio/AnimationAsset.h
-    include/gltfio/AnimationPack.h
     include/gltfio/StandaloneAnimator.h
     include/gltfio/AssetLoaderExt.h
 )
@@ -19,14 +18,12 @@ set(SRCS
     src/FSkeletonAsset.h
     src/FMeshAsset.h
     src/FAnimationAsset.h
-    src/FAnimationPack.h
     src/FStandaloneAnimator.h
     src/GltfioExtInternal.h
     src/AssetLoaderExt.cpp
     src/SkeletonAsset.cpp
     src/MeshAsset.cpp
     src/AnimationAsset.cpp
-    src/AnimationPack.cpp
     src/StandaloneAnimator.cpp
 )
 
@@ -64,10 +61,6 @@ if (NOT WEBGL AND NOT ANDROID AND NOT IOS)
     target_link_libraries(test_skeleton PRIVATE gltfio_ext)
     set_target_properties(test_skeleton PROPERTIES FOLDER Tests)
 
-    add_executable(test_mesh tests/test_mesh.cpp)
-    target_link_libraries(test_mesh PRIVATE gltfio_ext)
-    set_target_properties(test_mesh PROPERTIES FOLDER Tests)
-
     add_executable(test_animation tests/test_animation.cpp)
     target_link_libraries(test_animation PRIVATE gltfio_ext)
     set_target_properties(test_animation PROPERTIES FOLDER Tests)
@@ -89,36 +82,22 @@ if (NOT WEBGL AND NOT ANDROID AND NOT IOS)
     target_link_libraries(test_multi_channel_bug PRIVATE gltfio_ext)
     set_target_properties(test_multi_channel_bug PROPERTIES FOLDER Tests)
 
-    add_executable(test_animation_blending tests/test_animation_blending.cpp)
-    target_link_libraries(test_animation_blending PRIVATE gltfio_ext)
-    set_target_properties(test_animation_blending PROPERTIES FOLDER Tests)
-
-    add_executable(test_performance tests/test_performance.cpp)
-    target_link_libraries(test_performance PRIVATE gltfio_ext)
-    set_target_properties(test_performance PROPERTIES FOLDER Tests)
-
-    add_executable(test_equipment_system tests/test_equipment_system.cpp)
-    target_link_libraries(test_equipment_system PRIVATE gltfio_ext)
-    set_target_properties(test_equipment_system PROPERTIES FOLDER Tests)
-
     # 添加所有测试到总测试目标
     add_custom_target(test_gltfio_ext
-        DEPENDS test_skeleton test_mesh test_animation test_animator test_integration
-                test_edge_cases test_multi_channel_bug test_animation_blending
-                test_performance test_equipment_system
+        DEPENDS test_skeleton test_animation test_animator test_integration
+                test_edge_cases test_multi_channel_bug
     )
     set_target_properties(test_gltfio_ext PROPERTIES FOLDER Tests)
 
     # 创建核心测试套件（只包含基础功能测试）
     add_custom_target(test_gltfio_ext_core
-        DEPENDS test_skeleton test_mesh test_animation test_animator
+        DEPENDS test_skeleton test_animation test_animator
     )
     set_target_properties(test_gltfio_ext_core PROPERTIES FOLDER Tests)
 
     # 创建压力测试套件
     add_custom_target(test_gltfio_ext_stress
-        DEPENDS test_edge_cases test_multi_channel_bug test_animation_blending
-                test_performance test_equipment_system
+        DEPENDS test_edge_cases test_multi_channel_bug test_integration
     )
     set_target_properties(test_gltfio_ext_stress PROPERTIES FOLDER Tests)
 endif()

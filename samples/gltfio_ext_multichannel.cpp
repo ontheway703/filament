@@ -200,8 +200,10 @@ int main(int argc, char** argv) {
             std::cerr << "Failed to load animation" << std::endl;
             return;
         }
-        std::cout << "  Animation: \"" << app.animation->getName() << "\"" << std::endl;
-        std::cout << "  (This animation contains Translation, Rotation, and Scale channels)" << std::endl;
+        if (app.animation->getAnimationCount() > 0) {
+            std::cout << "  Animation: \"" << app.animation->getAnimationName(0) << "\"" << std::endl;
+            std::cout << "  (This animation contains Translation, Rotation, and Scale channels)" << std::endl;
+        }
 
         // Step 4: Load and bind mesh
         std::cout << "[4/5] Loading and binding mesh..." << std::endl;
@@ -220,8 +222,10 @@ int main(int argc, char** argv) {
         std::cout << "[5/5] Playing multi-channel animation..." << std::endl;
         app.animator = StandaloneAnimator::create(*engine);
         app.animator->bindSkeleton(app.skeleton);
-        app.animator->playAnimation(app.animation, 1.0f, true);
-        std::cout << "  Animation playing (looping)\n" << std::endl;
+        if (app.animation->getAnimationCount() > 0) {
+            app.animator->playAnimation(app.animation, 0, 1.0f, true);
+            std::cout << "  Animation playing (looping)\n" << std::endl;
+        }
 
         // Setup camera
         app.camera = EntityManager::get().create();

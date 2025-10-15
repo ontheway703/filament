@@ -79,65 +79,11 @@ int main() {
         }
 
         // 测试越界访问
-        if (skeleton->getBoneName(999) == nullptr) {
-            std::cout << "  ✓ Out of bounds getBoneName returns nullptr" << std::endl;
-            passed++;
-        } else {
-            std::cout << "  ✗ FAIL: Should return nullptr for invalid index" << std::endl;
-            failed++;
-        }
-
         if (skeleton->getBoneEntity(999).getId() == 0) {
             std::cout << "  ✓ Out of bounds getBoneEntity returns null entity" << std::endl;
             passed++;
         } else {
             std::cout << "  ✗ FAIL: Should return null entity for invalid index" << std::endl;
-            failed++;
-        }
-
-        delete skeleton;
-    }
-
-    // Test 3: 验证骨骼索引
-    std::cout << "\n[Test 3] Validate bone indices..." << std::endl;
-    {
-        FSkeletonAsset* skeleton = new FSkeletonAsset();
-        skeleton->mEngine = engine;
-        skeleton->mEntityManager = &em;
-        skeleton->mTransformManager = &tm;
-
-        // Reserve capacity
-        skeleton->mBoneEntities.reserve(3);
-        skeleton->mBoneNames.reserve(3);
-        skeleton->mInverseBindMatrices.reserve(3);
-
-        // 创建3个骨骼
-        for (int i = 0; i < 3; ++i) {
-            Entity e = em.create();
-            skeleton->mBoneEntities.push_back(e);
-            char nameBuf[32];
-            snprintf(nameBuf, sizeof(nameBuf), "bone_%d", i);
-            skeleton->mBoneNames.emplace_back(nameBuf);
-            skeleton->mInverseBindMatrices.push_back(mat4f());
-        }
-
-        // 测试有效索引
-        uint16_t validIndices[] = {0, 1, 2, 0, 1};
-        if (skeleton->validateBoneIndices(validIndices, 5)) {
-            std::cout << "  ✓ Valid indices pass validation" << std::endl;
-            passed++;
-        } else {
-            std::cout << "  ✗ FAIL: Valid indices should pass" << std::endl;
-            failed++;
-        }
-
-        // 测试无效索引
-        uint16_t invalidIndices[] = {0, 1, 10};
-        if (!skeleton->validateBoneIndices(invalidIndices, 3)) {
-            std::cout << "  ✓ Invalid indices fail validation" << std::endl;
-            passed++;
-        } else {
-            std::cout << "  ✗ FAIL: Invalid indices should fail" << std::endl;
             failed++;
         }
 
@@ -171,26 +117,35 @@ int main() {
 
         // 创建动画，通道目标是不存在的骨骼
         FAnimationAsset* anim = new FAnimationAsset();
-        anim->mName = CString("TestAnim");
-        anim->mDuration = 1.0f;
+
+        SingleAnimation singleAnim;
+        singleAnim.mName = CString("TestAnim");
+        singleAnim.mDuration = 1.0f;
 
         Sampler sampler;
         sampler.times[0.0f] = 0;
         sampler.times[1.0f] = 1;
         sampler.values = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
         sampler.interpolation = Sampler::LINEAR;
-        anim->mSamplers.push_back(sampler);
+        singleAnim.mSamplers.push_back(sampler);
 
         Channel channel;
-        channel.sampler = &anim->mSamplers[0];
+        channel.sampler = &singleAnim.mSamplers[0];
         channel.targetBoneName = "nonexistent_bone";  // 不存在的骨骼
         channel.transformType = Channel::TRANSLATION;
-        anim->mChannels.push_back(channel);
+        singleAnim.mChannels.push_back(channel);
+
+        // 将SingleAnimation添加到AnimationAsset
+        anim->mAnimations.push_back(singleAnim);
+
+        // 缓存动画名称
+        anim->mAnimationNames.push_back(anim->mAnimations[0].mName.c_str());
+        anim->mAnimationNames.push_back(nullptr);
 
         // 创建animator并绑定
         StandaloneAnimator* animator = StandaloneAnimator::create(*engine);
         animator->bindSkeleton(skeleton);
-        int animId = animator->playAnimation(anim, 1.0f, true);
+        int animId = animator->playAnimation(anim, 0, 1.0f, true);
 
         // 更新应该不崩溃
         try {
@@ -230,25 +185,34 @@ int main() {
 
         // 创建2秒动画
         FAnimationAsset* anim = new FAnimationAsset();
-        anim->mName = CString("TestAnim");
-        anim->mDuration = 2.0f;
+
+        SingleAnimation singleAnim;
+        singleAnim.mName = CString("TestAnim");
+        singleAnim.mDuration = 2.0f;
 
         Sampler sampler;
         sampler.times[0.0f] = 0;
         sampler.times[2.0f] = 1;
         sampler.values = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
         sampler.interpolation = Sampler::LINEAR;
-        anim->mSamplers.push_back(sampler);
+        singleAnim.mSamplers.push_back(sampler);
 
         Channel channel;
-        channel.sampler = &anim->mSamplers[0];
+        channel.sampler = &singleAnim.mSamplers[0];
         channel.targetBoneName = "bone_0";
         channel.transformType = Channel::TRANSLATION;
-        anim->mChannels.push_back(channel);
+        singleAnim.mChannels.push_back(channel);
+
+        // 将SingleAnimation添加到AnimationAsset
+        anim->mAnimations.push_back(singleAnim);
+
+        // 缓存动画名称
+        anim->mAnimationNames.push_back(anim->mAnimations[0].mName.c_str());
+        anim->mAnimationNames.push_back(nullptr);
 
         StandaloneAnimator* animator = StandaloneAnimator::create(*engine);
         animator->bindSkeleton(skeleton);
-        animator->playAnimation(anim, 1.0f, true);
+        animator->playAnimation(anim, 0, 1.0f, true);
 
         // 测试时间=0
         animator->update(0.0f);

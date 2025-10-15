@@ -60,12 +60,20 @@ struct AnimatorImpl;
  *   StandaloneAnimator* animator = StandaloneAnimator::create(engine);
  *   animator->bindSkeleton(skeleton);
  *
- *   // 播放单个动画
- *   int walkId = animator->playAnimation(walkAnim, 1.0f, true);
+ *   // 加载包含多个动画的AnimationAsset
+ *   AnimationAsset* animations = loader->loadAnimation(data, size);
  *
- *   // 动画混合示例（idle 50% + walk 50%）
- *   int idleId = animator->playAnimation(idleAnim, 0.5f, true);
- *   int walkId = animator->playAnimation(walkAnim, 0.5f, true);
+ *   // 按索引播放动画（假设索引0是walk动画）
+ *   int walkId = animator->playAnimation(animations, 0, 1.0f, true);
+ *
+ *   // 按名称查找并播放动画
+ *   int idleIdx = animations->findAnimationIndex("idle");
+ *   int walkIdx = animations->findAnimationIndex("walk");
+ *   if (idleIdx >= 0 && walkIdx >= 0) {
+ *       // 动画混合示例（idle 50% + walk 50%）
+ *       int idleId = animator->playAnimation(animations, idleIdx, 0.5f, true);
+ *       int walkId = animator->playAnimation(animations, walkIdx, 0.5f, true);
+ *   }
  *
  *   // 每帧更新
  *   animator->update(deltaTime);
@@ -96,26 +104,21 @@ public:
 
     /**
      * 播放动画
-     * @param animation 动画资产
+     * @param animation 动画资产（包含多个动画）
+     * @param animIndex 动画索引（指定播放哪个动画）
      * @param weight 动画权重（0.0 ~ 1.0），用于多动画混合
      * @param loop 是否循环播放
-     * @return 动画ID（用于stopAnimation/setAnimationWeight）
+     * @return 动画ID（用于stopAnimation）
      * @note 权重1.0表示完全应用，0.5表示50%混合
+     * @note animIndex必须有效（< animation->getAnimationCount()），否则返回-1
      */
-    int playAnimation(AnimationAsset* animation, float weight = 1.0f, bool loop = true) noexcept;
+    int playAnimation(AnimationAsset* animation, size_t animIndex, float weight = 1.0f, bool loop = true) noexcept;
 
     /**
      * 停止动画
      * @param animationId 动画ID（playAnimation返回值）
      */
     void stopAnimation(int animationId) noexcept;
-
-    /**
-     * 设置动画权重（用于动态调整混合比例）
-     * @param animationId 动画ID
-     * @param weight 新权重（0.0 ~ 1.0）
-     */
-    void setAnimationWeight(int animationId, float weight) noexcept;
 
     /**
      * 更新动画（每帧调用）

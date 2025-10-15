@@ -190,19 +190,20 @@ static uint16_t findMaxBoneIndex(const cgltf_accessor* accessor) {
     if (!accessor) return 0;
 
     uint16_t maxIndex = 0;
-    size_t count = accessor->count * 4;  // vec4
+    size_t vertexCount = accessor->count;
 
-    // 分配临时缓冲区
-    uint16_t* data = new uint16_t[count];
-    cgltf_accessor_unpack_indices(accessor, data, sizeof(uint16_t), count);
+    // Read bone indices using cgltf_accessor_read_uint (returns uint32)
+    for (size_t v = 0; v < vertexCount; ++v) {
+        uint32_t indices[4];
+        cgltf_accessor_read_uint(accessor, v, indices, 4);
 
-    for (size_t i = 0; i < count; ++i) {
-        if (data[i] > maxIndex) {
-            maxIndex = data[i];
+        for (int j = 0; j < 4; ++j) {
+            if (indices[j] < 65535 && indices[j] > maxIndex) {  // Skip invalid indices
+                maxIndex = static_cast<uint16_t>(indices[j]);
+            }
         }
     }
 
-    delete[] data;
     return maxIndex;
 }
 
@@ -275,8 +276,12 @@ bool FMeshAsset::loadFromGltfData(const cgltf_data* data) {
         for (size_t primIdx = 0; primIdx < mesh->primitives_count; ++primIdx) {
             const cgltf_primitive* prim = &mesh->primitives[primIdx];
 
-            // 查找POSITION, JOINTS, WEIGHTS
+            // 查找所有顶点属性
             const cgltf_accessor* positionAccessor = nullptr;
+            const cgltf_accessor* normalAccessor = nullptr;
+            const cgltf_accessor* texcoord0Accessor = nullptr;
+            const cgltf_accessor* texcoord1Accessor = nullptr;
+            const cgltf_accessor* colorAccessor = nullptr;
             const cgltf_accessor* boneIndicesAccessor = nullptr;
             const cgltf_accessor* boneWeightsAccessor = nullptr;
 
@@ -285,6 +290,16 @@ bool FMeshAsset::loadFromGltfData(const cgltf_data* data) {
                 switch (attr.type) {
                     case cgltf_attribute_type_position:
                         positionAccessor = attr.data;
+                        break;
+                    case cgltf_attribute_type_normal:
+                        normalAccessor = attr.data;
+                        break;
+                    case cgltf_attribute_type_texcoord:
+                        if (attr.index == 0) texcoord0Accessor = attr.data;
+                        else if (attr.index == 1) texcoord1Accessor = attr.data;
+                        break;
+                    case cgltf_attribute_type_color:
+                        colorAccessor = attr.data;
                         break;
                     case cgltf_attribute_type_joints:
                         boneIndicesAccessor = attr.data;
@@ -308,24 +323,108 @@ bool FMeshAsset::loadFromGltfData(const cgltf_data* data) {
                 GLTFIO_EXT_LOG("Processing primitive " << primitives.size() << "...");
             }
 
-            // 创建VertexBuffer（不上传数据）
+            // 创建VertexBuffer（添加所有可用属性，包括骨骼）
             const size_t vertexCount = positionAccessor->count;
+
+            // 计算每个顶点的stride（所有属性的总大小）
+            // ALWAYS allocate space for all attributes (even if not present in glTF)
+            // Materials may require them, so we provide dummy data (zeros) if missing
+            size_t stride = 0;
+            size_t positionOffset = stride; stride += sizeof(float) * 3;  // POSITION: vec3
+            size_t normalOffset = stride; stride += sizeof(float) * 4;  // TANGENTS: vec4 (always include)
+            size_t uv0Offset = stride; stride += sizeof(float) * 2;  // UV0: vec2 (always include)
+            size_t uv1Offset = stride; stride += sizeof(float) * 2;  // UV1: vec2 (always include)
+            size_t colorOffset = stride; stride += sizeof(float) * 4;  // COLOR: vec4 (always include)
+            // CRITICAL: Add bone attributes for skinned mesh rendering
+            size_t boneIndicesOffset = stride; stride += sizeof(uint16_t) * 4;  // BONE_INDICES: uvec4 (4 bone indices per vertex)
+            size_t boneWeightsOffset = stride; stride += sizeof(float) * 4;     // BONE_WEIGHTS: vec4 (4 weights per vertex)
+
             VertexBuffer::Builder vbb;
             vbb.vertexCount(vertexCount)
                .bufferCount(1)
-               .attribute(VertexAttribute::POSITION, 0,
-                          VertexBuffer::AttributeType::FLOAT3, 0, sizeof(float) * 3);
+               .attribute(VertexAttribute::POSITION, 0, VertexBuffer::AttributeType::FLOAT3, positionOffset, stride)
+               // ALWAYS include TANGENTS, UV0, UV1, COLOR (materials may require them)
+               .attribute(VertexAttribute::TANGENTS, 0, VertexBuffer::AttributeType::FLOAT4, normalOffset, stride)
+               .attribute(VertexAttribute::UV0, 0, VertexBuffer::AttributeType::FLOAT2, uv0Offset, stride)
+               .attribute(VertexAttribute::UV1, 0, VertexBuffer::AttributeType::FLOAT2, uv1Offset, stride)
+               .attribute(VertexAttribute::COLOR, 0, VertexBuffer::AttributeType::FLOAT4, colorOffset, stride)
+               // Add bone attributes (REQUIRED for skinned mesh)
+               .attribute(VertexAttribute::BONE_INDICES, 0, VertexBuffer::AttributeType::USHORT4, boneIndicesOffset, stride)
+               .attribute(VertexAttribute::BONE_WEIGHTS, 0, VertexBuffer::AttributeType::FLOAT4, boneWeightsOffset, stride);
 
             VertexBuffer* vertexBuffer = vbb.build(*mEngine);
 
-            // 填充POSITION数据到CPU内存
-            float* vertexData = new float[vertexCount * 3];
-            cgltf_accessor_unpack_floats(positionAccessor, vertexData, vertexCount * 3);
+            // 填充所有顶点数据到交错格式的CPU内存
+            uint8_t* vertexData = new uint8_t[vertexCount * stride];
+            memset(vertexData, 0, vertexCount * stride);  // Initialize to zero
+
+            // POSITION
+            for (size_t v = 0; v < vertexCount; ++v) {
+                float* dst = (float*)(vertexData + v * stride + positionOffset);
+                cgltf_accessor_read_float(positionAccessor, v, dst, 3);
+            }
+
+            // NORMAL (packed into TANGENTS as quaternion)
+            if (normalAccessor) {
+                for (size_t v = 0; v < vertexCount; ++v) {
+                    float normal[3];
+                    cgltf_accessor_read_float(normalAccessor, v, normal, 3);
+
+                    // Pack normal into quaternion (simplified: just use normal as xyz, w=0)
+                    float* dst = (float*)(vertexData + v * stride + normalOffset);
+                    dst[0] = normal[0];
+                    dst[1] = normal[1];
+                    dst[2] = normal[2];
+                    dst[3] = 0.0f;  // w component
+                }
+            }
+
+            // UV0
+            if (texcoord0Accessor) {
+                for (size_t v = 0; v < vertexCount; ++v) {
+                    float* dst = (float*)(vertexData + v * stride + uv0Offset);
+                    cgltf_accessor_read_float(texcoord0Accessor, v, dst, 2);
+                }
+            }
+
+            // UV1
+            if (texcoord1Accessor) {
+                for (size_t v = 0; v < vertexCount; ++v) {
+                    float* dst = (float*)(vertexData + v * stride + uv1Offset);
+                    cgltf_accessor_read_float(texcoord1Accessor, v, dst, 2);
+                }
+            }
+
+            // COLOR
+            if (colorAccessor) {
+                for (size_t v = 0; v < vertexCount; ++v) {
+                    float* dst = (float*)(vertexData + v * stride + colorOffset);
+                    cgltf_accessor_read_float(colorAccessor, v, dst, 4);
+                }
+            }
+
+            // BONE_INDICES (CRITICAL for skinning)
+            for (size_t v = 0; v < vertexCount; ++v) {
+                uint16_t* dst = (uint16_t*)(vertexData + v * stride + boneIndicesOffset);
+                // Read as uint32 first, then convert to uint16
+                uint32_t temp[4];
+                cgltf_accessor_read_uint(boneIndicesAccessor, v, temp, 4);
+                dst[0] = static_cast<uint16_t>(temp[0]);
+                dst[1] = static_cast<uint16_t>(temp[1]);
+                dst[2] = static_cast<uint16_t>(temp[2]);
+                dst[3] = static_cast<uint16_t>(temp[3]);
+            }
+
+            // BONE_WEIGHTS (CRITICAL for skinning)
+            for (size_t v = 0; v < vertexCount; ++v) {
+                float* dst = (float*)(vertexData + v * stride + boneWeightsOffset);
+                cgltf_accessor_read_float(boneWeightsAccessor, v, dst, 4);
+            }
 
             // 保存待上传数据，不立即上传
             PendingBufferData pending = {};
             pending.data = vertexData;
-            pending.size = vertexCount * sizeof(float) * 3;
+            pending.size = vertexCount * stride;
             pending.vertexBuffer = vertexBuffer;
             pending.indexBuffer = nullptr;
             pending.bufferIndex = 0;
@@ -380,7 +479,7 @@ bool FMeshAsset::loadFromGltfData(const cgltf_data* data) {
                 for (size_t i = 0; i < numToRemove; ++i) {
                     auto& pending = mPendingUploads.back();
                     if (pending.vertexBuffer) {
-                        delete[] static_cast<float*>(pending.data);
+                        delete[] static_cast<uint8_t*>(pending.data);
                         mEngine->destroy(pending.vertexBuffer);
                     } else if (pending.indexBuffer) {
                         free(pending.data);
@@ -391,9 +490,42 @@ bool FMeshAsset::loadFromGltfData(const cgltf_data* data) {
                 continue;
             }
 
+            // Set material parameters from glTF (fixes black model issue)
+            const cgltf_material* mat = prim->material ? prim->material : &kDefaultMat;
+            auto mrConfig = mat->pbr_metallic_roughness;
+
+            // baseColorFactor (RGBA)
+            const float* c = mrConfig.base_color_factor;
+            materialInstance->setParameter("baseColorFactor", float4(c[0], c[1], c[2], c[3]));
+
+            // metallicFactor and roughnessFactor
+            materialInstance->setParameter("metallicFactor", mrConfig.metallic_factor);
+            materialInstance->setParameter("roughnessFactor", mrConfig.roughness_factor);
+
+            // emissiveFactor (RGB with optional strength multiplier)
+            const float* emissive = &mat->emissive_factor[0];
+            float3 emissiveFactor(emissive[0], emissive[1], emissive[2]);
+            if (mat->has_emissive_strength) {
+                emissiveFactor *= mat->emissive_strength.emissive_strength;
+            }
+            materialInstance->setParameter("emissiveFactor", emissiveFactor);
+
+            // alphaMask threshold (if MASK mode)
+            if (mat->alpha_mode == cgltf_alpha_mode_mask) {
+                materialInstance->setMaskThreshold(mat->alpha_cutoff);
+            }
+
             // 计算AABB和maxBoneIndex
             Aabb aabb = computeAABB(prim);
             uint16_t maxBoneIndex = findMaxBoneIndex(boneIndicesAccessor);
+
+            // Debug: log bone index info for each primitive
+            if (primitives.size() < 5 || primitives.size() % 50 == 0) {
+                GLTFIO_EXT_LOG("  Primitive " << primitives.size() << ": "
+                             << "vertexCount=" << vertexCount << ", "
+                             << "maxBoneIndex=" << maxBoneIndex << ", "
+                             << "materialName=" << (prim->material && prim->material->name ? prim->material->name : "default"));
+            }
 
             // 保存primitive信息
             primitives.push_back({prim, vertexBuffer, indexBuffer, materialInstance, aabb, maxBoneIndex});
@@ -415,6 +547,7 @@ bool FMeshAsset::loadFromGltfData(const cgltf_data* data) {
     }
 
     GLTFIO_EXT_LOG("Loaded " << primitives.size() << " skinned primitives");
+    GLTFIO_EXT_LOG("Max bone index found: " << mMaxBoneIndex << " (will need skeleton with at least " << (mMaxBoneIndex + 1) << " bones)");
 
     // 2. 创建RenderableEntity with多个geometry slots
     mRenderableEntity = EntityManager::get().create();
@@ -475,7 +608,7 @@ void FMeshAsset::uploadResources() {
         if (pending.vertexBuffer) {
             VertexBuffer::BufferDescriptor desc(
                 pending.data, pending.size,
-                [](void* buffer, size_t, void*) { delete[] static_cast<float*>(buffer); }
+                [](void* buffer, size_t, void*) { delete[] static_cast<uint8_t*>(buffer); }
             );
             pending.vertexBuffer->setBufferAt(*mEngine, pending.bufferIndex, std::move(desc));
         } else if (pending.indexBuffer) {
@@ -531,7 +664,7 @@ size_t FMeshAsset::uploadNextBatch(size_t maxCount) {
         if (pending.vertexBuffer) {
             VertexBuffer::BufferDescriptor desc(
                 pending.data, pending.size,
-                [](void* buffer, size_t, void*) { delete[] static_cast<float*>(buffer); }
+                [](void* buffer, size_t, void*) { delete[] static_cast<uint8_t*>(buffer); }
             );
             pending.vertexBuffer->setBufferAt(*mEngine, pending.bufferIndex, std::move(desc));
         } else if (pending.indexBuffer) {
@@ -559,7 +692,7 @@ FMeshAsset::~FMeshAsset() {
     for (auto& pending : mPendingUploads) {
         if (pending.data) {
             if (pending.vertexBuffer) {
-                delete[] static_cast<float*>(pending.data);
+                delete[] static_cast<uint8_t*>(pending.data);
             } else if (pending.indexBuffer) {
                 free(pending.data);
             }
@@ -568,19 +701,24 @@ FMeshAsset::~FMeshAsset() {
     mPendingUploads.clear();
 
     if (mEngine) {
-        // 销毁所有VertexBuffers
+        // CRITICAL: Destroy Renderable component FIRST (before MaterialInstances)
+        // Otherwise MaterialInstances will still be referenced by the Renderable
+        if (mRenderableEntity) {
+            mEngine->destroy(mRenderableEntity);  // Destroys all components
+            EntityManager::get().destroy(mRenderableEntity);  // Destroys entity
+        }
+
+        // Now safe to destroy MaterialInstances (Renderable no longer references them)
+        for (auto* mi : mMaterialInstances) {
+            if (mi) mEngine->destroy(mi);
+        }
+
+        // Destroy VertexBuffers and IndexBuffers
         for (auto* vb : mVertexBuffers) {
             if (vb) mEngine->destroy(vb);
         }
-        // 销毁所有IndexBuffers
         for (auto* ib : mIndexBuffers) {
             if (ib) mEngine->destroy(ib);
-        }
-        // Note: mMaterialInstances 由MaterialProvider管理，不在这里销毁
-
-        // 销毁Entity
-        if (mRenderableEntity) {
-            EntityManager::get().destroy(mRenderableEntity);
         }
     }
 }
@@ -601,9 +739,12 @@ bool MeshAsset::bindSkeleton(SkeletonAsset* skeleton) noexcept {
 
     // 验证骨骼索引范围
     if (self->mMaxBoneIndex >= skeleton->getBoneCount()) {
-        GLTFIO_EXT_WARN("Bone index out of range");
+        GLTFIO_EXT_WARN("Bone index out of range: maxBoneIndex=" << self->mMaxBoneIndex
+                       << ", skeletonBoneCount=" << skeleton->getBoneCount());
         return false;
     }
+
+    GLTFIO_EXT_LOG("Skeleton bound successfully: " << skeleton->getBoneCount() << " bones, maxBoneIndex=" << self->mMaxBoneIndex);
 
     self->mBoundSkeleton = skeleton;
     return true;
@@ -627,6 +768,14 @@ void MeshAsset::updateSkinning(const StandaloneAnimator* animator) noexcept {
     if (boneMatrices && boneCount > 0 && self->mRenderableInstance) {
         self->mRenderableManager->setBones(self->mRenderableInstance,
                                            boneMatrices, boneCount);
+
+        // Debug: log first update
+        static bool logged = false;
+        if (!logged) {
+            GLTFIO_EXT_LOG("updateSkinning: Set " << boneCount << " bone matrices for "
+                         << self->mMaterialInstances.size() << " primitives");
+            logged = true;
+        }
     }
 }
 
@@ -648,16 +797,6 @@ Aabb MeshAsset::getBoundingBox() const noexcept {
 void MeshAsset::uploadResources() noexcept {
     auto* self = static_cast<FMeshAsset*>(this);
     self->uploadResources();
-}
-
-size_t MeshAsset::uploadNextBatch(size_t maxCount) noexcept {
-    auto* self = static_cast<FMeshAsset*>(this);
-    return self->uploadNextBatch(maxCount);
-}
-
-bool MeshAsset::isResourcesLoaded() const noexcept {
-    auto* self = static_cast<const FMeshAsset*>(this);
-    return self->mResourcesLoaded;
 }
 
 } // namespace filament::gltfio

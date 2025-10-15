@@ -65,41 +65,28 @@ int main() {
     std::cout << "Bone count: " << skeleton->getBoneCount() << std::endl;
     assert(skeleton->getBoneCount() == 3);
 
-    for (size_t i = 0; i < skeleton->getBoneCount(); ++i) {
-        const char* name = skeleton->getBoneName(i);
-        std::cout << "  [" << i << "] " << (name ? name : "(unnamed)") << std::endl;
-        assert(name != nullptr);
-    }
-
     // 测试名称查找
     int index = skeleton->getBoneIndex("bone_1");
-    std::cout << "\nName lookup test: 'bone_1' -> index " << index << std::endl;
+    std::cout << "Name lookup test: 'bone_1' -> index " << index << std::endl;
     assert(index == 1);
 
     index = skeleton->getBoneIndex("nonexistent");
     std::cout << "Name lookup test: 'nonexistent' -> index " << index << std::endl;
     assert(index == -1);
 
+    // 测试getBoneEntity
+    Entity entity0 = skeleton->getBoneEntity(0);
+    Entity entity1 = skeleton->getBoneEntity(1);
+    std::cout << "\ngetBoneEntity test:" << std::endl;
+    std::cout << "  Entity[0]: " << entity0.getId() << std::endl;
+    std::cout << "  Entity[1]: " << entity1.getId() << std::endl;
+    assert(entity0);
+    assert(entity1);
+
     // 测试逆绑定矩阵
     const auto* ibm = skeleton->getInverseBindMatrices();
     std::cout << "\nInverse bind matrices: " << (ibm ? "OK" : "NULL") << std::endl;
     assert(ibm != nullptr);
-
-    // 测试根节点
-    Entity root = skeleton->getRoot();
-    std::cout << "Root entity: " << root.getId() << std::endl;
-    assert(root == skeleton->mBoneEntities[0]);
-
-    // 测试骨骼索引验证
-    uint16_t validIndices[] = {0, 1, 2};
-    bool valid = skeleton->validateBoneIndices(validIndices, 3);
-    std::cout << "\nValidate indices [0,1,2]: " << (valid ? "PASS" : "FAIL") << std::endl;
-    assert(valid);
-
-    uint16_t invalidIndices[] = {0, 1, 10};
-    valid = skeleton->validateBoneIndices(invalidIndices, 3);
-    std::cout << "Validate indices [0,1,10]: " << (valid ? "PASS" : "FAIL") << std::endl;
-    assert(!valid);
 
     // 清理
     delete skeleton;

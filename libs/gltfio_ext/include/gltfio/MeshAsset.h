@@ -101,23 +101,8 @@ public:
 
     /**
      * 上传所有GPU资源（一次性上传所有pending数据）
-     * @note 对于大模型可能阻塞较久，建议使用uploadNextBatch分帧上传
      */
     void uploadResources() noexcept;
-
-    /**
-     * 分批上传GPU资源（用于分帧加载）
-     * @param maxCount 本次最多上传的buffer数量
-     * @return 实际上传的数量
-     * @note 返回0表示全部上传完成
-     */
-    size_t uploadNextBatch(size_t maxCount) noexcept;
-
-    /**
-     * 查询资源是否已全部上传
-     * @return 已上传返回true
-     */
-    bool isResourcesLoaded() const noexcept;
 
 protected:
     MeshAsset() noexcept = default;

@@ -1,42 +1,31 @@
 /**
  * @file AnimationAsset.cpp
- * @brief 动画资产实现 - 从glTF animation加载关键帧数据
+ * @brief 动画资产实现 - 从glTF data加载所有动画
  *
  * ========== 核心设计 ==========
  *
- * 动画加载流程（loadFromGltfAnimation）：
- * 1. 加载Samplers（关键帧数据）：
- *    - 时间轴：cgltf_animation_sampler.input → map<time, index>
- *    - 值数据：cgltf_animation_sampler.output → vector<float>
- *    - 插值类型：LINEAR/STEP/CUBIC
- *
- * 2. 加载Channels（动画通道）：
- *    - 目标骨骼：cgltf_animation_channel.target_node.name
- *    - 变换类型：TRANSLATION/ROTATION/SCALE/WEIGHTS
- *    - 关联Sampler：指向上一步创建的Sampler
- *
- * 3. 计算Duration：
- *    - 遍历所有Samplers，找到最大时间值
+ * 动画加载流程（loadFromGltfData）：
+ * 1. 遍历cgltf_data中的所有animations（而非只加载第一个）
+ * 2. 对每个animation：
+ *    - 加载Samplers（关键帧数据）
+ *    - 加载Channels（动画通道）
+ *    - 计算Duration（最大时间值）
+ *    - 存储到mAnimations vector
+ * 3. 缓存所有动画名称指针到mAnimationNames
  *
  * ========== 设计理由 ==========
  *
- * Q: 为什么用map存储时间轴？
- * A: 支持快速关键帧查找：
- *    - lower_bound(time)找到≥time的第一个关键帧
- *    - 常见用法：查找当前时间前后的两个关键帧进行插值
+ * Q: 为什么loadFromGltfData加载所有动画？
+ * A: glTF文件本身支持多个动画：
+ *    - 一次性加载避免重复解析glTF数据
+ *    - 统一管理所有动画资源
+ *    - "多个"是"单个"的超集（N=1时等同于单个动画）
  *
- * Q: 为什么存储骨骼名称而非索引？
- * A: 动画与骨骼解耦：
- *    - AnimationAsset加载时还不知道SkeletonAsset
- *    - 播放时才绑定：StandaloneAnimator::playAnimation()建立名称→索引映射
- *    - 好处：同一动画可用于不同skeleton（如果骨骼名称匹配）
- *
- * Q: 为什么用vector<float>存储值数据？
- * A: 灵活性：
- *    - TRANSLATION: 3个float（xyz）
- *    - ROTATION: 4个float（quaternion xyzw）
- *    - SCALE: 3个float（xyz）
- *    - 使用时reinterpret_cast<float3*>或<quatf*>
+ * Q: 为什么用vector<SingleAnimation>而非vector<AnimationAsset*>？
+ * A: 避免间接指针开销：
+ *    - SingleAnimation是值类型，内存连续
+ *    - 访问mAnimations[i]直接，无需解引用
+ *    - 生命周期管理简单（自动析构）
  */
 
 #include <gltfio/AnimationAsset.h>
@@ -45,10 +34,11 @@
 
 #include <cgltf.h>
 #include <algorithm>
+#include <cstring>
 
 namespace filament::gltfio {
 
-// 辅助函数：创建Sampler
+// 辅助函数：创建Sampler（从AnimationPack.cpp迁移）
 static void createSampler(const cgltf_animation_sampler& src, Sampler& dst) {
     // 1. 复制时间轴到map
     const cgltf_accessor* timelineAccessor = src.input;
@@ -107,26 +97,27 @@ static void createSampler(const cgltf_animation_sampler& src, Sampler& dst) {
     }
 }
 
-bool FAnimationAsset::loadFromGltfAnimation(const cgltf_animation* anim) {
+// 辅助函数：从cgltf_animation加载单个动画
+static bool loadSingleAnimation(const cgltf_animation* anim, SingleAnimation& out) {
     if (!anim) {
         return false;
     }
 
     // 1. 存储名称
-    mName = utils::CString(anim->name ? anim->name : "");
-    mDuration = 0.0f;
+    out.mName = utils::CString(anim->name ? anim->name : "");
+    out.mDuration = 0.0f;
 
     // 2. 加载Samplers
-    mSamplers.resize(anim->samplers_count);
+    out.mSamplers.resize(anim->samplers_count);
     for (size_t i = 0; i < anim->samplers_count; ++i) {
         const cgltf_animation_sampler& srcSampler = anim->samplers[i];
-        Sampler& dstSampler = mSamplers[i];
+        Sampler& dstSampler = out.mSamplers[i];
         createSampler(srcSampler, dstSampler);
 
         // 更新duration
         if (!dstSampler.times.empty()) {
             float maxTime = dstSampler.times.rbegin()->first;
-            mDuration = std::max(mDuration, maxTime);
+            out.mDuration = std::max(out.mDuration, maxTime);
         }
     }
 
@@ -140,7 +131,7 @@ bool FAnimationAsset::loadFromGltfAnimation(const cgltf_animation* anim) {
         }
 
         Channel dstChannel;
-        dstChannel.sampler = &mSamplers[srcChannel.sampler - anim->samplers];
+        dstChannel.sampler = &out.mSamplers[srcChannel.sampler - anim->samplers];
 
         // ⭐ 关键：存储骨骼名称而非Entity
         if (srcChannel.target_node->name) {
@@ -170,10 +161,10 @@ bool FAnimationAsset::loadFromGltfAnimation(const cgltf_animation* anim) {
                 continue;
         }
 
-        mChannels.push_back(dstChannel);
+        out.mChannels.push_back(dstChannel);
     }
 
-    if (mChannels.empty()) {
+    if (out.mChannels.empty()) {
         GLTFIO_EXT_WARN("Animation has no valid channels");
         return false;
     }
@@ -181,43 +172,76 @@ bool FAnimationAsset::loadFromGltfAnimation(const cgltf_animation* anim) {
     return true;
 }
 
-// 公开API实现
-const char* AnimationAsset::getName() const noexcept {
-    auto* self = static_cast<const FAnimationAsset*>(this);
-    return self->mName.c_str();
+// 从cgltf_data加载所有动画
+bool FAnimationAsset::loadFromGltfData(const cgltf_data* data) {
+    if (!data || data->animations_count == 0) {
+        GLTFIO_EXT_WARN("No animations in glTF data");
+        return false;
+    }
+
+    // 加载所有动画
+    mAnimations.reserve(data->animations_count);
+    for (size_t i = 0; i < data->animations_count; ++i) {
+        SingleAnimation anim;
+        if (loadSingleAnimation(&data->animations[i], anim)) {
+            mAnimations.push_back(std::move(anim));
+        }
+    }
+
+    if (mAnimations.empty()) {
+        GLTFIO_EXT_WARN("Failed to load any animations");
+        return false;
+    }
+
+    // 缓存动画名称指针
+    mAnimationNames.reserve(mAnimations.size() + 1);
+    for (const auto& anim : mAnimations) {
+        mAnimationNames.push_back(anim.mName.c_str());
+    }
+    mAnimationNames.push_back(nullptr);  // 以nullptr结尾
+
+    return true;
 }
 
-float AnimationAsset::getDuration() const noexcept {
+// ========== 公开API实现 ==========
+
+// 容器API
+size_t AnimationAsset::getAnimationCount() const noexcept {
     auto* self = static_cast<const FAnimationAsset*>(this);
-    return self->mDuration;
+    return self->mAnimations.size();
 }
 
-size_t AnimationAsset::getChannelCount() const noexcept {
+// 单个动画查询API（按索引访问）
+const char* AnimationAsset::getAnimationName(size_t animIndex) const noexcept {
     auto* self = static_cast<const FAnimationAsset*>(this);
-    return self->mChannels.size();
-}
-
-const char* AnimationAsset::getChannelTargetBone(size_t channelIndex) const noexcept {
-    auto* self = static_cast<const FAnimationAsset*>(this);
-    if (channelIndex >= self->mChannels.size()) {
+    if (animIndex >= self->mAnimations.size()) {
         return nullptr;
     }
-    return self->mChannels[channelIndex].targetBoneName.c_str();
+    return self->mAnimations[animIndex].mName.c_str();
 }
 
-AnimationAsset::ChannelType AnimationAsset::getChannelType(size_t channelIndex) const noexcept {
+float AnimationAsset::getAnimationDuration(size_t animIndex) const noexcept {
     auto* self = static_cast<const FAnimationAsset*>(this);
-    if (channelIndex >= self->mChannels.size()) {
-        return ChannelType::TRANSLATION;
+    if (animIndex >= self->mAnimations.size()) {
+        return 0.0f;
+    }
+    return self->mAnimations[animIndex].mDuration;
+}
+
+// 查找API
+int AnimationAsset::findAnimationIndex(const char* name) const noexcept {
+    auto* self = static_cast<const FAnimationAsset*>(this);
+    if (!name) {
+        return -1;
     }
 
-    switch (self->mChannels[channelIndex].transformType) {
-        case Channel::TRANSLATION: return ChannelType::TRANSLATION;
-        case Channel::ROTATION: return ChannelType::ROTATION;
-        case Channel::SCALE: return ChannelType::SCALE;
-        case Channel::WEIGHTS: return ChannelType::WEIGHTS;
-        default: return ChannelType::TRANSLATION;
+    for (size_t i = 0; i < self->mAnimations.size(); ++i) {
+        if (strcmp(self->mAnimations[i].mName.c_str(), name) == 0) {
+            return static_cast<int>(i);
+        }
     }
+
+    return -1;
 }
 
 } // namespace filament::gltfio
