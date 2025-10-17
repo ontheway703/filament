@@ -53,16 +53,46 @@
    - 应用到 Renderable
    - 完整渲染流程集成
 
+9. **[09-gltfio-material-loading.md](09-gltfio-material-loading.md)** - glTFIO 材质加载与处理
+   - MaterialProvider 架构
+   - JitShaderProvider vs UbershaderProvider 对比
+   - MaterialKey 结构与特征提取
+   - UV 映射约束处理
+   - 完整材质加载流程
+   - 核心技术栈（cgltf, filamat, MaterialBuilder）
+
+## glTF 集成
+
+**glTFIO** 是 Filament 的 glTF 2.0 加载器，将 glTF 场景转换为 Filament 可渲染对象。第 9 章详细说明了材质加载的机制：
+
+- **两种实现方式**:
+  - **JitShaderProvider**: 运行时动态生成材质（适用于桌面平台）
+  - **UbershaderProvider**: 使用预编译材质（适用于移动平台）
+
+- **核心技术**:
+  - 使用 cgltf 解析 glTF 文件
+  - 通过 MaterialKey 实现特征哈希和缓存
+  - 处理 Filament 的 2 UV 集限制
+  - 材质实例复用和性能优化
+
 ## 快速开始
 
 如果你是第一次阅读，建议按以下顺序：
 
+### 基础材质开发路径
 1. 先阅读 `05-graphics-concepts.md` 了解基础图形学概念
 2. 再看 `04-material-definition.md` 学习如何定义材质
 3. 查看 `06-examples.md` 的示例代码快速上手
 4. 阅读 `07-tools-usage.md` 学习如何编译材质
 5. 学习 `08-runtime-usage.md` 了解如何在应用中使用
 6. 需要深入时参考 `01-core-classes.md` 和 `02-compilation-pipeline.md`
+
+### glTF 资源加载路径
+如果你主要使用 glTF 格式加载 3D 模型和材质：
+1. 先阅读 `05-graphics-concepts.md` 了解 PBR 材质基础
+2. 直接跳到 `09-gltfio-material-loading.md` 学习 glTF 材质加载机制
+3. 根据平台选择合适的 MaterialProvider（JIT 或 Ubershader）
+4. 如需自定义材质，再参考 `04-material-definition.md` 和 `06-examples.md`
 
 ## 关键概念
 
@@ -166,6 +196,28 @@ fragment {
     }
 }
 ```
+
+## 技术栈
+
+Filament 材质系统使用的核心技术和库：
+
+### 材质编译
+- **filamat**: Filament 的材质编译库，支持运行时和离线编译
+- **MaterialBuilder**: 声明式材质构建 API
+- **matc**: 命令行材质编译工具
+- **SPIRV-Tools**: Shader 优化和验证
+
+### glTF 集成
+- **cgltf**: 单头文件的 glTF 2.0 解析库
+- **JitShaderProvider**: 运行时材质生成（使用 filamat）
+- **UbershaderProvider**: 预编译 ubershader 材质
+- **robin_map (tsl::robin_map)**: 高性能哈希表，用于材质缓存
+
+### 渲染后端
+- **OpenGL / OpenGL ES**: 跨平台图形 API
+- **Vulkan**: 现代低开销图形 API
+- **Metal**: Apple 平台的原生图形 API
+- **WebGL**: Web 平台图形 API
 
 ## 版本信息
 
