@@ -1,3 +1,52 @@
+/**
+ * ============================================================================
+ * test_multi_channel_bug.cpp - 多通道变换Bug验证测试
+ * ============================================================================
+ *
+ * 【测试目标】
+ * 验证同一骨骼的多个动画通道（T+R+S）是否会互相覆盖：
+ * - TRANSLATION + ROTATION + SCALE 同时作用
+ * - 验证 applyAnimation() 的 TRS 组合逻辑
+ *
+ * 【背景知识】
+ * glTF 动画允许同一骨骼有多个通道（Channel），分别控制：
+ * - TRANSLATION（平移）
+ * - ROTATION（旋转）
+ * - SCALE（缩放）
+ *
+ * 常见Bug：
+ * 如果 applyAnimation() 直接设置整个变换矩阵（setTransform），
+ * 后执行的通道会覆盖前面的通道，导致只有最后一个通道生效。
+ *
+ * 正确做法：
+ * 1. 分别读取每个通道的值
+ * 2. 组合成 TRS 变换：M = T * R * S
+ * 3. 设置最终矩阵
+ *
+ * 或者：
+ * 1. 读取当前矩阵
+ * 2. 分解为 TRS
+ * 3. 更新对应分量
+ * 4. 重新组合
+ *
+ * 【测试方法】
+ * Bug 复现测试 - 创建包含3个通道的动画，验证所有通道都生效
+ *
+ * 【关键验证点】
+ * 1. t=0.5时，translation.x ≈ 0.5（lerp(0, 1, 0.5)）
+ * 2. t=0.5时，scale ≈ 1.5（lerp(1, 2, 0.5)）
+ * 3. rotation 也正确应用（视觉验证）
+ * 4. 单通道作为对照组，验证没有Bug
+ *
+ * 【运行方式】
+ * ./out/cmake-debug/libs/gltfio_ext/test_multi_channel_bug
+ *
+ * 【预期输出】
+ * 如果有Bug：显示 "BUG CONFIRMED!" 和根因分析
+ * 如果无Bug：显示 "No multi-channel bug detected"
+ * ============================================================================
+ */
+
 #include <gltfio/StandaloneAnimator.h>
 #include <gltfio/SkeletonAsset.h>
 #include <gltfio/AnimationAsset.h>

@@ -1,3 +1,55 @@
+/**
+ * ============================================================================
+ * test_animation.cpp - AnimationAsset 多动画容器测试
+ * ============================================================================
+ *
+ * 【测试目标】
+ * 验证 AnimationAsset 作为动画容器的管理功能：
+ * - 多个动画的存储和查询
+ * - 动画名称到索引的映射
+ * - 动画时长获取
+ * - SingleAnimation 的 Channel 和 Sampler 结构
+ *
+ * 【背景知识】
+ * glTF 文件可以包含多个动画（如：idle, walk, run），AnimationAsset 负责管理
+ * 这些动画数据。每个动画(SingleAnimation)包含：
+ *
+ * 1. Channels（通道）: 定义动画目标和变换类型
+ *    - targetBoneName: 目标骨骼名称
+ *    - transformType: TRANSLATION（平移）/ ROTATION（旋转）/ SCALE（缩放）
+ *
+ * 2. Samplers（采样器）: 存储关键帧数据
+ *    - times: 时间戳数组（如 0.0s, 1.0s, 2.0s）
+ *    - values: 对应的变换值（vec3 或 quat）
+ *    - interpolation: 插值方式（LINEAR, STEP, CUBICSPLINE）
+ *
+ * 关键概念：
+ * - 关键帧动画: 只存储关键时刻的姿态，中间帧通过插值计算
+ * - 插值(Interpolation): 在两个关键帧之间平滑过渡（线性插值最常用）
+ * - Animation Clip: 一个完整的动画序列（如一个走路循环）
+ *
+ * 【测试方法】
+ * 单元测试 - 手动构造包含2个动画的 AnimationAsset，验证容器 API
+ *
+ * 【关键验证点】
+ * 1. getAnimationCount() 返回正确数量
+ * 2. getAnimationName(index) 返回正确名称
+ * 3. getAnimationDuration(index) 返回正确时长
+ * 4. findAnimationIndex(name) 查询成功/失败
+ * 5. Channel 和 Sampler 数据结构完整
+ *
+ * 【与其他测试的关系】
+ * - 前置：无（独立测试）
+ * - 后续：test_animator.cpp 需要 AnimationAsset 来播放动画
+ *
+ * 【运行方式】
+ * ./out/cmake-debug/libs/gltfio_ext/test_animation
+ *
+ * 【预期输出】
+ * 所有断言通过，显示 "AnimationAsset Multi-Animation Test PASSED"
+ * ============================================================================
+ */
+
 #include <gltfio/AssetLoaderExt.h>
 #include <gltfio/AnimationAsset.h>
 #include "../src/FAnimationAsset.h"

@@ -8,6 +8,7 @@ set(PUBLIC_HDR_DIR include)
 set(PUBLIC_HDRS
     include/gltfio/SkeletonAsset.h
     include/gltfio/MeshAsset.h
+    include/gltfio/MeshInstance.h
     include/gltfio/AnimationAsset.h
     include/gltfio/StandaloneAnimator.h
     include/gltfio/AssetLoaderExt.h
@@ -17,12 +18,14 @@ set(PUBLIC_HDRS
 set(SRCS
     src/FSkeletonAsset.h
     src/FMeshAsset.h
+    src/FMeshInstance.h
     src/FAnimationAsset.h
     src/FStandaloneAnimator.h
     src/GltfioExtInternal.h
     src/AssetLoaderExt.cpp
     src/SkeletonAsset.cpp
     src/MeshAsset.cpp
+    src/MeshInstance.cpp
     src/AnimationAsset.cpp
     src/StandaloneAnimator.cpp
 )
@@ -82,16 +85,38 @@ if (NOT WEBGL AND NOT ANDROID AND NOT IOS)
     target_link_libraries(test_multi_channel_bug PRIVATE gltfio_ext)
     set_target_properties(test_multi_channel_bug PROPERTIES FOLDER Tests)
 
+    # 新增的 MeshAsset 和 MeshInstance 测试
+    add_executable(test_mesh tests/test_mesh.cpp)
+    target_link_libraries(test_mesh PRIVATE gltfio_ext)
+    set_target_properties(test_mesh PROPERTIES FOLDER Tests)
+
+    add_executable(test_mesh_instance tests/test_mesh_instance.cpp)
+    target_link_libraries(test_mesh_instance PRIVATE gltfio_ext)
+    set_target_properties(test_mesh_instance PROPERTIES FOLDER Tests)
+
+    # 新增的真实文件加载和材质系统测试
+    add_executable(test_asset_loader tests/test_asset_loader.cpp)
+    target_link_libraries(test_asset_loader PRIVATE gltfio_ext uberarchive)
+    set_target_properties(test_asset_loader PROPERTIES FOLDER Tests)
+
+    add_executable(test_material_integration tests/test_material_integration.cpp)
+    target_link_libraries(test_material_integration PRIVATE gltfio_ext uberarchive)
+    set_target_properties(test_material_integration PROPERTIES FOLDER Tests)
+
     # 添加所有测试到总测试目标
     add_custom_target(test_gltfio_ext
         DEPENDS test_skeleton test_animation test_animator test_integration
                 test_edge_cases test_multi_channel_bug
+                test_mesh test_mesh_instance
+                test_asset_loader test_material_integration
     )
     set_target_properties(test_gltfio_ext PROPERTIES FOLDER Tests)
 
     # 创建核心测试套件（只包含基础功能测试）
     add_custom_target(test_gltfio_ext_core
         DEPENDS test_skeleton test_animation test_animator
+                test_mesh test_mesh_instance
+                test_asset_loader test_material_integration
     )
     set_target_properties(test_gltfio_ext_core PROPERTIES FOLDER Tests)
 

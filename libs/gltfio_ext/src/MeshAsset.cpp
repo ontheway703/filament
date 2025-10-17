@@ -61,10 +61,12 @@
  */
 
 #include <gltfio/MeshAsset.h>
+#include <gltfio/MeshInstance.h>
 #include <gltfio/SkeletonAsset.h>
 #include <gltfio/StandaloneAnimator.h>
 #include <gltfio/MaterialProvider.h>
 #include "FMeshAsset.h"
+#include "FMeshInstance.h"
 #include "GltfioExtInternal.h"
 
 #include <filament/Engine.h>
@@ -73,6 +75,8 @@
 #include <filament/IndexBuffer.h>
 #include <utils/EntityManager.h>
 #include <math/vec3.h>
+#include <math/quat.h>
+#include <math/mat3.h>
 #include <cgltf.h>
 
 using namespace filament;
@@ -218,6 +222,43 @@ static bool primitiveHasVertexColor(const cgltf_primitive* prim) {
 }
 
 /**
+ * 从 TBN 向量构建 quaternion（参考 gltfio/AssetLoader.cpp）
+ *
+ * @param tangent 切线向量（已归一化）
+ * @param bitangent 副切线向量（已归一化）
+ * @param normal 法线向量（已归一化）
+ * @return quaternion 表示的 TBN 矩阵
+ */
+static quatf buildTbnQuaternion(const float3& tangent, const float3& bitangent, const float3& normal) {
+    // 1. 构建 TBN 矩阵（列向量）
+    mat3f tbn;
+    tbn[0] = tangent;      // 第 1 列
+    tbn[1] = bitangent;    // 第 2 列
+    tbn[2] = normal;       // 第 3 列
+
+    // 2. 转换为 quaternion
+    quatf q = mat3f::packTangentFrame(tbn);
+
+    return q;
+}
+
+/**
+ * 从 Normal 生成简化的 Tangent（当 glTF 没有提供 TANGENT 属性时）
+ *
+ * 注意：这是简化实现，假设 tangent 垂直于 normal
+ * 完整实现应使用 MikkTSpace 算法
+ */
+static float3 computeSimpleTangent(const float3& normal) {
+    // 找一个与 normal 不平行的向量
+    float3 c1 = cross(normal, float3{0.0f, 0.0f, 1.0f});
+    float3 c2 = cross(normal, float3{0.0f, 1.0f, 0.0f});
+
+    // 选择长度更大的（更稳定）
+    float3 tangent = length2(c1) > length2(c2) ? c1 : c2;
+    return normalize(tangent);
+}
+
+/**
  * 从glTF数据加载蒙皮网格（两阶段加载的阶段1）
  *
  * 核心流程：
@@ -279,6 +320,7 @@ bool FMeshAsset::loadFromGltfData(const cgltf_data* data) {
             // 查找所有顶点属性
             const cgltf_accessor* positionAccessor = nullptr;
             const cgltf_accessor* normalAccessor = nullptr;
+            const cgltf_accessor* tangentAccessor = nullptr;  // 新增：TANGENT 属性
             const cgltf_accessor* texcoord0Accessor = nullptr;
             const cgltf_accessor* texcoord1Accessor = nullptr;
             const cgltf_accessor* colorAccessor = nullptr;
@@ -293,6 +335,9 @@ bool FMeshAsset::loadFromGltfData(const cgltf_data* data) {
                         break;
                     case cgltf_attribute_type_normal:
                         normalAccessor = attr.data;
+                        break;
+                    case cgltf_attribute_type_tangent:  // 新增：读取 TANGENT
+                        tangentAccessor = attr.data;
                         break;
                     case cgltf_attribute_type_texcoord:
                         if (attr.index == 0) texcoord0Accessor = attr.data;
@@ -364,18 +409,42 @@ bool FMeshAsset::loadFromGltfData(const cgltf_data* data) {
                 cgltf_accessor_read_float(positionAccessor, v, dst, 3);
             }
 
-            // NORMAL (packed into TANGENTS as quaternion)
+            // TANGENTS (TBN quaternion for normal mapping)
             if (normalAccessor) {
                 for (size_t v = 0; v < vertexCount; ++v) {
-                    float normal[3];
-                    cgltf_accessor_read_float(normalAccessor, v, normal, 3);
+                    // 1. Read normal
+                    float normalData[3];
+                    cgltf_accessor_read_float(normalAccessor, v, normalData, 3);
+                    float3 normal = normalize(float3(normalData[0], normalData[1], normalData[2]));
 
-                    // Pack normal into quaternion (simplified: just use normal as xyz, w=0)
+                    // 2. Get tangent (from glTF or compute)
+                    float3 tangent;
+                    float handedness = 1.0f;  // Default handedness
+
+                    if (tangentAccessor) {
+                        // glTF provides TANGENT attribute (vec4: xyz=tangent, w=handedness)
+                        float tangentData[4];
+                        cgltf_accessor_read_float(tangentAccessor, v, tangentData, 4);
+                        tangent = normalize(float3(tangentData[0], tangentData[1], tangentData[2]));
+                        handedness = tangentData[3];
+                    } else {
+                        // No TANGENT in glTF, compute from normal
+                        tangent = computeSimpleTangent(normal);
+                        handedness = 1.0f;
+                    }
+
+                    // 3. Compute bitangent
+                    float3 bitangent = normalize(cross(normal, tangent) * handedness);
+
+                    // 4. Build TBN quaternion
+                    quatf q = buildTbnQuaternion(tangent, bitangent, normal);
+
+                    // 5. Store quaternion in TANGENTS attribute
                     float* dst = (float*)(vertexData + v * stride + normalOffset);
-                    dst[0] = normal[0];
-                    dst[1] = normal[1];
-                    dst[2] = normal[2];
-                    dst[3] = 0.0f;  // w component
+                    dst[0] = q.x;
+                    dst[1] = q.y;
+                    dst[2] = q.z;
+                    dst[3] = q.w;
                 }
             }
 
@@ -513,6 +582,59 @@ bool FMeshAsset::loadFromGltfData(const cgltf_data* data) {
             // alphaMask threshold (if MASK mode)
             if (mat->alpha_mode == cgltf_alpha_mode_mask) {
                 materialInstance->setMaskThreshold(mat->alpha_cutoff);
+            }
+
+            // 收集纹理信息（用于getRequiredTextures）
+            PrimitiveTextureInfo primTexInfo;
+            primTexInfo.primitiveIndex = primitives.size();
+
+            // Base Color Texture
+            if (mrConfig.base_color_texture.texture) {
+                primTexInfo.slots.push_back({
+                    "baseColorMap",
+                    mrConfig.base_color_texture.texture,
+                    (int)mrConfig.base_color_texture.texcoord
+                });
+            }
+
+            // Normal Texture
+            if (mat->normal_texture.texture) {
+                primTexInfo.slots.push_back({
+                    "normalMap",
+                    mat->normal_texture.texture,
+                    (int)mat->normal_texture.texcoord
+                });
+            }
+
+            // Metallic Roughness Texture
+            if (mrConfig.metallic_roughness_texture.texture) {
+                primTexInfo.slots.push_back({
+                    "metallicRoughnessMap",
+                    mrConfig.metallic_roughness_texture.texture,
+                    (int)mrConfig.metallic_roughness_texture.texcoord
+                });
+            }
+
+            // Occlusion Texture
+            if (mat->occlusion_texture.texture) {
+                primTexInfo.slots.push_back({
+                    "occlusionMap",
+                    mat->occlusion_texture.texture,
+                    (int)mat->occlusion_texture.texcoord
+                });
+            }
+
+            // Emissive Texture
+            if (mat->emissive_texture.texture) {
+                primTexInfo.slots.push_back({
+                    "emissiveMap",
+                    mat->emissive_texture.texture,
+                    (int)mat->emissive_texture.texcoord
+                });
+            }
+
+            if (!primTexInfo.slots.empty()) {
+                mTextureInfos.push_back(primTexInfo);
             }
 
             // 计算AABB和maxBoneIndex
@@ -688,7 +810,14 @@ size_t FMeshAsset::uploadNextBatch(size_t maxCount) {
 }
 
 FMeshAsset::~FMeshAsset() {
-    // 释放未上传的pending数据
+    // 1. 首先销毁所有实例（在销毁共享资源之前）
+    GLTFIO_EXT_LOG("Destroying MeshAsset with " << mInstances.size() << " instances");
+    for (auto* instance : mInstances) {
+        delete static_cast<FMeshInstance*>(instance);
+    }
+    mInstances.clear();
+
+    // 2. 释放未上传的pending数据
     for (auto& pending : mPendingUploads) {
         if (pending.data) {
             if (pending.vertexBuffer) {
@@ -713,13 +842,19 @@ FMeshAsset::~FMeshAsset() {
             if (mi) mEngine->destroy(mi);
         }
 
-        // Destroy VertexBuffers and IndexBuffers
+        // Destroy VertexBuffers and IndexBuffers (shared resources)
         for (auto* vb : mVertexBuffers) {
             if (vb) mEngine->destroy(vb);
         }
         for (auto* ib : mIndexBuffers) {
             if (ib) mEngine->destroy(ib);
         }
+    }
+
+    // 释放 cgltf_data（包含纹理信息）
+    if (mGltfData) {
+        cgltf_free(const_cast<cgltf_data*>(mGltfData));
+        mGltfData = nullptr;
     }
 }
 
@@ -797,6 +932,204 @@ Aabb MeshAsset::getBoundingBox() const noexcept {
 void MeshAsset::uploadResources() noexcept {
     auto* self = static_cast<FMeshAsset*>(this);
     self->uploadResources();
+}
+
+std::vector<TextureInfo> MeshAsset::getRequiredTextures() const noexcept {
+    auto* self = static_cast<const FMeshAsset*>(this);
+    std::vector<TextureInfo> result;
+
+    if (!self->mGltfData) {
+        return result;
+    }
+
+    // 遍历所有primitives的纹理信息
+    for (const auto& primTexInfo : self->mTextureInfos) {
+        for (const auto& slot : primTexInfo.slots) {
+            TextureInfo info = {};
+            info.primitiveIndex = primTexInfo.primitiveIndex;
+            info.slot = slot.slotName;
+
+            cgltf_texture* tex = slot.gltfTexture;
+            if (!tex || !tex->image) {
+                continue;  // 跳过无效纹理
+            }
+
+            cgltf_image* img = tex->image;
+
+            // 1. 提取 URI 或 embedded 数据
+            if (img->uri) {
+                info.uri = img->uri;
+                info.data = nullptr;
+                info.dataSize = 0;
+            } else if (img->buffer_view) {
+                // Embedded 数据
+                info.uri = nullptr;
+                info.data = (const uint8_t*)img->buffer_view->buffer->data
+                          + img->buffer_view->offset;
+                info.dataSize = img->buffer_view->size;
+            } else {
+                continue;  // 无数据源，跳过
+            }
+
+            // 2. MIME 类型
+            info.mimeType = img->mime_type ? img->mime_type : "image/png";
+
+            // 3. Sampler 参数
+            cgltf_sampler* sampler = tex->sampler;
+            if (sampler) {
+                info.wrapS = static_cast<SamplerWrapMode>(sampler->wrap_s);
+                info.wrapT = static_cast<SamplerWrapMode>(sampler->wrap_t);
+                info.minFilter = static_cast<SamplerMinFilter>(sampler->min_filter);
+                info.magFilter = static_cast<SamplerMagFilter>(sampler->mag_filter);
+            } else {
+                // 默认值（glTF规范默认）
+                info.wrapS = SamplerWrapMode::REPEAT;
+                info.wrapT = SamplerWrapMode::REPEAT;
+                info.minFilter = SamplerMinFilter::LINEAR;
+                info.magFilter = SamplerMagFilter::LINEAR;
+            }
+
+            result.push_back(info);
+        }
+    }
+
+    return result;
+}
+
+void MeshAsset::bindTexture(size_t primitiveIndex, const char* slot,
+                            Texture* texture, const TextureSampler& sampler) noexcept {
+    auto* self = static_cast<FMeshAsset*>(this);
+
+    if (primitiveIndex >= self->mMaterialInstances.size()) {
+        GLTFIO_EXT_WARN("Invalid primitive index: " << primitiveIndex
+                       << " (total: " << self->mMaterialInstances.size() << ")");
+        return;
+    }
+
+    if (!texture) {
+        GLTFIO_EXT_WARN("Cannot bind null texture to slot: " << (slot ? slot : "null"));
+        return;
+    }
+
+    MaterialInstance* mi = self->mMaterialInstances[primitiveIndex];
+    if (!mi) {
+        GLTFIO_EXT_WARN("MaterialInstance is null for primitive " << primitiveIndex);
+        return;
+    }
+
+    // 绑定纹理到MaterialInstance
+    mi->setParameter(slot, texture, sampler);
+
+    // Debug log for first few bindings
+    static int bindCount = 0;
+    if (bindCount < 5) {
+        GLTFIO_EXT_LOG("Bound texture to primitive " << primitiveIndex
+                     << ", slot: " << slot);
+        bindCount++;
+    }
+}
+
+TextureSampler MeshAsset::createSampler(const TextureInfo& info) noexcept {
+    TextureSampler sampler;
+
+    // Wrap modes
+    auto convertWrapMode = [](SamplerWrapMode mode) -> TextureSampler::WrapMode {
+        switch (mode) {
+            case SamplerWrapMode::CLAMP_TO_EDGE:
+                return TextureSampler::WrapMode::CLAMP_TO_EDGE;
+            case SamplerWrapMode::MIRRORED_REPEAT:
+                return TextureSampler::WrapMode::MIRRORED_REPEAT;
+            case SamplerWrapMode::REPEAT:
+            default:
+                return TextureSampler::WrapMode::REPEAT;
+        }
+    };
+
+    sampler.setWrapModeS(convertWrapMode(info.wrapS));
+    sampler.setWrapModeT(convertWrapMode(info.wrapT));
+
+    // Min filter
+    auto convertMinFilter = [](SamplerMinFilter filter) -> TextureSampler::MinFilter {
+        switch (filter) {
+            case SamplerMinFilter::NEAREST:
+                return TextureSampler::MinFilter::NEAREST;
+            case SamplerMinFilter::LINEAR:
+                return TextureSampler::MinFilter::LINEAR;
+            case SamplerMinFilter::NEAREST_MIPMAP_NEAREST:
+                return TextureSampler::MinFilter::NEAREST_MIPMAP_NEAREST;
+            case SamplerMinFilter::LINEAR_MIPMAP_NEAREST:
+                return TextureSampler::MinFilter::LINEAR_MIPMAP_NEAREST;
+            case SamplerMinFilter::NEAREST_MIPMAP_LINEAR:
+                return TextureSampler::MinFilter::NEAREST_MIPMAP_LINEAR;
+            case SamplerMinFilter::LINEAR_MIPMAP_LINEAR:
+            default:
+                return TextureSampler::MinFilter::LINEAR_MIPMAP_LINEAR;
+        }
+    };
+
+    sampler.setMinFilter(convertMinFilter(info.minFilter));
+
+    // Mag filter
+    auto convertMagFilter = [](SamplerMagFilter filter) -> TextureSampler::MagFilter {
+        switch (filter) {
+            case SamplerMagFilter::NEAREST:
+                return TextureSampler::MagFilter::NEAREST;
+            case SamplerMagFilter::LINEAR:
+            default:
+                return TextureSampler::MagFilter::LINEAR;
+        }
+    };
+
+    sampler.setMagFilter(convertMagFilter(info.magFilter));
+
+    return sampler;
+}
+
+//=== 实例化API实现 ===
+
+MeshInstance* MeshAsset::createInstance() noexcept {
+    auto* self = static_cast<FMeshAsset*>(this);
+
+    // 创建新实例（共享VertexBuffer/IndexBuffer）
+    FMeshInstance* instance = new FMeshInstance(this, self->mEngine);
+
+    // 添加到实例列表
+    self->mInstances.push_back(instance);
+
+    GLTFIO_EXT_LOG("Created instance " << self->mInstances.size()
+                 << " of MeshAsset (shared GPU resources)");
+
+    return instance;
+}
+
+void MeshAsset::destroyInstance(MeshInstance* instance) noexcept {
+    auto* self = static_cast<FMeshAsset*>(this);
+
+    if (!instance) {
+        GLTFIO_EXT_WARN("Cannot destroy null instance");
+        return;
+    }
+
+    // 从列表中移除
+    auto it = std::find(self->mInstances.begin(), self->mInstances.end(), instance);
+    if (it != self->mInstances.end()) {
+        self->mInstances.erase(it);
+        delete static_cast<FMeshInstance*>(instance);
+
+        GLTFIO_EXT_LOG("Destroyed instance, remaining: " << self->mInstances.size());
+    } else {
+        GLTFIO_EXT_WARN("Instance not found in MeshAsset");
+    }
+}
+
+MeshInstance* const* MeshAsset::getInstances() const noexcept {
+    auto* self = static_cast<const FMeshAsset*>(this);
+    return self->mInstances.data();
+}
+
+size_t MeshAsset::getInstanceCount() const noexcept {
+    auto* self = static_cast<const FMeshAsset*>(this);
+    return self->mInstances.size();
 }
 
 } // namespace filament::gltfio

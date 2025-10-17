@@ -298,11 +298,6 @@ if (NOT ANDROID)
     add_demo(vbotest)
     add_demo(viewtest)
 
-    # gltfio_ext demos
-    add_demo(gltfio_ext_basic)
-    add_demo(gltfio_ext_multichannel)
-    add_demo(gltfio_ext_equipment)
-
     # Sample app specific
     target_link_libraries(frame_generator PRIVATE imageio)
     target_link_libraries(gltf_viewer PRIVATE gltf-demo-resources uberarchive gltfio viewer)
@@ -315,11 +310,6 @@ if (NOT ANDROID)
     target_link_libraries(sample_cloth PRIVATE filameshio)
     target_link_libraries(sample_normal_map PRIVATE filameshio)
     target_link_libraries(suzanne PRIVATE filameshio suzanne-resources)
-
-    # gltfio_ext demo libraries
-    target_link_libraries(gltfio_ext_basic PRIVATE gltfio_ext uberarchive)
-    target_link_libraries(gltfio_ext_multichannel PRIVATE gltfio_ext uberarchive)
-    target_link_libraries(gltfio_ext_equipment PRIVATE gltfio_ext uberarchive)
 
     if (FILAMENT_DISABLE_MATOPT)
         add_definitions(-DFILAMENT_DISABLE_MATOPT=1)
@@ -337,6 +327,11 @@ if (NOT ANDROID)
     install(DIRECTORY ${PROJECT_BINARY_DIR}/assets/fonts DESTINATION bin/assets)
     install(DIRECTORY ${PROJECT_BINARY_DIR}/assets/ibl/ DESTINATION bin/assets/ibl)
 endif()
+
+# ==================================================================================================
+# gltfio_ext samples (in separate subdirectory)
+# ==================================================================================================
+add_subdirectory(gltfio_ext)
 
 # ==================================================================================================
 # Copy Assets

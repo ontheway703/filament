@@ -36,6 +36,7 @@
 
 struct cgltf_primitive;
 struct cgltf_data;
+struct cgltf_texture;
 
 namespace filament {
     class Engine;
@@ -45,6 +46,7 @@ namespace filament::gltfio {
 
 class SkeletonAsset;
 class MaterialProvider;
+class MeshInstance;
 
 /**
  * 待上传的GPU数据（两阶段加载的核心数据结构）
@@ -63,6 +65,28 @@ struct PendingBufferData {
     filament::VertexBuffer* vertexBuffer;
     filament::IndexBuffer* indexBuffer;
     int bufferIndex;  // for VertexBuffer::setBufferAt()
+};
+
+/**
+ * 纹理槽位信息（内部存储）
+ *
+ * 存储从glTF primitive中提取的纹理信息
+ * 用于实现getRequiredTextures()
+ */
+struct TextureSlot {
+    const char* slotName;        ///< 槽位名称（如"baseColorMap"）
+    cgltf_texture* gltfTexture;  ///< 指向cgltf_texture的指针
+    int texcoord;                ///< UV set索引
+};
+
+/**
+ * Primitive的纹理信息集合
+ *
+ * 每个primitive可能有多个纹理（baseColor, normal, metallicRoughness等）
+ */
+struct PrimitiveTextureInfo {
+    size_t primitiveIndex;             ///< Primitive索引
+    std::vector<TextureSlot> slots;    ///< 所有纹理槽位
 };
 
 struct FMeshAsset : public MeshAsset {
@@ -92,6 +116,13 @@ struct FMeshAsset : public MeshAsset {
     // 待上传的Buffer数据
     std::vector<PendingBufferData> mPendingUploads;
     bool mResourcesLoaded = false;
+
+    // 纹理信息（用于getRequiredTextures）
+    std::vector<PrimitiveTextureInfo> mTextureInfos;
+    const cgltf_data* mGltfData = nullptr;  // 保持对cgltf_data的引用（纹理指针需要）
+
+    // 实例化支持（共享GPU资源）
+    std::vector<MeshInstance*> mInstances;  // 管理的实例列表
 
     // 从cgltf_data加载所有skinned primitives（只创建对象，不上传数据）
     bool loadFromGltfData(const cgltf_data* data);

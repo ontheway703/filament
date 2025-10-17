@@ -1,3 +1,53 @@
+/**
+ * ============================================================================
+ * test_edge_cases.cpp - 边界情况与鲁棒性测试
+ * ============================================================================
+ *
+ * 【测试目标】
+ * 验证 gltfio_ext 在极端和异常情况下的鲁棒性：
+ * - 空数据处理（空骨骼、空动画）
+ * - 索引越界处理
+ * - 无效参数处理（null指针）
+ * - 时间边界测试（t=0, t>duration）
+ *
+ * 【背景知识】
+ * 鲁棒性测试（Robustness Testing）是验证软件在异常输入下的行为：
+ * 1. 不应该崩溃（No Crash）
+ * 2. 返回明确的错误信号（如 -1, nullptr, false）
+ * 3. 日志记录错误但继续运行
+ *
+ * 关键测试场景：
+ * - 空骨骼：getBoneCount() = 0，查询返回 -1
+ * - 索引越界：访问 bone[999]，返回空 Entity
+ * - 动画目标不存在：通道指向不存在的骨骼，不崩溃
+ * - 时间边界：t=0 和 t>duration，循环/非循环模式
+ * - null 参数：bindSkeleton(nullptr)，返回 false
+ *
+ * 【测试方法】
+ * 边界测试 - 构造极端场景，验证错误处理逻辑
+ *
+ * 【测试用例概览】
+ * Test 1: 空骨骼处理
+ * Test 2: 骨骼索引越界
+ * Test 4: 动画通道目标骨骼不存在
+ * Test 5: 时间边界（t=0, t>duration）
+ * Test 6: 无逆绑定矩阵
+ * Test 7: Mesh 绑定 null skeleton
+ * Test 8: Mesh 骨骼索引超范围
+ *
+ * 【关键验证点】
+ * - 所有边界情况都不崩溃
+ * - 返回明确的错误信号
+ * - 日志友好（如有日志系统）
+ *
+ * 【运行方式】
+ * ./out/cmake-debug/libs/gltfio_ext/test_edge_cases
+ *
+ * 【预期输出】
+ * 所有边界测试通过，显示 "ALL EDGE CASE TESTS PASSED!"
+ * ============================================================================
+ */
+
 #include <gltfio/AssetLoaderExt.h>
 #include <gltfio/SkeletonAsset.h>
 #include <gltfio/MeshAsset.h>

@@ -153,16 +153,17 @@ MeshAsset* AssetLoaderExt::loadMesh(const uint8_t* bytes, uint32_t nbytes) {
     meshAsset->mEngine = self->mEngine;
     meshAsset->mRenderableManager = &self->mEngine->getRenderableManager();
     meshAsset->mMaterialProvider = self->mMaterials;
+    meshAsset->mGltfData = data;  // 保持对cgltf_data的引用（纹理信息需要）
 
     // 4. 加载所有skinned primitives
     GLTFIO_EXT_LOG("Calling loadFromGltfData...");
     bool success = meshAsset->loadFromGltfData(data);
     GLTFIO_EXT_LOG("loadFromGltfData returned: " << (success ? "success" : "failure"));
 
-    // 6. 释放cgltf数据
-    cgltf_free(data);
+    // 注意：不释放cgltf数据，由MeshAsset在析构时释放（纹理信息需要保持引用）
 
     if (!success) {
+        cgltf_free(data);  // 失败时才释放
         delete meshAsset;
         return nullptr;
     }
