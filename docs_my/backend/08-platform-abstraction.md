@@ -1,756 +1,549 @@
 # 平台抽象层
 
-本文档详细讲解 Filament Platform 接口的设计，包括 SwapChain 管理、窗口系统集成、平台特定优化，以及不同平台的实现差异。
+本文档从**设计理念**角度讲解 Filament Platform 接口,重点阐述跨平台渲染的核心挑战、SwapChain 概念,以及架构设计思想。
 
 ---
 
-## Platform 接口概述
+## 一、为什么需要平台抽象层?
 
-**文件位置**: `filament/backend/include/backend/Platform.h`
+### 问题背景
 
-Platform 接口是 Filament Backend 与操作系统窗口系统的桥梁，负责：
-- **SwapChain 管理**: 创建和管理交换链
-- **上下文管理**: 创建和管理图形 API 上下文
-- **窗口集成**: 与平台窗口系统集成
-- **平台特性**: 暴露平台特定的功能
+在跨平台渲染引擎开发中,面临的核心挑战:
+
+1. **窗口系统差异巨大**:
+   - Windows: Win32 API + HWND
+   - macOS: Cocoa + NSView/NSWindow
+   - Linux: X11/Wayland + Window
+   - Android: ANativeWindow
+   - iOS: UIView
+
+2. **图形 API 与平台绑定**:
+   - OpenGL 需要平台特定的上下文创建(EGL/GLX/WGL/CGL)
+   - Vulkan 需要平台特定的 Surface(VkWin32Surface/VkXlibSurface)
+   - Metal 只能在 Apple 平台使用
+
+3. **呈现机制不统一**:
+   - OpenGL: 隐式 SwapBuffers
+   - Vulkan: 显式 SwapChain 管理
+   - Metal: CAMetalLayer + Drawable
 
 ### 设计目标
 
-1. **平台无关**: 上层代码无需关心平台差异
-2. **灵活性**: 支持各种窗口系统（X11, Wayland, Win32, Cocoa, Android）
-3. **可扩展**: 易于添加新平台支持
+Platform 抽象层通过**统一接口**隐藏这些差异:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              Filament Engine (平台无关)                  │
+├─────────────────────────────────────────────────────────┤
+│              Platform 接口 (统一抽象)                     │
+├──────────┬──────────┬──────────┬──────────┬─────────────┤
+│ OpenGL   │ Vulkan   │  Metal   │  D3D12   │   WebGL    │
+│ Platform │ Platform │ Platform │ Platform │  Platform  │
+├──────────┴──────────┴──────────┴──────────┴─────────────┤
+│  Windows  │  macOS  │  Linux  │  Android  │    iOS     │
+└───────────┴─────────┴─────────┴───────────┴────────────┘
+```
+
+**设计原则**:
+1. **上层代码平台无关**: Engine 层不关心操作系统
+2. **一致的生命周期管理**: 统一的创建/销毁流程
+3. **灵活扩展**: 添加新平台只需实现 Platform 接口
 
 ---
 
-## Platform 接口定义
+## 二、SwapChain 深度解析
 
-### 核心接口
+### 什么是 SwapChain?
+
+**SwapChain(交换链)** 是现代图形系统中最核心的概念之一,但也是最容易让人困惑的。
+
+#### 用通俗比喻理解
+
+想象你在画动画:
+- 你有**多张画布**轮流使用
+- 在**画布1**上画画时,观众看的是**画布2**
+- 画完后**交换**:把画布1挂到墙上,在画布2上继续画
+- 观众看到的永远是"完整的画",不会看到你正在画的半成品
+
+这就是 SwapChain 的本质:**缓冲区轮换机制**。
+
+#### SwapChain 解决的核心问题
+
+**问题**: 如果直接在屏幕上渲染,用户会看到:
+```
+帧 N 渲染过程:
+[=====               ] 渲染进度 25% ← 用户看到撕裂、闪烁
+[==========          ] 渲染进度 50% ← 画面不完整
+[====================] 渲染进度 100% ← 完整画面
+```
+
+**解决**: 使用双缓冲 SwapChain:
+```
+┌───────────────────────────────────────────────────────┐
+│                    双缓冲 SwapChain                     │
+│                                                        │
+│   Back Buffer              Front Buffer               │
+│   (渲染目标)                (屏幕显示)                  │
+│                                                        │
+│  ┌──────────┐              ┌──────────┐               │
+│  │ 渲染中... │              │ 显示中... │               │
+│  │ [====    ]│              │ [完整帧] │               │
+│  └──────────┘              └──────────┘               │
+│       ↓                         ↑                      │
+│       └────── Present() ────────┘                      │
+│              (交换缓冲区)                               │
+└───────────────────────────────────────────────────────┘
+
+时间轴:
+帧 N:   后台渲染 Buffer A → Present → Buffer A 显示
+帧 N+1: 后台渲染 Buffer B → Present → Buffer B 显示 (Buffer A 被复用)
+帧 N+2: 后台渲染 Buffer A → Present → Buffer A 显示 (Buffer B 被复用)
+```
+
+### 双缓冲 vs 三缓冲
+
+| 缓冲模式 | 缓冲区数量 | 优点 | 缺点 | 适用场景 |
+|---------|-----------|------|------|---------|
+| **单缓冲** | 1个 | 内存占用少 | 严重撕裂和闪烁 | 几乎不使用 |
+| **双缓冲** | 2个 | 无撕裂,内存适中 | 可能有输入延迟 | 通用场景(默认) |
+| **三缓冲** | 3个 | 低延迟,高帧率 | 内存占用高 | 竞技游戏 |
+
+**三缓冲工作流程**:
+```
+时刻 T0: 渲染 Buffer C | 准备 Buffer B | 显示 Buffer A
+         ↓ Present
+时刻 T1: 渲染 Buffer A | 准备 Buffer C | 显示 Buffer B
+         ↓ Present
+时刻 T2: 渲染 Buffer B | 准备 Buffer A | 显示 Buffer C
+```
+
+### SwapChain 与相关概念的关系
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     Platform Layer                       │
+│                                                          │
+│  ┌────────────┐       ┌──────────────┐                  │
+│  │   Window   │──────▶│   Surface    │                  │
+│  │ (操作系统)  │       │ (渲染目标抽象) │                  │
+│  └────────────┘       └──────┬───────┘                  │
+│                              │                           │
+│                              ▼                           │
+│                       ┌──────────────┐                   │
+│                       │  SwapChain   │                   │
+│                       │ (缓冲区管理)  │                   │
+│                       └──────┬───────┘                   │
+│                              │                           │
+│                    ┌─────────┴─────────┐                 │
+│                    ▼                   ▼                 │
+│            ┌──────────────┐    ┌──────────────┐         │
+│            │ Back Buffer  │    │ Front Buffer │         │
+│            │ (RenderTarget)│    │  (Display)   │         │
+│            └──────────────┘    └──────────────┘         │
+└─────────────────────────────────────────────────────────┘
+
+关系说明:
+- Window: 操作系统窗口句柄 (HWND/NSView/ANativeWindow)
+- Surface: 图形API的绘制目标 (EGLSurface/VkSurfaceKHR/CAMetalLayer)
+- SwapChain: 管理多个缓冲区的轮换逻辑
+- Buffer: 实际的帧缓冲 (Texture/Image)
+```
+
+### 不同图形 API 的 SwapChain 实现
+
+#### OpenGL: 隐式 SwapChain
+
+```cpp
+// OpenGL 的 SwapChain 是隐式的,由窗口系统管理
+GLFWwindow* window = glfwCreateWindow(...);
+
+// 渲染循环
+while (running) {
+    // 渲染到默认帧缓冲 (Back Buffer)
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+    // ... 渲染命令 ...
+
+    // 交换前后缓冲 (SwapChain 操作被隐藏)
+    glfwSwapBuffers(window);  // ← 内部管理了 SwapChain
+}
+```
+
+**特点**:
+- 开发者**不需要**显式创建 SwapChain
+- 平台 API 自动管理(EGL/GLX/WGL)
+- 简单但不灵活
+
+#### Vulkan: 显式 SwapChain
+
+```cpp
+// Vulkan 要求显式管理 SwapChain
+VkSwapchainKHR swapchain;
+VkSwapchainCreateInfoKHR createInfo = {
+    .imageCount = 3,          // 三缓冲
+    .presentMode = VK_PRESENT_MODE_MAILBOX_KHR,  // 低延迟模式
+    // ...
+};
+vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapchain);
+
+// 渲染循环
+while (running) {
+    // 获取下一个可用图像索引
+    uint32_t imageIndex;
+    vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
+                         semaphore, nullptr, &imageIndex);
+
+    // 渲染到 swapchain images[imageIndex]
+    // ...
+
+    // 提交并呈现
+    VkPresentInfoKHR presentInfo = { .pImageIndices = &imageIndex };
+    vkQueuePresentKHR(queue, &presentInfo);
+}
+```
+
+**特点**:
+- 完全**显式控制**
+- 可精确配置缓冲数量、呈现模式
+- 复杂但灵活
+
+#### Metal: CAMetalLayer
+
+```objc
+// Metal 使用 CAMetalLayer 管理 SwapChain
+CAMetalLayer* metalLayer = (CAMetalLayer*)view.layer;
+metalLayer.device = device;
+
+// 渲染循环
+while (running) {
+    // 获取下一个 Drawable (类似 SwapChain 的 Buffer)
+    id<CAMetalDrawable> drawable = [metalLayer nextDrawable];
+
+    // 渲染到 drawable.texture
+    // ...
+
+    // 呈现
+    [commandBuffer presentDrawable:drawable];
+    [commandBuffer commit];
+}
+```
+
+**特点**:
+- 使用 Core Animation 层管理
+- 自动处理双缓冲/三缓冲
+- Apple 平台独有
+
+### 平台 SwapChain 实现对比
+
+| 平台/API | SwapChain 类型 | 缓冲区管理 | 创建方式 | 呈现方式 |
+|---------|---------------|-----------|---------|---------|
+| **OpenGL/EGL** | `EGLSurface` | 隐式,由 EGL 管理 | `eglCreateWindowSurface()` | `eglSwapBuffers()` |
+| **OpenGL/GLX** | `GLXWindow` | 隐式,由 GLX 管理 | `glXCreateWindow()` | `glXSwapBuffers()` |
+| **OpenGL/WGL** | `HDC` | 隐式,由 GDI 管理 | `GetDC(hwnd)` | `SwapBuffers(hdc)` |
+| **Vulkan** | `VkSwapchainKHR` | 显式,开发者控制 | `vkCreateSwapchainKHR()` | `vkQueuePresentKHR()` |
+| **Metal** | `CAMetalLayer` | 半自动,Layer 管理 | `-[CAMetalLayer init]` | `presentDrawable:` |
+| **D3D12** | `IDXGISwapChain` | 显式,DXGI 管理 | `CreateSwapChainForHwnd()` | `Present()` |
+
+---
+
+## 三、Platform 接口设计
+
+### 核心接口定义
+
+**文件位置**: `filament/backend/include/backend/Platform.h`
 
 ```cpp
 class Platform {
 public:
-    virtual ~Platform() noexcept;
+    // === SwapChain 生命周期 ===
 
-    // SwapChain 管理
+    // 从窗口创建 SwapChain
     virtual SwapChain* createSwapChain(
-        void* nativeWindow,
+        void* nativeWindow,    // 平台窗口句柄
         uint64_t flags = 0
     ) noexcept = 0;
 
+    // 离屏 SwapChain (无窗口渲染)
     virtual SwapChain* createSwapChain(
-        uint32_t width,
-        uint32_t height,
+        uint32_t width, uint32_t height,
         uint64_t flags = 0
     ) noexcept = 0;
 
-    virtual void destroySwapChain(SwapChain* swapChain) noexcept = 0;
+    virtual void destroySwapChain(SwapChain*) noexcept = 0;
 
-    // 上下文创建
+    // === Driver 创建 ===
     virtual Driver* createDriver(
         void* sharedContext,
         const DriverConfig& config
     ) noexcept = 0;
 
-    // 帧同步
-    virtual void commit(SwapChain* swapChain) noexcept;
-
-    // OpenGL 特定（如果是 OpenGL Platform）
-    virtual void makeCurrent(SwapChain* swapChain) noexcept;
-    virtual void swapBuffers(SwapChain* swapChain) noexcept;
-
-protected:
-    // 子类实现的辅助方法
-    virtual bool isValid() const noexcept;
+    // === 帧呈现 ===
+    virtual void commit(SwapChain*) noexcept;  // Vulkan/Metal 使用
+    virtual void swapBuffers(SwapChain*) noexcept;  // OpenGL 使用
 };
+```
+
+### 设计模式分析
+
+#### 1. 工厂模式 (Factory Pattern)
+
+Platform 作为工厂,创建平台特定对象:
+
+```
+┌─────────────────────────────────────────┐
+│         Platform (抽象工厂)              │
+├─────────────────────────────────────────┤
+│ + createSwapChain() → SwapChain*        │
+│ + createDriver() → Driver*              │
+└───────────┬─────────────────────────────┘
+            │
+    ┌───────┴────────┬────────────────┐
+    ▼                ▼                ▼
+┌─────────┐    ┌──────────┐    ┌──────────┐
+│ OpenGL  │    │  Vulkan  │    │  Metal   │
+│ Platform│    │ Platform │    │ Platform │
+├─────────┤    ├──────────┤    ├──────────┤
+│创建 EGL │    │创建 Vk   │    │创建 Metal│
+│SwapChain│    │SwapChain │    │SwapChain │
+└─────────┘    └──────────┘    └──────────┘
+```
+
+**优点**: 上层代码不关心具体平台,通过工厂获取对象。
+
+#### 2. 桥接模式 (Bridge Pattern)
+
+Platform 作为桥梁,连接 Engine 和操作系统:
+
+```
+Engine (抽象层)
+   │
+   │ 使用
+   ▼
+Platform 接口 ──────┐
+   │                │ 桥接
+   │ 实现            │
+   ▼                ▼
+具体 Platform ──→ OS API
+(PlatformEGL)    (eglSwapBuffers)
+```
+
+#### 3. 策略模式 (Strategy Pattern)
+
+不同 Platform 实现不同策略:
+
+```cpp
+// 策略1: OpenGL Platform - 隐式缓冲管理
+void OpenGLPlatform::commit(SwapChain* sc) {
+    makeCurrent(sc);
+    swapBuffers(sc);  // 平台 API 处理 SwapChain
+}
+
+// 策略2: Vulkan Platform - 显式缓冲管理
+void VulkanPlatform::commit(SwapChain* sc) {
+    uint32_t imageIndex;
+    vkAcquireNextImageKHR(..., &imageIndex);  // 手动获取缓冲
+    vkQueuePresentKHR(...);  // 手动呈现
+}
 ```
 
 ---
 
-## SwapChain 概念
+## 四、跨平台挑战与解决方案
 
-### SwapChain 的作用
+### 挑战 1: 窗口句柄类型不统一
 
-**SwapChain（交换链）** 是渲染目标的抽象，包含多个缓冲区，用于双缓冲/三缓冲渲染：
+**问题**: 每个平台的窗口句柄类型完全不同:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       SwapChain                              │
-│                                                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  Back Buffer │  │  Back Buffer │  │  Back Buffer │      │
-│  │   (渲染中)   │  │   (准备中)   │  │   (显示中)   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-│         ↑                 ↑                 ↓                │
-│         └─────────────────┴─────────────────┘                │
-│                    循环轮转                                   │
-└─────────────────────────────────────────────────────────────┘
+| 平台 | 窗口句柄类型 | 示例 |
+|------|-------------|------|
+| Windows | `HWND` | `HWND hwnd = CreateWindow(...)` |
+| macOS | `NSView*` | `NSView* view = [[NSView alloc] init]` |
+| Linux X11 | `Window` (unsigned long) | `Window xwin = XCreateWindow(...)` |
+| Android | `ANativeWindow*` | `ANativeWindow* win = ...` |
 
-帧 N:   渲染到 Buffer 0
-        ↓
-        Present Buffer 0 -> 显示
-        ↓
-帧 N+1: 渲染到 Buffer 1 (Buffer 0 正在显示)
-        ↓
-        Present Buffer 1 -> 显示
-        ↓
-帧 N+2: 渲染到 Buffer 2 (Buffer 1 正在显示)
-```
-
-### SwapChain 创建
+**解决方案**: 使用 `void*` 作为**通用指针**:
 
 ```cpp
-// 方式1: 从原生窗口创建
-void* nativeWindow = /* 平台窗口句柄 */;
-SwapChain* swapChain = platform->createSwapChain(nativeWindow);
-
-// 方式2: 离屏渲染（无窗口）
-SwapChain* offscreenSwapChain = platform->createSwapChain(1920, 1080);
-```
-
----
-
-## 不同平台的 Platform 实现
-
-### OpenGL Platform
-
-#### PlatformGLX (Linux X11)
-
-```cpp
-class PlatformGLX : public OpenGLPlatform {
-public:
-    SwapChain* createSwapChain(
-        void* nativeWindow,
-        uint64_t flags
-    ) noexcept override {
-        // nativeWindow 是 X11 Window
-        Window xwindow = reinterpret_cast<Window>(nativeWindow);
-
-        // 创建 GLX 上下文
-        GLXContext context = glXCreateContext(
-            mDisplay,
-            mVisualInfo,
-            mSharedContext,
-            GL_TRUE
-        );
-
-        // 创建 SwapChain
-        SwapChainGLX* swapChain = new SwapChainGLX();
-        swapChain->xwindow = xwindow;
-        swapChain->context = context;
-
-        return swapChain;
-    }
-
-    void makeCurrent(SwapChain* swapChain) noexcept override {
-        SwapChainGLX* sc = static_cast<SwapChainGLX*>(swapChain);
-        glXMakeCurrent(mDisplay, sc->xwindow, sc->context);
-    }
-
-    void swapBuffers(SwapChain* swapChain) noexcept override {
-        SwapChainGLX* sc = static_cast<SwapChainGLX*>(swapChain);
-        glXSwapBuffers(mDisplay, sc->xwindow);
-    }
-
-private:
-    Display* mDisplay;
-    XVisualInfo* mVisualInfo;
-    GLXContext mSharedContext;
-
-    struct SwapChainGLX : SwapChain {
-        Window xwindow;
-        GLXContext context;
-    };
-};
-```
-
-#### PlatformWGL (Windows)
-
-```cpp
-class PlatformWGL : public OpenGLPlatform {
-public:
-    SwapChain* createSwapChain(
-        void* nativeWindow,
-        uint64_t flags
-    ) noexcept override {
-        // nativeWindow 是 HWND
+SwapChain* createSwapChain(void* nativeWindow, uint64_t flags) {
+    #if defined(__ANDROID__)
+        ANativeWindow* window = reinterpret_cast<ANativeWindow*>(nativeWindow);
+    #elif defined(_WIN32)
         HWND hwnd = reinterpret_cast<HWND>(nativeWindow);
-
-        // 获取 Device Context
-        HDC hdc = GetDC(hwnd);
-
-        // 设置像素格式
-        PIXELFORMATDESCRIPTOR pfd = {};
-        pfd.nSize = sizeof(pfd);
-        pfd.nVersion = 1;
-        pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
-        pfd.iPixelType = PFD_TYPE_RGBA;
-        pfd.cColorBits = 32;
-        pfd.cDepthBits = 24;
-        pfd.cStencilBits = 8;
-
-        int pixelFormat = ChoosePixelFormat(hdc, &pfd);
-        SetPixelFormat(hdc, pixelFormat, &pfd);
-
-        // 创建 OpenGL 上下文
-        HGLRC hglrc = wglCreateContext(hdc);
-        if (mSharedContext) {
-            wglShareLists(mSharedContext, hglrc);
-        }
-
-        // 创建 SwapChain
-        SwapChainWGL* swapChain = new SwapChainWGL();
-        swapChain->hwnd = hwnd;
-        swapChain->hdc = hdc;
-        swapChain->hglrc = hglrc;
-
-        return swapChain;
-    }
-
-    void makeCurrent(SwapChain* swapChain) noexcept override {
-        SwapChainWGL* sc = static_cast<SwapChainWGL*>(swapChain);
-        wglMakeCurrent(sc->hdc, sc->hglrc);
-    }
-
-    void swapBuffers(SwapChain* swapChain) noexcept override {
-        SwapChainWGL* sc = static_cast<SwapChainWGL*>(swapChain);
-        SwapBuffers(sc->hdc);
-    }
-
-private:
-    HGLRC mSharedContext;
-
-    struct SwapChainWGL : SwapChain {
-        HWND hwnd;
-        HDC hdc;
-        HGLRC hglrc;
-    };
-};
+    #elif defined(__linux__)
+        Window xwindow = reinterpret_cast<Window>(nativeWindow);
+    #endif
+    // ...
+}
 ```
 
-#### PlatformCocoaGL (macOS)
+### 挑战 2: SwapChain 生命周期不同
 
-```objc
-class PlatformCocoaGL : public OpenGLPlatform {
-public:
-    SwapChain* createSwapChain(
-        void* nativeWindow,
-        uint64_t flags
-    ) noexcept override {
-        // nativeWindow 是 NSView*
-        NSView* view = (__bridge NSView*)nativeWindow;
+| API | 创建时机 | 销毁责任 | 特殊性 |
+|-----|---------|---------|--------|
+| **OpenGL** | 创建上下文时自动创建 | 销毁上下文时自动销毁 | 无需手动管理 |
+| **Vulkan** | 必须显式创建 | 必须显式销毁 | 窗口 resize 需重建 |
+| **Metal** | Layer 创建时存在 | Layer 销毁时清理 | 半自动管理 |
 
-        // 创建 NSOpenGLContext
-        NSOpenGLPixelFormatAttribute attributes[] = {
-            NSOpenGLPFADoubleBuffer,
-            NSOpenGLPFADepthSize, 24,
-            NSOpenGLPFAStencilSize, 8,
-            NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersion4_1Core,
-            0
-        };
-
-        NSOpenGLPixelFormat* pixelFormat =
-            [[NSOpenGLPixelFormat alloc] initWithAttributes:attributes];
-
-        NSOpenGLContext* context =
-            [[NSOpenGLContext alloc] initWithFormat:pixelFormat
-                                       shareContext:mSharedContext];
-
-        [context setView:view];
-
-        // 创建 SwapChain
-        SwapChainCocoaGL* swapChain = new SwapChainCocoaGL();
-        swapChain->view = view;
-        swapChain->context = context;
-
-        return swapChain;
-    }
-
-    void makeCurrent(SwapChain* swapChain) noexcept override {
-        SwapChainCocoaGL* sc = static_cast<SwapChainCocoaGL*>(swapChain);
-        [sc->context makeCurrentContext];
-    }
-
-    void swapBuffers(SwapChain* swapChain) noexcept override {
-        SwapChainCocoaGL* sc = static_cast<SwapChainCocoaGL*>(swapChain);
-        [sc->context flushBuffer];
-    }
-
-private:
-    NSOpenGLContext* mSharedContext;
-
-    struct SwapChainCocoaGL : SwapChain {
-        NSView* view;
-        NSOpenGLContext* context;
-    };
-};
-```
-
-#### PlatformEGL (Android/Linux)
+**解决方案**: Platform 统一管理生命周期:
 
 ```cpp
-class PlatformEGL : public OpenGLPlatform {
-public:
-    SwapChain* createSwapChain(
-        void* nativeWindow,
-        uint64_t flags
-    ) noexcept override {
-        // nativeWindow 是 ANativeWindow* (Android) 或 EGLNativeWindowType (Linux)
-        EGLNativeWindowType window = reinterpret_cast<EGLNativeWindowType>(nativeWindow);
-
-        // 创建 EGL Surface
-        EGLSurface surface = eglCreateWindowSurface(
-            mDisplay,
-            mConfig,
-            window,
-            nullptr
-        );
-
-        // 创建 EGL Context (共享)
-        if (!mContext) {
-            EGLint contextAttribs[] = {
-                EGL_CONTEXT_CLIENT_VERSION, 3,
-                EGL_NONE
-            };
-
-            mContext = eglCreateContext(
-                mDisplay,
-                mConfig,
-                EGL_NO_CONTEXT,
-                contextAttribs
-            );
-        }
-
-        // 创建 SwapChain
-        SwapChainEGL* swapChain = new SwapChainEGL();
-        swapChain->surface = surface;
-
-        return swapChain;
-    }
-
-    void makeCurrent(SwapChain* swapChain) noexcept override {
-        SwapChainEGL* sc = static_cast<SwapChainEGL*>(swapChain);
-        eglMakeCurrent(mDisplay, sc->surface, sc->surface, mContext);
-    }
-
-    void swapBuffers(SwapChain* swapChain) noexcept override {
-        SwapChainEGL* sc = static_cast<SwapChainEGL*>(swapChain);
-        eglSwapBuffers(mDisplay, sc->surface);
-    }
-
-private:
-    EGLDisplay mDisplay;
-    EGLConfig mConfig;
-    EGLContext mContext;
-
-    struct SwapChainEGL : SwapChain {
-        EGLSurface surface;
-    };
-};
+// 统一的创建/销毁接口
+SwapChain* sc = platform->createSwapChain(window);
+// ... 使用 ...
+platform->destroySwapChain(sc);  // 内部处理平台差异
 ```
 
----
+### 挑战 3: VSync 控制方式不同
 
-### Vulkan Platform
-
-```cpp
-class PlatformVulkan : public Platform {
-public:
-    SwapChain* createSwapChain(
-        void* nativeWindow,
-        uint64_t flags
-    ) noexcept override {
-        // 创建 Vulkan Surface
-        VkSurfaceKHR surface = createVulkanSurface(nativeWindow);
-
-        // 查询 Surface 能力
-        VkSurfaceCapabilitiesKHR capabilities;
-        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-            mPhysicalDevice,
-            surface,
-            &capabilities
-        );
-
-        // 选择交换链格式
-        VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat();
-
-        // 选择呈现模式
-        VkPresentModeKHR presentMode = chooseSwapPresentMode();
-
-        // 确定交换链图像数量
-        uint32_t imageCount = capabilities.minImageCount + 1;
-        if (capabilities.maxImageCount > 0 &&
-            imageCount > capabilities.maxImageCount) {
-            imageCount = capabilities.maxImageCount;
-        }
-
-        // 创建 Vulkan SwapChain
-        VkSwapchainCreateInfoKHR createInfo = {};
-        createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-        createInfo.surface = surface;
-        createInfo.minImageCount = imageCount;
-        createInfo.imageFormat = surfaceFormat.format;
-        createInfo.imageColorSpace = surfaceFormat.colorSpace;
-        createInfo.imageExtent = capabilities.currentExtent;
-        createInfo.imageArrayLayers = 1;
-        createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        createInfo.preTransform = capabilities.currentTransform;
-        createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-        createInfo.presentMode = presentMode;
-        createInfo.clipped = VK_TRUE;
-
-        VkSwapchainKHR swapchain;
-        vkCreateSwapchainKHR(mDevice, &createInfo, nullptr, &swapchain);
-
-        // 获取交换链图像
-        vkGetSwapchainImagesKHR(mDevice, swapchain, &imageCount, nullptr);
-        std::vector<VkImage> swapchainImages(imageCount);
-        vkGetSwapchainImagesKHR(mDevice, swapchain, &imageCount,
-                               swapchainImages.data());
-
-        // 创建 SwapChain
-        SwapChainVulkan* sc = new SwapChainVulkan();
-        sc->surface = surface;
-        sc->swapchain = swapchain;
-        sc->images = std::move(swapchainImages);
-        sc->format = surfaceFormat.format;
-
-        return sc;
-    }
-
-    void commit(SwapChain* swapChain) noexcept override {
-        SwapChainVulkan* sc = static_cast<SwapChainVulkan*>(swapChain);
-
-        // 获取下一个图像索引
-        uint32_t imageIndex;
-        vkAcquireNextImageKHR(
-            mDevice,
-            sc->swapchain,
-            UINT64_MAX,
-            sc->imageAvailableSemaphore,
-            VK_NULL_HANDLE,
-            &imageIndex
-        );
-
-        // 提交命令缓冲（在 VulkanDriver 中完成）
-        // ...
-
-        // 呈现图像
-        VkPresentInfoKHR presentInfo = {};
-        presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-        presentInfo.waitSemaphoreCount = 1;
-        presentInfo.pWaitSemaphores = &sc->renderFinishedSemaphore;
-        presentInfo.swapchainCount = 1;
-        presentInfo.pSwapchains = &sc->swapchain;
-        presentInfo.pImageIndices = &imageIndex;
-
-        vkQueuePresentKHR(mPresentQueue, &presentInfo);
-    }
-
-private:
-    VkInstance mInstance;
-    VkPhysicalDevice mPhysicalDevice;
-    VkDevice mDevice;
-    VkQueue mPresentQueue;
-
-    struct SwapChainVulkan : SwapChain {
-        VkSurfaceKHR surface;
-        VkSwapchainKHR swapchain;
-        std::vector<VkImage> images;
-        VkFormat format;
-        VkSemaphore imageAvailableSemaphore;
-        VkSemaphore renderFinishedSemaphore;
-    };
-
-    VkSurfaceKHR createVulkanSurface(void* nativeWindow) {
-        VkSurfaceKHR surface;
-
-        #if defined(__ANDROID__)
-            // Android
-            VkAndroidSurfaceCreateInfoKHR createInfo = {};
-            createInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
-            createInfo.window = reinterpret_cast<ANativeWindow*>(nativeWindow);
-            vkCreateAndroidSurfaceKHR(mInstance, &createInfo, nullptr, &surface);
-
-        #elif defined(_WIN32)
-            // Windows
-            VkWin32SurfaceCreateInfoKHR createInfo = {};
-            createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-            createInfo.hwnd = reinterpret_cast<HWND>(nativeWindow);
-            createInfo.hinstance = GetModuleHandle(nullptr);
-            vkCreateWin32SurfaceKHR(mInstance, &createInfo, nullptr, &surface);
-
-        #elif defined(__APPLE__)
-            // macOS/iOS (使用 MoltenVK)
-            VkMetalSurfaceCreateInfoEXT createInfo = {};
-            createInfo.sType = VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT;
-            createInfo.pLayer = /* CAMetalLayer */;
-            vkCreateMetalSurfaceEXT(mInstance, &createInfo, nullptr, &surface);
-
-        #elif defined(__linux__)
-            // Linux (X11)
-            VkXlibSurfaceCreateInfoKHR createInfo = {};
-            createInfo.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
-            createInfo.dpy = /* X11 Display */;
-            createInfo.window = reinterpret_cast<Window>(nativeWindow);
-            vkCreateXlibSurfaceKHR(mInstance, &createInfo, nullptr, &surface);
-        #endif
-
-        return surface;
-    }
-};
-```
-
----
-
-### Metal Platform
-
-```objc
-class PlatformMetal : public Platform {
-public:
-    SwapChain* createSwapChain(
-        void* nativeWindow,
-        uint64_t flags
-    ) noexcept override {
-        // nativeWindow 是 CAMetalLayer* 或 UIView*/NSView*
-        CAMetalLayer* metalLayer = nil;
-
-        #if TARGET_OS_IOS
-            UIView* view = (__bridge UIView*)nativeWindow;
-            metalLayer = (CAMetalLayer*)view.layer;
-            metalLayer.device = mDevice;
-        #else
-            NSView* view = (__bridge NSView*)nativeWindow;
-            view.wantsLayer = YES;
-            metalLayer = [CAMetalLayer layer];
-            metalLayer.device = mDevice;
-            view.layer = metalLayer;
-        #endif
-
-        // 配置 Metal Layer
-        metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-        metalLayer.framebufferOnly = YES;
-
-        // 创建 SwapChain
-        SwapChainMetal* swapChain = new SwapChainMetal();
-        swapChain->metalLayer = metalLayer;
-
-        return swapChain;
-    }
-
-    void commit(SwapChain* swapChain) noexcept override {
-        SwapChainMetal* sc = static_cast<SwapChainMetal*>(swapChain);
-
-        // 获取下一个 Drawable
-        id<CAMetalDrawable> drawable = [sc->metalLayer nextDrawable];
-
-        // 渲染到 drawable.texture
-        // (在 MetalDriver 中完成)
-
-        // 呈现
-        [sc->currentCommandBuffer presentDrawable:drawable];
-        [sc->currentCommandBuffer commit];
-    }
-
-private:
-    id<MTLDevice> mDevice;
-
-    struct SwapChainMetal : SwapChain {
-        CAMetalLayer* metalLayer;
-        id<MTLCommandBuffer> currentCommandBuffer;
-    };
-};
-```
-
----
-
-## 平台特定优化
-
-### VSync 控制
+**问题**: 不同 API 的 VSync 控制方式完全不同:
 
 ```cpp
 // OpenGL (GLX)
-void PlatformGLX::setSwapInterval(int interval) {
-    if (glXSwapIntervalEXT) {
-        glXSwapIntervalEXT(mDisplay, glXGetCurrentDrawable(), interval);
-    }
-    // interval = 0: 无 VSync (无限帧率)
-    // interval = 1: VSync (60 FPS)
-    // interval = 2: 半速 VSync (30 FPS)
-}
+glXSwapIntervalEXT(display, drawable, 1);  // 1 = VSync
 
 // Vulkan
-VkPresentModeKHR chooseSwapPresentMode() {
-    // VK_PRESENT_MODE_IMMEDIATE_KHR: 无 VSync
-    // VK_PRESENT_MODE_FIFO_KHR: VSync (保证支持)
-    // VK_PRESENT_MODE_MAILBOX_KHR: 三缓冲，低延迟
-    return VK_PRESENT_MODE_FIFO_KHR;
-}
+VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;  // FIFO = VSync
 
 // Metal
-metalLayer.displaySyncEnabled = YES;  // 启用 VSync
+metalLayer.displaySyncEnabled = YES;  // 属性控制
 ```
 
-### HDR 支持
+**解决方案**: 在 SwapChain 创建时统一配置:
 
 ```cpp
-// Vulkan
-VkSurfaceFormatKHR chooseSwapSurfaceFormat() {
-    for (const auto& format : availableFormats) {
-        if (format.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 &&
-            format.colorSpace == VK_COLOR_SPACE_HDR10_ST2084_EXT) {
-            // HDR10 支持
-            return format;
-        }
-    }
-
-    // 回退到 SDR
-    return {VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
-}
-
-// Metal
-#if TARGET_OS_IOS
-    if (@available(iOS 14.0, *)) {
-        metalLayer.wantsExtendedDynamicRangeContent = YES;
-        metalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
-    }
-#else
-    if (@available(macOS 10.15, *)) {
-        metalLayer.wantsExtendedDynamicRangeContent = YES;
-        metalLayer.pixelFormat = MTLPixelFormatRGBA16Float;
-    }
-#endif
-```
-
-### 多显示器支持
-
-```cpp
-class MultiMonitorPlatform : public Platform {
-public:
-    SwapChain* createSwapChain(
-        void* nativeWindow,
-        uint64_t flags
-    ) noexcept override {
-        // 检测窗口所在的显示器
-        int monitorIndex = getMonitorIndex(nativeWindow);
-
-        // 为特定显示器创建 SwapChain
-        SwapChain* swapChain = createSwapChainForMonitor(
-            nativeWindow,
-            monitorIndex
-        );
-
-        return swapChain;
-    }
-
-private:
-    int getMonitorIndex(void* nativeWindow);
-    SwapChain* createSwapChainForMonitor(void* window, int monitor);
+// 统一的 flags 控制
+enum SwapChainFlags : uint64_t {
+    CONFIG_VSYNC         = 0x1,
+    CONFIG_TRIPLE_BUFFER = 0x2,
+    CONFIG_HDR           = 0x4,
 };
+
+SwapChain* sc = platform->createSwapChain(window,
+    CONFIG_VSYNC | CONFIG_TRIPLE_BUFFER);
 ```
 
 ---
 
-## 平台能力查询
+## 五、模块协作关系
 
+### Platform 在整体架构中的位置
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Filament Engine                        │
+│  ┌────────────┐  ┌──────────┐  ┌───────────┐             │
+│  │  Renderer  │→│ View     │→│SwapChain  │             │
+│  └────────────┘  └──────────┘  └─────┬─────┘             │
+└────────────────────────────────────┬─┴───────────────────┘
+                                     │
+                    调用             │
+                                     ▼
+         ┌───────────────────────────────────────────┐
+         │           Platform 接口                    │
+         │  createSwapChain() / commit()             │
+         └───────────────┬───────────────────────────┘
+                         │
+            ┌────────────┼────────────┐
+            ▼            ▼            ▼
+    ┌──────────┐  ┌──────────┐  ┌──────────┐
+    │ OpenGL   │  │ Vulkan   │  │  Metal   │
+    │ Platform │  │ Platform │  │ Platform │
+    └─────┬────┘  └─────┬────┘  └─────┬────┘
+          │             │              │
+          ▼             ▼              ▼
+    ┌──────────┐  ┌──────────┐  ┌──────────┐
+    │   EGL    │  │ Vulkan   │  │ Core     │
+    │   API    │  │   API    │  │Animation │
+    └──────────┘  └──────────┘  └──────────┘
+```
+
+### 典型渲染流程中的协作
+
+```
+初始化阶段:
+  Engine::create()
+    └→ Platform::createDriver()  // 创建后端 Driver
+    └→ Platform::createSwapChain(window)  // 创建交换链
+
+渲染帧:
+  Renderer::render(View, Scene)
+    ├→ Driver::beginFrame()
+    ├→ Driver::draw(...)  // 渲染到 SwapChain 的 Back Buffer
+    ├→ Driver::endFrame()
+    └→ Platform::commit(swapChain)  // 呈现 Back Buffer
+           ├→ [OpenGL] swapBuffers()
+           ├→ [Vulkan] vkQueuePresentKHR()
+           └→ [Metal] presentDrawable:
+
+窗口 Resize:
+  onWindowResize(newWidth, newHeight)
+    └→ Platform::destroySwapChain(oldSwapChain)
+    └→ Platform::createSwapChain(window, newFlags)
+    └→ Driver::updateRenderTarget(newSwapChain)
+
+清理阶段:
+  Engine::destroy()
+    └→ Platform::destroySwapChain(swapChain)
+    └→ Platform::destroyDriver(driver)
+```
+
+### Platform 与 Driver 的职责划分
+
+| 组件 | 职责 | 示例 |
+|------|------|------|
+| **Platform** | 窗口系统集成、SwapChain 管理 | 创建 EGLSurface、管理缓冲区轮换 |
+| **Driver** | 图形命令执行、资源管理 | 编译 Shader、绘制三角形 |
+
+**关键交互**:
 ```cpp
-struct PlatformCapabilities {
-    bool supportsHDR;
-    bool supportsVariableRefreshRate;  // FreeSync/G-Sync
-    bool supportsExclusiveFullscreen;
-    uint32_t maxTextureSize;
-    uint32_t maxRenderTargetSize;
-    // ...
-};
+// Platform 创建 SwapChain
+SwapChain* sc = platform->createSwapChain(window);
 
-PlatformCapabilities Platform::queryCapabilities() {
-    PlatformCapabilities caps = {};
+// Driver 将 SwapChain 包装为 RenderTarget
+Handle<HwRenderTarget> rt = driver->createRenderTarget(
+    TargetBufferFlags::COLOR,
+    sc->width, sc->height,
+    sc  // ← 关联 SwapChain
+);
 
-    #if defined(__ANDROID__)
-        // Android 特定能力
-        caps.maxTextureSize = 4096;  // 大多数移动 GPU
+// 渲染到 RenderTarget (间接渲染到 SwapChain)
+driver->beginRenderPass(rt, ...);
+driver->draw(...);
+driver->endRenderPass();
 
-    #elif defined(_WIN32)
-        // Windows 特定能力
-        caps.supportsExclusiveFullscreen = true;
-        caps.maxTextureSize = 16384;
-
-    #elif defined(__APPLE__)
-        // Apple 特定能力
-        caps.supportsHDR = /* 检测 EDR 支持 */;
-        caps.maxTextureSize = 16384;
-    #endif
-
-    return caps;
-}
+// Platform 负责呈现
+platform->commit(sc);
 ```
 
 ---
 
-## 错误处理
+## 六、实际使用场景
+
+### 场景 1: 创建窗口并渲染
 
 ```cpp
-class Platform {
-protected:
-    enum class Error {
-        NONE,
-        WINDOW_SURFACE_CREATION_FAILED,
-        CONTEXT_CREATION_FAILED,
-        SWAPCHAIN_CREATION_FAILED,
-        // ...
-    };
+// 1. 获取平台特定的 Platform 实例
+Platform* platform = Platform::create(Backend::OPENGL);
 
-    virtual void handleError(Error error, const char* message) {
-        switch (error) {
-            case Error::WINDOW_SURFACE_CREATION_FAILED:
-                LOG(ERROR) << "Failed to create window surface: " << message;
-                break;
-
-            case Error::CONTEXT_CREATION_FAILED:
-                LOG(ERROR) << "Failed to create context: " << message;
-                break;
-
-            case Error::SWAPCHAIN_CREATION_FAILED:
-                LOG(ERROR) << "Failed to create swapchain: " << message;
-                break;
-        }
-    }
-};
-```
-
----
-
-## 使用示例
-
-### 完整的渲染循环
-
-```cpp
-// 1. 创建 Platform
-Platform* platform = Platform::create(Backend::VULKAN);
-
-// 2. 创建 SwapChain
+// 2. 从原生窗口创建 SwapChain
 void* nativeWindow = /* 平台窗口句柄 */;
 SwapChain* swapChain = platform->createSwapChain(nativeWindow);
 
 // 3. 创建 Driver
-Driver* driver = platform->createDriver(nullptr, config);
+Driver* driver = platform->createDriver(nullptr, {});
 
 // 4. 渲染循环
 while (running) {
-    // 开始帧
     driver->beginFrame(timestamp, frameId);
 
-    // 渲染命令
-    driver->setRenderTarget(swapChainRenderTarget);
-    driver->draw(pipelineState, primitive);
+    // 渲染到 SwapChain
+    driver->makeCurrent(swapChain, swapChain);
+    driver->draw(...);
 
-    // 结束帧
     driver->endFrame(frameId);
 
-    // 提交到 SwapChain
+    // 呈现
     platform->commit(swapChain);
-
-    frameId++;
 }
 
 // 5. 清理
@@ -758,27 +551,174 @@ platform->destroySwapChain(swapChain);
 delete platform;
 ```
 
+### 场景 2: 离屏渲染 (无窗口)
+
+```cpp
+// 创建离屏 SwapChain
+SwapChain* offscreenSwapChain = platform->createSwapChain(
+    1920, 1080,  // 分辨率
+    0  // 无需 VSync
+);
+
+// 渲染到离屏缓冲
+driver->beginFrame(...);
+driver->makeCurrent(offscreenSwapChain, offscreenSwapChain);
+driver->draw(...);
+driver->endFrame(...);
+
+// 读取像素数据
+PixelBufferDescriptor pixels(...);
+driver->readPixels(offscreenSwapChain, 0, 0, 1920, 1080, std::move(pixels));
+```
+
+### 场景 3: 处理窗口 Resize
+
+```cpp
+void onWindowResize(Platform* platform, SwapChain* oldSwapChain,
+                   void* window, uint32_t newWidth, uint32_t newHeight) {
+    // 1. 销毁旧 SwapChain
+    platform->destroySwapChain(oldSwapChain);
+
+    // 2. 重新创建 SwapChain
+    uint64_t flags = CONFIG_VSYNC | CONFIG_TRIPLE_BUFFER;
+    SwapChain* newSwapChain = platform->createSwapChain(window, flags);
+
+    // 3. 更新 Engine 的渲染目标
+    engine->updateSwapChain(newSwapChain);
+}
+```
+
+### 常见误区
+
+❌ **错误 1: 混淆 Window 和 SwapChain**
+```cpp
+// 错误: 认为 Window 就是 SwapChain
+void* window = createWindow();
+draw(window);  // ✗ 不能直接渲染到 Window
+```
+
+✅ **正确做法**:
+```cpp
+void* window = createWindow();
+SwapChain* sc = platform->createSwapChain(window);  // 从 Window 创建 SwapChain
+draw(sc);  // ✓ 渲染到 SwapChain
+```
+
+❌ **错误 2: 忘记处理 SwapChain 重建**
+```cpp
+// 窗口 resize 后继续使用旧 SwapChain
+onResize(newWidth, newHeight);
+// ... 继续使用旧 SwapChain → 可能崩溃或显示错误
+```
+
+✅ **正确做法**:
+```cpp
+onResize(newWidth, newHeight) {
+    platform->destroySwapChain(oldSc);
+    newSc = platform->createSwapChain(window);
+}
+```
+
+---
+
+## 七、设计权衡
+
+### 权衡 1: 统一接口 vs 平台特性
+
+**问题**: 如何在统一接口和平台特性之间平衡?
+
+**Filament 的选择**:
+- **基础功能**: 完全统一(createSwapChain, commit)
+- **高级特性**: 通过 `flags` 参数暴露(HDR, VRR)
+- **极端特性**: 平台特定扩展
+
+```cpp
+// 统一接口
+SwapChain* sc = platform->createSwapChain(window);
+
+// 平台特性通过 flags
+SwapChain* hdrSc = platform->createSwapChain(window, CONFIG_HDR);
+
+// 极端情况: 类型转换访问平台特定功能
+if (backend == Backend::VULKAN) {
+    VulkanPlatform* vkPlatform = static_cast<VulkanPlatform*>(platform);
+    vkPlatform->enableRayTracing();  // Vulkan 特有
+}
+```
+
+### 权衡 2: 自动管理 vs 手动控制
+
+**OpenGL 风格 (自动)**:
+- ✅ 简单易用
+- ❌ 缺乏控制,性能优化困难
+
+**Vulkan 风格 (手动)**:
+- ✅ 完全控制,性能可优化
+- ❌ 复杂,易出错
+
+**Filament 的选择**: **平台决定策略**
+- OpenGL Platform: 自动管理(eglSwapBuffers)
+- Vulkan Platform: 手动控制(vkAcquireNextImageKHR)
+- 上层代码只调用统一的 `commit()`,内部策略不同
+
+### 权衡 3: 多后端支持的代价
+
+**成本**:
+- 维护多个 Platform 实现
+- 每个平台需要适配和测试
+- 抽象可能限制某些平台的高级特性
+
+**收益**:
+- 一次编写,到处运行
+- 降低上层开发复杂度
+- 便于切换渲染后端(OpenGL → Vulkan)
+
+**Filament 的取舍**: 优先支持主流平台(Windows/macOS/Linux/Android/iOS),次要平台通过社区贡献。
+
+---
+
+## 八、总结
+
+### 核心要点
+
+1. **Platform 抽象层的本质**:
+   - 隐藏操作系统和窗口系统的差异
+   - 提供统一的 SwapChain 管理接口
+   - 作为 Engine 和 OS 之间的桥梁
+
+2. **SwapChain 的核心作用**:
+   - 解决画面撕裂和闪烁问题
+   - 管理多个缓冲区的轮换
+   - 不同 API 实现方式差异巨大(隐式 vs 显式)
+
+3. **设计模式应用**:
+   - 工厂模式: 创建平台特定对象
+   - 桥接模式: 连接抽象层和实现层
+   - 策略模式: 不同平台不同策略
+
+4. **跨平台关键技术**:
+   - 使用 `void*` 统一窗口句柄
+   - 通过 `flags` 暴露平台特性
+   - 统一生命周期管理接口
+
+### SwapChain 理解要点
+
+| 关键概念 | 核心理解 |
+|---------|---------|
+| **为什么需要** | 防止撕裂和闪烁 |
+| **本质** | 缓冲区轮换机制 |
+| **实现方式** | OpenGL 隐式、Vulkan 显式、Metal 半自动 |
+| **与 Window 关系** | Window 是容器,SwapChain 是渲染目标 |
+| **生命周期** | 随窗口 resize 需重建 |
+
 ---
 
 ## 相关文档
 
 - **[01-architecture-overview.md](01-architecture-overview.md)**: Backend 架构总览
-- **[05-opengl-backend.md](05-opengl-backend.md)**: OpenGL Platform 实现
-- **[06-vulkan-backend.md](06-vulkan-backend.md)**: Vulkan Platform 实现
-- **[07-metal-backend.md](07-metal-backend.md)**: Metal Platform 实现
+- **[05-opengl-backend.md](05-opengl-backend.md)**: OpenGL 后端实现
+- **[06-vulkan-backend.md](06-vulkan-backend.md)**: Vulkan 后端实现
+- **[07-metal-backend.md](07-metal-backend.md)**: Metal 后端实现
 
 **上层使用**:
-- `../engine/07-render-loop.md`: 渲染循环
-
----
-
-## 总结
-
-Platform 抽象层通过**统一的 SwapChain 接口**、**平台特定实现**、**能力查询机制**，成功地隐藏了不同操作系统和窗口系统的复杂性，为上层提供了简洁统一的渲染目标管理接口。
-
-**核心技术**:
-- ✅ SwapChain 抽象：统一的双缓冲/三缓冲管理
-- ✅ 平台实现：支持 Windows/Linux/macOS/Android/iOS
-- ✅ 窗口集成：与各平台窗口系统无缝集成
-- ✅ 特性支持：VSync、HDR、多显示器等
-- ✅ 错误处理：统一的错误报告机制
+- `../engine/07-render-loop.md`: 渲染循环与 Platform 协作

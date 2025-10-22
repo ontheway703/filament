@@ -26,7 +26,13 @@ void renderFrame() {
 2. **CPU 利用率低**: 主线程等待 GPU 时无法做其他工作
 3. **帧率受限**: 准备下一帧的数据必须等当前帧渲染完成
 
-### Filament 的解决方案：双线程架构
+### Filament 的解决方案：三线程架构
+
+Filament 实际使用 **3 个线程**（如果启用多线程）：
+
+1. **主线程 (Application Thread)**: 用户代码运行的线程，负责录制命令
+2. **渲染线程 (Render Thread)**: 执行图形 API 调用的线程
+3. **服务线程 (Service Thread)**: 处理用户回调的线程（在 DriverBase 中创建）
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -115,41 +121,66 @@ private:
 
 ### 循环缓冲区 (CircularBuffer)
 
+**文件位置**: `filament/backend/include/private/backend/CircularBuffer.h`
+
 CommandStream 使用循环缓冲区存储命令和参数：
 
 ```cpp
 class CircularBuffer {
 public:
-    // 分配空间
-    void* allocate(size_t size, size_t alignment = 8);
+    explicit CircularBuffer(size_t bufferSize);
 
-    // 提交已写入的数据
-    void* getBuffer() const;
+    // 分配空间（主线程写入）
+    void* allocate(size_t s) noexcept {
+        // 断言：不能分配超过总大小
+        assert_invariant(getUsed() + s <= size());
+        char* const cur = static_cast<char*>(mHead);
+        mHead = cur + s;  // 写指针向前移动
+        return cur;
+    }
 
-    // 重置缓冲区
-    void reset();
+    // 获取当前已写入的范围，并重置写指针
+    Range getBuffer() noexcept;
+
+    // 判断是否为空
+    bool empty() const noexcept { return mTail == mHead; }
+
+    // 获取已使用的大小
+    size_t getUsed() const noexcept {
+        return intptr_t(mHead) - intptr_t(mTail);
+    }
 
 private:
-    uint8_t* mBuffer;      // 缓冲区指针
-    size_t mSize;          // 总大小
-    size_t mHead;          // 写入位置
-    size_t mTail;          // 读取位置
+    void* mData;    // 缓冲区起始地址（常量）
+    size_t mSize;   // 缓冲区总大小（常量）
+
+    void* mTail;    // 读取位置（渲染线程读）
+    void* mHead;    // 写入位置（主线程写）
 };
 ```
 
 **内存布局**:
 ```
-循环缓冲区 (例如 2MB)
+环形缓冲区（推荐 3 * requiredSize）
 ┌────────────────────────────────────────────────────────────┐
-│ Command1 │ Args1 │ Command2 │ Args2 │ ... │ CommandN │ ArgsN │
+│    已消费区域    │   待执行命令   │    可用空间            │
+│   (已释放)       │               │                        │
 └────────────────────────────────────────────────────────────┘
- ↑                                                           ↑
-mTail (读取位置)                                          mHead (写入位置)
+                  ↑               ↑                          ↑
+                mTail           mHead                    mData+mSize
+              (读指针)         (写指针)
 
-当 mHead 追上 mTail 时：
-- 选项1: 阻塞等待渲染线程消费
-- 选项2: 扩展缓冲区（Filament 的做法）
+当 mFreeSpace < requiredSize 时：
+- 主线程阻塞等待渲染线程消费（通过 CommandBufferQueue）
+- 渲染线程执行完命令后调用 releaseBuffer() 归还空间
+- 唤醒主线程继续写入
 ```
+
+**推荐大小**: `bufferSize = 3 * requiredSize`
+
+- **1x requiredSize**: 主线程当前正在写入
+- **1x requiredSize**: 渲染线程正在执行
+- **1x requiredSize**: 额外缓冲，避免阻塞
 
 ---
 
@@ -323,61 +354,144 @@ Handle<HwTexture> OpenGLDriver::createTextureImpl(
 
 ---
 
-## 线程同步机制
+## CommandBufferQueue: 生产者-消费者模型
 
-### 同步原语
+**文件位置**: `filament/backend/include/private/backend/CommandBufferQueue.h`
+
+CommandBufferQueue 封装了 CircularBuffer，实现了主线程和渲染线程之间的同步机制。
+
+### 核心数据结构
 
 ```cpp
-class CommandStream {
+class CommandBufferQueue {
+public:
+    struct Range {
+        void* begin;  // 命令缓冲区起始地址
+        void* end;    // 命令缓冲区结束地址
+    };
+
 private:
-    std::mutex mLock;                    // 互斥锁
-    std::condition_variable mCondition;  // 条件变量
-    std::atomic<bool> mHasCommands;      // 是否有命令
-    std::atomic<bool> mExitRequested;    // 退出标志
+    const size_t mRequiredSize;              // 保证的可用空间
+    CircularBuffer mCircularBuffer;           // 唯一的环形缓冲区
+
+    mutable utils::Mutex mLock;               // 互斥锁
+    mutable utils::Condition mCondition;      // 条件变量
+    mutable std::vector<Range> mCommandBuffersToExecute;  // 待执行队列
+    size_t mFreeSpace;                        // 当前可用空间
+    uint32_t mExitRequested;                  // 退出标志
+    bool mPaused;                             // 暂停标志
 };
 ```
 
-### flush() - 提交命令
+### 主线程：生产者（flush）
+
+**文件位置**: `filament/backend/src/CommandBufferQueue.cpp:82-143`
 
 ```cpp
-void CommandStream::flush() {
-    std::lock_guard<std::mutex> lock(mLock);
+void CommandBufferQueue::flush() {
+    CircularBuffer& circularBuffer = mCircularBuffer;
+    if (circularBuffer.empty()) {
+        return;  // 没有命令，直接返回
+    }
 
-    // 标记有命令待执行
-    mHasCommands.store(true, std::memory_order_release);
+    // 1. 添加终止命令
+    new(circularBuffer.allocate(sizeof(NoopCommand))) NoopCommand(nullptr);
 
-    // 通知渲染线程
+    // 2. 获取当前写入的范围 [begin, end)
+    auto const [begin, end] = circularBuffer.getBuffer();
+
+    // 3. 计算使用的空间
+    size_t const used = std::distance(
+        static_cast<char const*>(begin),
+        static_cast<char const*>(end));
+
+    std::unique_lock lock(mLock);
+
+    // 4. 检查是否溢出
+    FILAMENT_CHECK_POSTCONDITION(used <= mFreeSpace) <<
+        "Backend CommandStream overflow!";
+
+    // 5. 更新可用空间
+    mFreeSpace -= used;
+
+    // 6. 加入待执行队列
+    mCommandBuffersToExecute.push_back({ begin, end });
+
+    // 7. 通知渲染线程
+    mCondition.notify_one();
+
+    // 8. 如果剩余空间不足，阻塞等待
+    if (UTILS_UNLIKELY(mFreeSpace < mRequiredSize)) {
+        mCondition.wait(lock, [this]() -> bool {
+            return mFreeSpace >= mRequiredSize;
+        });
+    }
+}
+```
+
+### 渲染线程：消费者（waitForCommands + releaseBuffer）
+
+**文件位置**: `filament/backend/src/CommandBufferQueue.cpp:145-162`
+
+```cpp
+// 1. 等待命令
+std::vector<Range> CommandBufferQueue::waitForCommands() const {
+    std::unique_lock lock(mLock);
+
+    // 等待直到有命令可执行
+    while ((mCommandBuffersToExecute.empty() || mPaused) && !mExitRequested) {
+        mCondition.wait(lock);
+    }
+
+    // 移动队列中的所有命令（避免拷贝）
+    return std::move(mCommandBuffersToExecute);
+}
+
+// 2. 释放缓冲区
+void CommandBufferQueue::releaseBuffer(Range const& buffer) {
+    // 计算释放的大小
+    size_t const used = std::distance(
+        static_cast<char const*>(buffer.begin),
+        static_cast<char const*>(buffer.end));
+
+    std::lock_guard lock(mLock);
+
+    // 归还空间
+    mFreeSpace += used;
+
+    // 唤醒可能在等待的主线程
     mCondition.notify_one();
 }
 ```
 
-### wait() - 等待命令
+### 完整流程图
 
-```cpp
-void CommandStream::wait() {
-    std::unique_lock<std::mutex> lock(mLock);
-
-    // 等待直到有命令或收到退出请求
-    mCondition.wait(lock, [this] {
-        return mHasCommands.load(std::memory_order_acquire) ||
-               mExitRequested.load(std::memory_order_acquire);
-    });
-}
 ```
+主线程（生产者）:
+  ├─> allocate() 分配空间
+  ├─> 写入命令
+  ├─> flush()
+  │    ├─> 获取 [begin, end) 范围
+  │    ├─> mFreeSpace -= used
+  │    ├─> mCommandBuffersToExecute.push_back({begin, end})
+  │    ├─> notify_one()  唤醒渲染线程
+  │    └─> 如果 mFreeSpace < requiredSize，wait() 阻塞
+  │
+  │ (等待空间可用...)
+  │
+  ↑ notify_one() ← releaseBuffer()
 
-### finish() - 等待完成
-
-```cpp
-void CommandStream::finish() {
-    // 1. 提交当前命令
-    flush();
-
-    // 2. 等待渲染线程执行完成
-    std::unique_lock<std::mutex> lock(mLock);
-    mCondition.wait(lock, [this] {
-        return !mHasCommands.load(std::memory_order_acquire);
-    });
-}
+渲染线程（消费者）:
+  ├─> waitForCommands()
+  │    ├─> 等待 mCommandBuffersToExecute 非空
+  │    └─> 返回所有待执行的命令
+  │
+  ├─> for (auto& range : buffers)
+  │    └─> driver.execute(range.begin)  // 执行命令
+  │
+  └─> releaseBuffer(range)
+       ├─> mFreeSpace += used
+       └─> notify_one()  唤醒主线程
 ```
 
 ---
@@ -415,28 +529,52 @@ void renderFrameN() {
 
 ### 渲染线程视角
 
+**文件位置**: `filament/src/details/Engine.cpp:757-843` (`FEngine::loop`) 和 `Engine.cpp:1398-1415` (`FEngine::execute`)
+
 ```cpp
-void renderThreadLoop() {
-    while (!exitRequested) {
-        // 1. 等待命令
-        commandStream.wait();
+// 渲染线程入口
+int FEngine::loop() {
+    // 1. 创建 Platform 和 Driver
+    mPlatform = PlatformFactory::create(&mBackend);
+    mDriver = mPlatform->createDriver(mSharedGLContext, ...);
 
-        if (exitRequested) break;
+    // 2. 设置线程名称和优先级
+    JobSystem::setThreadName("FEngine::loop");
+    JobSystem::setThreadPriority(JobSystem::Priority::DISPLAY);
 
-        // 2. 执行命令缓冲区中的所有命令
-        commandStream.execute();
+    // 3. 通知主线程 Driver 已就绪
+    mDriverBarrier.latch();
 
-        // 具体执行：
-        // OpenGLDriver::beginFrameImpl(...)
-        // OpenGLDriver::updateVertexBufferImpl(...)
-        // OpenGLDriver::updateTextureImpl(...)
-        // OpenGLDriver::setRenderTargetImpl(...)
-        // OpenGLDriver::drawImpl(...)
-        // OpenGLDriver::endFrameImpl(...)
-
-        // 3. 标记命令执行完成
-        commandStream.notifyComplete();
+    // 4. 渲染循环
+    while (true) {
+        if (!execute()) {
+            break;  // 收到退出请求
+        }
     }
+
+    // 5. 清理
+    getDriverApi().terminate();
+    return 0;
+}
+
+// 执行一批命令
+bool FEngine::execute() {
+    // 1. 等待命令（阻塞直到有命令或收到退出请求）
+    auto const buffers = mCommandBufferQueue.waitForCommands();
+    if (UTILS_UNLIKELY(buffers.empty())) {
+        return false;  // 退出
+    }
+
+    // 2. 执行所有命令缓冲
+    auto& driver = getDriverApi();
+    for (auto& item : buffers) {
+        if (UTILS_LIKELY(item.begin)) {
+            driver.execute(item.begin);  // 遍历命令并执行
+            mCommandBufferQueue.releaseBuffer(item);  // 释放空间
+        }
+    }
+
+    return true;
 }
 ```
 
@@ -444,30 +582,63 @@ void renderThreadLoop() {
 
 ## 内存管理和优化
 
-### 双缓冲机制
+### 环形缓冲区的实现原理
 
-Filament 使用双缓冲避免主线程和渲染线程冲突：
+Filament 使用**单个环形缓冲区**来存储命令，而不是双缓冲。通过巧妙的内存映射技术实现高效的环形访问。
+
+#### "硬环形缓冲"技术（mmap 两次映射）
+
+**文件位置**: `filament/backend/src/CircularBuffer.cpp:74-100`
+
+在支持 mmap 的系统上（Linux, macOS, Android, iOS），Filament 将同一块物理内存映射到连续的两个虚拟地址空间：
 
 ```cpp
-class CommandStreamDispatcher {
-private:
-    CircularBuffer mBuffers[2];  // 双缓冲
-    int mWriteBuffer = 0;         // 当前写入的缓冲
-    int mReadBuffer = 1;          // 当前读取的缓冲
-};
+// 1. 创建共享内存
+int fd = ashmem_create_region("CircularBuffer", size);
 
-void flush() {
-    // 交换缓冲区
-    std::swap(mWriteBuffer, mReadBuffer);
+// 2. 映射到虚拟地址空间两次
+void* vaddr = mmap(reserve_vaddr, size, ...);           // [0, 2MB)
+void* vaddr_shadow = mmap(vaddr + size, size, ...);     // [2MB, 4MB)
+                                                         // 指向同一块物理内存！
+```
 
-    // 通知渲染线程读取 mReadBuffer
-    notifyRenderThread();
+**内存布局**：
+
+```
+虚拟地址空间（4MB）:
+┌──────────────────────┬──────────────────────┐
+│    vaddr (0~2MB)     │  vaddr_shadow (2~4MB)│
+│   第一次映射         │    第二次映射         │
+└──────────────────────┴──────────────────────┘
+         ↓                      ↓
+         └──────────┬───────────┘
+                    ↓
+物理内存（2MB）:
+┌─────────────────────────────────┐
+│    实际的物理页面                │
+└─────────────────────────────────┘
+```
+
+**优势**：写指针可以越界而无需手动回绕！
+
+```cpp
+void* allocate(size_t s) {
+    char* cur = mHead;
+    mHead = cur + s;  // 即使超过 mData+size，进入 vaddr_shadow 区域
+                       // 也没问题，因为指向同一物理内存！
+    return cur;
 }
 ```
 
-**优势**:
-- 主线程写入缓冲A时，渲染线程读取缓冲B
-- 无需等待，完全并行
+#### Windows/Emscripten 的软环形缓冲
+
+在不支持 mmap 的系统上（Windows, WebAssembly），使用两个连续的内存块模拟：
+
+```cpp
+// 分配两倍大小的内存
+mData = malloc(size * 2);
+// 在 getBuffer() 中手动处理回绕
+```
 
 ### 命令批处理
 
@@ -605,6 +776,207 @@ constexpr size_t COMMAND_BUFFER_SIZE = 2 * 1024 * 1024;  // 2MB
 
 ---
 
+## 服务线程和用户回调机制
+
+### 为什么需要服务线程？
+
+当 GPU 完成数据上传（如纹理、顶点缓冲）后，需要释放 CPU 端的内存。但这个释放操作**不能在渲染线程执行**，因为：
+
+1. **用户回调可能很慢**，会阻塞渲染线程
+2. **用户回调可能调用 Filament API**，导致死锁
+3. **用户回调可能需要在特定线程执行**（如 Android 主线程）
+
+因此，Filament 创建了**服务线程**专门处理用户回调。
+
+### 服务线程的创建
+
+**文件位置**: `filament/backend/src/Driver.cpp:50-76`
+
+```cpp
+DriverBase::DriverBase() noexcept {
+    if constexpr (UTILS_HAS_THREADING) {
+        // This thread services user callbacks
+        mServiceThread = std::thread([this]() {
+            do {
+                // 等待回调任务
+                std::unique_lock<std::mutex> lock(mServiceThreadLock);
+                while (serviceThreadCallbackQueue.empty() && !mExitRequested) {
+                    serviceThreadCondition.wait(lock);
+                }
+                if (mExitRequested) break;
+
+                // 移动回调队列到本地
+                auto callbacks(std::move(serviceThreadCallbackQueue));
+                lock.unlock();
+
+                // 执行所有回调（不持有锁）
+                for (auto[handler, callback, user]: callbacks) {
+                    handler->post(user, callback);
+                }
+            } while (true);
+        });
+    }
+}
+```
+
+### BufferDescriptor 的回调机制
+
+**文件位置**: `filament/backend/include/backend/BufferDescriptor.h`
+
+BufferDescriptor 用于向 GPU 传递数据，包含一个回调函数用于释放内存：
+
+```cpp
+class BufferDescriptor {
+public:
+    using Callback = void(*)(void* buffer, size_t size, void* user);
+
+    BufferDescriptor(void const* buffer, size_t size,
+                     Callback callback = nullptr, void* user = nullptr)
+        : buffer(const_cast<void*>(buffer)), size(size),
+          mCallback(callback), mUser(user) {}
+
+    ~BufferDescriptor() noexcept {
+        // 析构时调用回调
+        if (mCallback) {
+            mCallback(buffer, size, mUser);
+        }
+    }
+
+    void* buffer = nullptr;
+    size_t size = 0;
+
+private:
+    Callback mCallback = nullptr;
+    void* mUser = nullptr;
+    CallbackHandler* mHandler = nullptr;  // 可选的自定义处理器
+};
+```
+
+### 使用示例：异步纹理上传
+
+```cpp
+// 1. 从磁盘加载图片到 CPU 内存
+unsigned char* data = stbi_load(path.c_str(), &w, &h, &n, 4);
+
+// 2. 创建 BufferDescriptor，指定释放回调
+Texture::PixelBufferDescriptor buffer(
+    data,                               // CPU 数据
+    size_t(w * h * 4),                 // 大小
+    Texture::Format::RGBA,
+    Texture::Type::UBYTE,
+    (Texture::PixelBufferDescriptor::Callback) &stbi_image_free  // 回调
+);
+
+// 3. 上传纹理（录制命令）
+texture->setImage(*engine, 0, std::move(buffer));
+
+// 4. 主线程继续执行，无需等待
+//    GPU 上传完成后，服务线程会调用 stbi_image_free(data)
+```
+
+### 回调执行流程
+
+```
+时间线 →
+
+主线程:
+  ├─> 分配内存: data = malloc(1MB)
+  ├─> 创建 BufferDescriptor(data, callback=free)
+  ├─> texture->setImage(buffer)
+  │      ↓
+  │   【命令录制到 CommandStream】
+  │      ↓
+  └─> 主线程继续...
+
+渲染线程:
+  │   【执行命令】
+  ├─> OpenGLDriver::updateTextureImpl(...)
+  ├─> glTexImage2D(..., data)  // GPU 开始上传
+  │      ↓
+  │   【GPU 上传完成】
+  │      ↓
+  ├─> BufferDescriptor 析构
+  │      ↓
+  └─> scheduleCallback(handler, callback, data)
+         ↓
+      【加入 mServiceThreadCallbackQueue】
+         ↓
+
+服务线程:
+  ├─> wait() 被唤醒
+  ├─> handler->post(data, callback)
+  │      ↓
+  │   【如果没有 handler，回调在主线程的 purge() 执行】
+  │      ↓
+  └─> callback(data)  // 执行 free(data)
+
+✅ CPU 内存被释放！
+```
+
+### CallbackHandler: 自定义回调调度
+
+**文件位置**: `filament/backend/include/backend/CallbackHandler.h`
+
+用户可以实现自定义的 CallbackHandler，将回调调度到任意线程：
+
+```cpp
+class CallbackHandler {
+public:
+    using Callback = void(*)(void* user);
+
+    // 调度回调到指定线程
+    virtual void post(void* user, Callback callback) = 0;
+};
+
+// 示例：Android 主线程处理器
+class AndroidLooperHandler : public CallbackHandler {
+    void post(void* user, Callback callback) override {
+        // 发送到 Android Looper
+        androidLooper->postMessage([=]() {
+            callback(user);
+        });
+    }
+};
+```
+
+### 默认行为：主线程延迟执行
+
+如果没有提供 CallbackHandler，回调会在主线程的下一次 `purge()` 调用时执行：
+
+**文件位置**: `filament/backend/src/Driver.cpp:111-130`
+
+```cpp
+void DriverBase::scheduleCallback(CallbackHandler* handler,
+                                   void* user,
+                                   Callback callback) {
+    if (handler && UTILS_HAS_THREADING) {
+        // 有 handler：交给服务线程
+        std::lock_guard lock(mServiceThreadLock);
+        mServiceThreadCallbackQueue.emplace_back(handler, callback, user);
+        mServiceThreadCondition.notify_one();
+    } else {
+        // 没有 handler：延迟到主线程 purge()
+        std::lock_guard lock(mPurgeLock);
+        mCallbacks.emplace_back(user, callback);
+    }
+}
+
+void DriverBase::purge() noexcept {
+    // 在主线程调用（通常每帧一次）
+    decltype(mCallbacks) callbacks;
+    std::unique_lock lock(mPurgeLock);
+    std::swap(callbacks, mCallbacks);
+    lock.unlock();
+
+    // 执行所有待处理的回调
+    for (auto& item : callbacks) {
+        item.second(item.first);
+    }
+}
+```
+
+---
+
 ## 高级特性
 
 ### 延迟资源销毁
@@ -693,10 +1065,53 @@ Filament CommandStream (CPU 端)
 
 ## 总结
 
-CommandStream 通过**双线程架构**、**命令缓冲**、**异步执行**，实现了主线程和渲染线程的完美分离，显著提升了 CPU 利用率和渲染性能。这是 Filament Backend 高性能的关键设计之一。
+Filament 的命令流系统通过精心设计的**三线程架构**、**环形缓冲区**、**生产者-消费者模型**、**服务线程机制**，实现了主线程和渲染线程的完美分离，显著提升了 CPU 利用率和渲染性能。
 
-**核心优势**:
-- ✅ 主线程不阻塞，可立即准备下一帧
-- ✅ CPU 多核并行，充分利用硬件
-- ✅ 命令批处理，减少同步开销
-- ✅ 跨平台统一，简化上层代码
+### 核心架构
+
+**1. 三线程模型**
+- **主线程**: 录制渲染命令到 CircularBuffer，通过 CommandBufferQueue::flush() 提交
+- **渲染线程**: 循环调用 waitForCommands() → execute() → releaseBuffer()
+- **服务线程**: 处理用户回调（BufferDescriptor 释放等），解耦渲染线程
+
+**2. 单个环形缓冲区（不是双缓冲！）**
+- 使用 mmap 将同一物理内存映射到两个连续虚拟地址（"硬环形缓冲"）
+- 写指针可以越界进入 shadow 区域，无需手动回绕
+- 推荐大小：`3 * requiredSize`（当前写入 + 正在执行 + 缓冲）
+
+**3. CommandBufferQueue 同步机制**
+- 生产者（主线程）：flush() 提交命令，如果空间不足则阻塞等待
+- 消费者（渲染线程）：waitForCommands() 获取命令，releaseBuffer() 归还空间
+- 通过 mFreeSpace 追踪可用空间，使用条件变量同步
+
+**4. BufferDescriptor 回调机制**
+- 用户数据（如纹理）通过 BufferDescriptor 传递给 GPU
+- 析构时触发回调，由服务线程调度执行
+- 支持自定义 CallbackHandler，可将回调路由到任意线程
+
+### 关键优势
+
+- ✅ **主线程不阻塞**: 录制命令后立即返回，可以准备下一帧
+- ✅ **CPU 多核并行**: 主线程、渲染线程、服务线程同时工作
+- ✅ **内存高效**: 单个环形缓冲 + mmap 技巧，避免内存拷贝
+- ✅ **命令批处理**: 一次 flush 提交多个命令，减少同步开销
+- ✅ **用户回调安全**: 服务线程隔离，不阻塞渲染，支持自定义调度
+- ✅ **跨平台统一**: 同一套 API 抽象 OpenGL/Vulkan/Metal
+
+### 性能数据
+
+- 命令录制开销：~35ns/命令（函数调用 5ns + 参数拷贝 20ns + 分配 10ns）
+- flush() 同步开销：~1-2μs（锁 100ns + 原子操作 10ns + 条件变量 1μs）
+- 典型缓冲区大小：2MB，可容纳 ~20,000 条命令
+- 对比直接 OpenGL 调用（1-10μs），录制开销可忽略不计
+
+### 与其他引擎的对比
+
+| 特性 | Filament | Unity (Scriptable Render Pipeline) | Unreal Engine |
+|------|----------|-----------------------------------|---------------|
+| 命令缓冲 | 单个环形缓冲 + mmap | 多个命令缓冲链表 | Command List Pool |
+| 线程模型 | 3线程（主+渲染+服务） | 多线程 Job System | Task Graph |
+| 内存管理 | 环形缓冲自动回绕 | 手动池管理 | 线性分配器 |
+| 用户回调 | 专用服务线程 | 主线程延迟执行 | 回调队列 |
+
+这是 Filament Backend 高性能的关键设计之一！
