@@ -52,19 +52,30 @@
    - 资源同步和堆管理
    - Metal 特性利用
 
-### 平台和对比部分
+### 平台、API对比与窗口系统部分
 
-8. **[08-platform-abstraction.md](08-platform-abstraction.md)** - 平台抽象层
-   - Platform 接口
-   - SwapChain 管理
-   - 窗口系统集成
-   - 平台特定优化
+8. **[08-platform-abstraction.md](08-platform-abstraction.md)** - 平台抽象层设计
+   - Platform 接口设计理念
+   - SwapChain 核心概念
+   - 设计模式应用(工厂、桥接、策略)
+   - 跨平台挑战与解决方案
 
-9. **[09-backend-comparison.md](09-backend-comparison.md)** - 各后端对比和选择
-   - OpenGL/Vulkan/Metal 特性对比
-   - 性能对比
-   - 平台支持矩阵
-   - 后端选择建议
+9. **[09-backend-comparison.md](09-backend-comparison.md)** - Filament 各后端对比
+   - OpenGL/Vulkan/Metal 在 Filament 中的实现对比
+   - 性能特性和平台支持
+   - 后端选择建议和最佳实践
+
+10. **[10-graphics-api-comparison.md](10-graphics-api-comparison.md)** - 图形API设计哲学对比 ⭐
+    - 图形API演进史(OpenGL→Vulkan/Metal)
+    - 核心设计理念对比(状态机 vs 显式控制)
+    - 图形学原理详解(渲染管线、同步、内存管理)
+    - 典型渲染流程对比(代码量对比)
+
+11. **[11-swapchain-and-window-systems.md](11-swapchain-and-window-systems.md)** - SwapChain与窗口系统深度解析 ⭐
+    - Window、Surface、SwapChain 四层模型
+    - 各操作系统窗口系统详解(macOS/iOS/Windows/Android/Linux)
+    - 窗口句柄类型和获取方式
+    - SwapChain创建完整流程对比
 
 ---
 
@@ -78,11 +89,13 @@
 2. **抽象层**: 阅读 `02-driver-abstraction.md` 理解 Driver 接口
 3. **多线程**: 学习 `03-command-stream.md` 掌握命令流机制
 4. **资源管理**: 掌握 `04-resource-handles.md` 的句柄系统
-5. **后端实现**: 根据需要学习 `05-opengl/06-vulkan/07-metal-backend.md`
-6. **平台集成**: 阅读 `08-platform-abstraction.md` 了解平台接口
-7. **综合对比**: 学习 `09-backend-comparison.md` 进行选择
+5. **图形API原理**: ⭐ 阅读 `10-graphics-api-comparison.md` 理解不同API设计理念
+6. **后端实现**: 根据需要学习 `05-opengl/06-vulkan/07-metal-backend.md`
+7. **平台集成**: 阅读 `08-platform-abstraction.md` 了解平台接口
+8. **窗口系统**: ⭐ 学习 `11-swapchain-and-window-systems.md` 深入理解SwapChain
+9. **综合对比**: 学习 `09-backend-comparison.md` 进行选择
 
-**推荐阅读顺序**: 01 → 02 → 03 → 04 → 05/06/07 → 08 → 09
+**推荐阅读顺序**: 01 → 02 → 03 → 04 → 10 → 05/06/07 → 08 → 11 → 09
 
 **适合人群**: 引擎开发者、图形程序员、架构师
 
@@ -94,9 +107,10 @@
 2. **Driver 接口**: 对照 `02-driver-abstraction.md` 理解抽象层
 3. **架构总览**: 阅读 `01-architecture-overview.md` 了解整体设计
 4. **命令流**: 学习 `03-command-stream.md` 理解多线程架构
-5. **后端对比**: 参考 `09-backend-comparison.md` 了解与其他 API 的差异
+5. **API对比**: ⭐ 参考 `10-graphics-api-comparison.md` 理解OpenGL与现代API的差异
+6. **后端对比**: 参考 `09-backend-comparison.md` 了解 Filament 各后端差异
 
-**推荐阅读顺序**: 05 → 02 → 01 → 03 → 09
+**推荐阅读顺序**: 05 → 02 → 01 → 03 → 10 → 09
 
 **适合人群**: OpenGL 开发者、移动端开发者
 
@@ -104,13 +118,15 @@
 
 如果你想学习现代图形 API 的封装:
 
-1. **现代后端**: 重点学习 `06-vulkan-backend.md` 或 `07-metal-backend.md`
-2. **抽象设计**: 阅读 `02-driver-abstraction.md` 理解统一接口
-3. **命令流**: 学习 `03-command-stream.md` 对比与 Vulkan/Metal 的差异
-4. **资源管理**: 掌握 `04-resource-handles.md` 的句柄系统
-5. **对比分析**: 参考 `09-backend-comparison.md` 了解设计权衡
+1. **API设计理念**: ⭐ 先阅读 `10-graphics-api-comparison.md` 理解现代API设计哲学
+2. **现代后端**: 重点学习 `06-vulkan-backend.md` 或 `07-metal-backend.md`
+3. **抽象设计**: 阅读 `02-driver-abstraction.md` 理解统一接口
+4. **命令流**: 学习 `03-command-stream.md` 对比与 Vulkan/Metal 的差异
+5. **窗口系统**: ⭐ 学习 `11-swapchain-and-window-systems.md` 理解各平台SwapChain实现
+6. **资源管理**: 掌握 `04-resource-handles.md` 的句柄系统
+7. **对比分析**: 参考 `09-backend-comparison.md` 了解设计权衡
 
-**推荐阅读顺序**: 06/07 → 02 → 03 → 04 → 09
+**推荐阅读顺序**: 10 → 06/07 → 02 → 03 → 11 → 04 → 09
 
 **适合人群**: Vulkan/Metal 开发者、高性能优化工程师
 
@@ -121,9 +137,10 @@
 1. **架构总览**: 快速浏览 `01-architecture-overview.md` 了解 Backend 职责
 2. **Driver 接口**: 阅读 `02-driver-abstraction.md` 理解上层如何调用
 3. **平台抽象**: 学习 `08-platform-abstraction.md` 了解平台集成
-4. **后端选择**: 参考 `09-backend-comparison.md` 选择合适的后端
+4. **窗口系统**: ⭐ 阅读 `11-swapchain-and-window-systems.md` 理解如何在各平台创建SwapChain
+5. **后端选择**: 参考 `09-backend-comparison.md` 选择合适的后端
 
-**推荐阅读顺序**: 01 → 02 → 08 → 09
+**推荐阅读顺序**: 01 → 02 → 08 → 11 → 09
 
 **参考文档**:
 - `../engine/03-resource-management.md` - Engine 层的资源管理
@@ -238,10 +255,13 @@ driver.destroyVertexBuffer(vb);
 | CommandStream | 命令缓冲和提交机制 | 03 命令流 |
 | Handle<T> | 资源句柄模板 | 04 资源句柄 |
 | Platform | 平台抽象层 | 08 平台抽象 |
-| SwapChain | 交换链管理 | 08 平台抽象 |
+| SwapChain | 交换链管理 | 08 平台抽象, 11 窗口系统 ⭐ |
+| Window | 操作系统窗口 | 11 窗口系统 ⭐ |
+| Surface | 图形API渲染表面 | 11 窗口系统 ⭐ |
 | HwVertexBuffer | 硬件顶点缓冲 | 02 Driver 抽象层 |
 | HwProgram | 硬件着色器程序 | 02 Driver 抽象层 |
-| PipelineState | 渲染管线状态 | 02 Driver 抽象层 |
+| PipelineState | 渲染管线状态 | 02 Driver 抽象层, 10 API对比 ⭐ |
+| 图形API演进 | OpenGL→Vulkan/Metal | 10 API对比 ⭐ |
 
 ---
 
@@ -288,10 +308,15 @@ driver.destroyVertexBuffer(vb);
 
 ## 📝 版本信息
 
-- **文档版本**: 1.0
+- **文档版本**: 1.1
 - **创建日期**: 2025-10-20
+- **最后更新**: 2025-10-22
 - **适用 Filament 版本**: 最新主分支
 - **更新策略**: 随 Filament Backend 更新同步维护
+- **最新变更**:
+  - 新增 10-graphics-api-comparison.md (图形API设计哲学对比)
+  - 新增 11-swapchain-and-window-systems.md (SwapChain与窗口系统深度解析)
+  - 更新学习路径,整合新文档
 
 ---
 
