@@ -422,45 +422,82 @@ TEST_F(AnimationAssetTest, NodeStructure) {
     EXPECT_EQ(asset->nodes[2].name, "head");
 }
 
+/**
+ * 测试用例15：旋转动画通道（四元数数据）
+ *
+ * 测试目标：验证旋转类型的动画通道能正确验证
+ * 测试场景：
+ *   - 创建一个旋转动画采样器
+ *   - 每个关键帧包含 4 个值（四元数：x, y, z, w）
+ *   - t=0: 单位四元数 (0,0,0,1) - 无旋转
+ *   - t=1: 绕Y轴旋转90度的四元数 (0,0.707,0,0.707)
+ * 预期结果：validate() 返回 true
+ * 验证点：四元数旋转数据的正确性
+ *
+ * 背景知识：
+ * - 旋转动画使用四元数表示，每个关键帧需要 4 个 float
+ * - 四元数格式：(x, y, z, w)，其中 w 是实部
+ * - 单位四元数 (0,0,0,1) 表示无旋转
+ */
 TEST_F(AnimationAssetTest, RotationChannel) {
-    // Test rotation channel with quaternion data (4 values per keyframe)
+    // 测试旋转通道，使用四元数数据（每个关键帧4个值）
     AnimationSampler sampler;
     sampler.times = {0.0f, 1.0f};
-    sampler.values = {0.0f, 0.0f, 0.0f, 1.0f,  // t=0: identity quaternion
-                      0.0f, 0.707f, 0.0f, 0.707f}; // t=1: 90° rotation around Y
-    sampler.interpolation = AnimationInterpolationType::LINEAR;
+    sampler.values = {
+        0.0f, 0.0f, 0.0f, 1.0f,       // t=0: 单位四元数（无旋转）
+        0.0f, 0.707f, 0.0f, 0.707f    // t=1: 绕Y轴旋转90度
+    };
+    sampler.interpolation = AnimationInterpolationType::LINEAR;  // 线性插值（slerp）
     asset->samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 1;
     channel.samplerIndex = 0;
-    channel.path = AnimationPathType::ROTATION;
+    channel.path = AnimationPathType::ROTATION;  // 旋转动画
     asset->channels.push_back(channel);
 
     EXPECT_TRUE(asset->validate());
 }
 
+/**
+ * 测试用例16：三次样条插值（CUBICSPLINE）
+ *
+ * 测试目标：验证三次样条插值类型的采样器能正确验证
+ * 测试场景：
+ *   - 使用 CUBICSPLINE 插值类型
+ *   - 每个关键帧需要 3 组数据：入切线、值、出切线
+ *   - 对于平移动画（vec3），每组3个float，共 3×3=9 个值/关键帧
+ *   - 2个关键帧，共 18 个值
+ * 预期结果：validate() 返回 true
+ * 验证点：三次样条数据格式的正确性
+ *
+ * 背景知识：
+ * - CUBICSPLINE 提供平滑的曲线插值，比 LINEAR 更自然
+ * - 数据格式：[in-tangent, value, out-tangent] 对每个关键帧
+ * - 切线用于控制曲线的形状和速度
+ */
 TEST_F(AnimationAssetTest, CubicSplineInterpolation) {
-    // CUBICSPLINE requires 3x the values (in-tangent, value, out-tangent)
+    // CUBICSPLINE 需要 3倍 的数据量（入切线、值、出切线）
     AnimationSampler sampler;
     sampler.times = {0.0f, 1.0f};
     sampler.values = {
-        // t=0: in-tangent, value, out-tangent
-        0.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 0.0f,
-        // t=1: in-tangent, value, out-tangent
-        0.0f, 0.0f, 0.0f,
-        1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 0.0f
+        // t=0 的数据：入切线、值、出切线（各3个float）
+        0.0f, 0.0f, 0.0f,  // 入切线
+        0.0f, 0.0f, 0.0f,  // 实际值（起始位置）
+        0.0f, 0.0f, 0.0f,  // 出切线
+
+        // t=1 的数据：入切线、值、出切线
+        0.0f, 0.0f, 0.0f,  // 入切线
+        1.0f, 0.0f, 0.0f,  // 实际值（结束位置）
+        0.0f, 0.0f, 0.0f   // 出切线
     };
-    sampler.interpolation = AnimationInterpolationType::CUBICSPLINE;
+    sampler.interpolation = AnimationInterpolationType::CUBICSPLINE;  // 三次样条插值
     asset->samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 1;
     channel.samplerIndex = 0;
-    channel.path = AnimationPathType::TRANSLATION;
+    channel.path = AnimationPathType::TRANSLATION;  // 平移动画
     asset->channels.push_back(channel);
 
     EXPECT_TRUE(asset->validate());
