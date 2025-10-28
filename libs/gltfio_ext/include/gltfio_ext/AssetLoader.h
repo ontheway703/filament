@@ -20,6 +20,7 @@
 #include <filament/Engine.h>
 #include <filament/Material.h>
 
+#include <gltfio_ext/AnimationAsset.h>
 #include <gltfio_ext/FilamentAsset.h>
 #include <gltfio_ext/FilamentInstance.h>
 #include <gltfio_ext/MaterialProvider.h>
@@ -234,6 +235,61 @@ public:
      * texture decoding or GPU uploading might be underway.
      */
     void destroyAsset(const FilamentAsset* asset);
+
+    /**
+     * Loads animation data from a GLB file without loading mesh geometry.
+     *
+     * This method is useful for loading animation libraries where animations are stored
+     * separately from mesh data (e.g., Blender's export_meshes=False option).
+     *
+     * The loaded AnimationAsset contains:
+     * - Node hierarchy (skeleton structure)
+     * - Animation channels (which bones are animated)
+     * - Samplers (keyframe data with time and values)
+     * - Inverse bind matrices (if skinning data is present)
+     *
+     * Unlike createAsset(), this method does NOT create:
+     * - Filament entities
+     * - Vertex/Index buffers
+     * - Material instances
+     * - Renderables
+     *
+     * 加载动画资产（只包含动画数据，不包含 mesh 几何体）
+     *
+     * 本方法用于加载动画库，其中动画与网格数据分离存储。
+     * 典型应用场景：
+     * - 从 Blender 导出的 export_meshes=False 的 GLB 文件
+     * - 共享骨骼的多个动画文件
+     * - 动画资源的按需加载
+     *
+     * @param bytes Pointer to GLB file data (GLB 文件数据指针)
+     * @param nbytes Size of GLB data in bytes (数据大小，字节数)
+     * @return AnimationAsset* on success, nullptr on failure (成功返回 AnimationAsset 指针，失败返回 nullptr)
+     *
+     * @note Caller is responsible for destroying the asset using destroyAnimationAsset()
+     *       调用者需要使用 destroyAnimationAsset() 销毁返回的资产
+     *
+     * @see destroyAnimationAsset()
+     * @see AnimationAsset
+     */
+    AnimationAsset* loadAnimationAsset(const uint8_t* bytes, uint32_t nbytes);
+
+    /**
+     * Destroys an AnimationAsset created by loadAnimationAsset().
+     *
+     * This frees all memory associated with the animation asset, including:
+     * - Node data
+     * - Animation channels
+     * - Samplers
+     * - Inverse bind matrices
+     *
+     * 销毁由 loadAnimationAsset() 创建的动画资产
+     *
+     * 释放所有相关内存，包括节点数据、动画通道、采样器、逆绑定矩阵等。
+     *
+     * @param asset The animation asset to destroy (can be nullptr) (要销毁的动画资产，可以为 nullptr)
+     */
+    void destroyAnimationAsset(AnimationAsset* asset);
 
     /**
      * Gets a weak reference to an array of cached materials, used internally to create material

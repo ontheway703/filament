@@ -264,6 +264,16 @@ if (TNT_DEV AND NOT WEBGL AND NOT ANDROID AND NOT IOS)
         target_compile_options(${ANIMATION_ASSET_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
     endif()
     set_target_properties(${ANIMATION_ASSET_TEST_TARGET} PROPERTIES FOLDER Tests)
+
+    # AssetLoader::loadAnimationAsset test
+    set(ASSET_LOADER_TEST_TARGET test_asset_loader)
+    add_executable(${ASSET_LOADER_TEST_TARGET} test/test_asset_loader.cpp)
+    add_dependencies(${ASSET_LOADER_TEST_TARGET} test_gltfio_ext_files)
+    target_link_libraries(${ASSET_LOADER_TEST_TARGET} PRIVATE ${TARGET} gtest uberarchive_ext)
+    if (NOT MSVC)
+        target_compile_options(${ASSET_LOADER_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
+    endif()
+    set_target_properties(${ASSET_LOADER_TEST_TARGET} PROPERTIES FOLDER Tests)
 endif()
 
 # ==================================================================================================

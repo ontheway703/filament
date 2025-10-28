@@ -1,324 +1,240 @@
-# gltfio_ext 测试文档
+# gltfio_ext 测试指南
 
-## 📋 概述
+本目录包含 `gltfio_ext` 库的单元测试和集成测试。`gltfio_ext` 用于加载和管理 glTF 2.0 动画资产，支持将动画数据与网格几何体解耦。
 
-本目录包含 `gltfio_ext` 库的单元测试和集成测试。`gltfio_ext` 是一个用于加载和管理 glTF 2.0 动画资产的扩展库，支持将动画数据与网格几何体解耦。
+## 快速开始
 
-## 🗂️ 测试文件列表
+### 编译测试
 
-### 1. test_animation_asset.cpp
-
-**测试目标**: AnimationAsset 数据结构
-
-**文件路径**: `libs/gltfio_ext/test/test_animation_asset.cpp`
-
-**测试内容**:
-- AnimationAsset 类的核心功能
-- 数据验证逻辑
-- 节点查找和管理
-- 动画时长计算
-- 骨骼蒙皮数据
-
-**测试用例数**: 16 个
-
-**编译目标**: `test_animation_asset`
-
----
-
-### 2. gltfio_test.cpp
-
-**测试目标**: 完整的 glTF 资产加载
-
-**文件路径**: `libs/gltfio_ext/test/gltfio_test.cpp`
-
-**测试内容**:
-- FilamentAsset 加载和验证
-- 材质实例
-- 变换矩阵
-- 渲染组件
-- Morph targets
-
-**测试用例数**: 3 个
-
-**编译目标**: `test_gltfio_ext`
-
----
-
-## 📊 测试用例详情
-
-### test_animation_asset.cpp 测试用例
-
-#### 基础功能测试
-
-| # | 测试用例名称 | 功能描述 | 验证点 |
-|---|-------------|---------|--------|
-| 1 | `EmptyAssetIsValid` | 空资产验证 | 空 AnimationAsset 应该是有效的 |
-| 2 | `FindNodeByName` | 按名称查找节点 | 节点名称映射表查找功能 |
-| 11 | `GetDuration` | 计算动画时长 | 返回所有采样器的最大时间值 |
-| 12 | `GetDurationEmptyAsset` | 空资产时长 | 空资产时长为 0 |
-| 13 | `NameGetterSetter` | 名称 Getter/Setter | 动画名称的设置和获取 |
-| 14 | `NodeStructure` | 节点结构验证 | 节点层级和名称的正确性 |
-
-#### 数据验证测试
-
-| # | 测试用例名称 | 功能描述 | 验证点 |
-|---|-------------|---------|--------|
-| 3 | `ValidateValidAsset` | 验证有效资产 | 完整动画数据能通过验证 |
-| 4 | `ValidateInvalidTargetNode` | 检测无效目标节点 | 捕获通道目标节点索引越界 |
-| 5 | `ValidateInvalidSamplerIndex` | 检测无效采样器索引 | 捕获采样器索引错误 |
-| 6 | `ValidateEmptySamplerTimes` | 检测空时间数组 | 采样器必须有关键帧时间 |
-| 7 | `ValidateUnsortedTimes` | 检测未排序时间 | 关键帧时间必须升序排列 |
-| 8 | `ValidateCyclicHierarchy` | 检测循环层级 | 节点层级不能有环形引用 |
-
-#### 骨骼蒙皮测试
-
-| # | 测试用例名称 | 功能描述 | 验证点 |
-|---|-------------|---------|--------|
-| 9 | `ValidateInverseBindMatrices` | 验证逆绑定矩阵 | 矩阵数量必须匹配关节数量 |
-| 10 | `ValidateInvalidJointIndex` | 检测无效关节索引 | 关节索引必须指向有效节点 |
-
-#### 动画类型测试
-
-| # | 测试用例名称 | 功能描述 | 验证点 |
-|---|-------------|---------|--------|
-| 15 | `RotationChannel` | 旋转动画通道 | 四元数数据（4值/帧）验证 |
-| 16 | `CubicSplineInterpolation` | 三次样条插值 | 切线数据格式验证 |
-
----
-
-## 🏗️ 编译和运行
-
-### 编译所有测试
+从项目根目录执行：
 
 ```bash
-# 从项目根目录
+# 配置构建（首次运行）
 cd /Users/xuan/Desktop/Code/my/filament
+cmake -B out/cmake-debug
 
-# 编译 gltfio_ext 库和测试
-cmake --build out/cmake-debug --target gltfio_ext_core -j8
+# 编译所有测试
 cmake --build out/cmake-debug --target test_animation_asset -j8
 cmake --build out/cmake-debug --target test_gltfio_ext -j8
+cmake --build out/cmake-debug --target test_asset_loader -j8
 ```
 
-### 运行单个测试
+### 运行测试
+
+> **重要：必须从构建目录运行测试！** 测试文件和资源文件都在这里。
 
 ```bash
-# 运行 AnimationAsset 测试
-./out/cmake-debug/libs/gltfio_ext/test_animation_asset
+# 进入构建目录
+cd out/cmake-debug/libs/gltfio_ext
 
-# 运行 gltfio 集成测试
-./out/cmake-debug/libs/gltfio_ext/test_gltfio_ext
+# 运行单个测试
+./test_animation_asset
+./test_gltfio_ext
+./test_asset_loader
+
+# 运行特定测试用例
+./test_animation_asset --gtest_filter="AnimationAssetTest.FindNodeByName"
+./test_asset_loader --gtest_filter="AssetLoaderTest.LoadValidAnimatedGLB"
+
+# 显示详细输出
+./test_animation_asset --gtest_color=yes --gtest_print_time=1
 ```
 
-### 运行特定测试用例
+## 测试概览
 
-```bash
-# 使用 gtest filter 运行特定测试
-./out/cmake-debug/libs/gltfio_ext/test_animation_asset --gtest_filter="AnimationAssetTest.FindNodeByName"
+总计：**3个测试可执行文件，28个测试用例**，覆盖核心功能和集成场景。
 
-# 运行多个测试用例
-./out/cmake-debug/libs/gltfio_ext/test_animation_asset --gtest_filter="AnimationAssetTest.Validate*"
-```
+| 测试文件 | 类型 | 用例数 | 依赖库 | 需要资源 |
+|---------|------|-------|--------|---------|
+| test_animation_asset.cpp | 单元测试 | 16 | gltfio_ext_core | 否 |
+| test_gltfio_ext.cpp | 集成测试 | 3 | gltfio_ext + uberarchive_ext | 是 |
+| test_asset_loader.cpp | 集成测试 | 9 | gltfio_ext + uberarchive_ext | 是 |
 
-### 详细输出
+**资源文件**：`AnimatedMorphCube.glb` 会自动从 `third_party/models/` 复制到构建目录。
 
-```bash
-# 显示详细测试输出
-./out/cmake-debug/libs/gltfio_ext/test_animation_asset --gtest_color=yes --gtest_print_time=1
-```
+## 测试详情
+
+### test_animation_asset.cpp
+
+**功能**：测试 `AnimationAsset` 数据结构和验证逻辑。
+
+**16个测试用例包括**：
+
+#### 基础功能（4个）
+- `EmptyAssetIsValid` - 空资产验证
+- `FindNodeByName` - 节点名称查找
+- `GetDuration` - 动画时长计算
+- `NodeStructure` - 节点层级结构
+
+#### 数据验证（6个）
+- `ValidateValidAsset` - 完整数据验证
+- `ValidateInvalidTargetNode` - 检测无效目标节点
+- `ValidateInvalidSamplerIndex` - 检测无效采样器索引
+- `ValidateEmptySamplerTimes` - 检测空时间数组
+- `ValidateUnsortedTimes` - 检测未排序时间
+- `ValidateCyclicHierarchy` - 检测循环层级
+
+#### 骨骼蒙皮（2个）
+- `ValidateInverseBindMatrices` - 逆绑定矩阵验证
+- `ValidateInvalidJointIndex` - 无效关节索引检测
+
+#### 动画类型（4个）
+- `RotationChannel` - 旋转动画通道（四元数）
+- `CubicSplineInterpolation` - 三次样条插值
+- `GetDurationEmptyAsset` - 空资产时长
+- `NameGetterSetter` - 动画名称管理
+
+**特点**：纯单元测试，不依赖外部资源，执行速度快。
 
 ---
 
-## ✅ 测试覆盖率
+### test_gltfio_ext.cpp
 
-### 功能覆盖矩阵
+**功能**：测试完整的 glTF 资产加载流程。
 
-| 功能模块 | 覆盖情况 | 测试用例数 | 备注 |
-|---------|---------|-----------|------|
-| 数据结构验证 | ✅ 完整 | 8 | 包含所有验证逻辑 |
-| 节点操作 | ✅ 完整 | 3 | 查找、层级、名称 |
-| 动画数据 | ✅ 完整 | 3 | 时长、插值、通道类型 |
-| 蒙皮数据 | ✅ 完整 | 2 | 逆绑定矩阵、关节 |
-| 边界情况 | ✅ 完整 | 2 | 空资产、零时长 |
-| **总计** | **16/16** | **16** | **100% 覆盖** |
+**3个测试用例**：
+- FilamentAsset 加载和验证
+- 材质实例创建
+- 变换矩阵和渲染组件
+- Morph targets 支持
 
-### 测试金字塔
-
-```
-        集成测试 (3个)        ← gltfio_test.cpp
-           ↗        ↖
-    功能测试 (10个)            ← test_animation_asset.cpp
-         ↗      ↖
-  单元测试 (6个)              ← test_animation_asset.cpp
-```
+**特点**：集成测试，需要 `AnimatedMorphCube.glb` 资源文件。
 
 ---
 
-## 📝 测试数据结构
+### test_asset_loader.cpp
 
-### 测试 Fixture 骨骼结构
+**功能**：测试 `AssetLoader::loadAnimationAsset()` 方法，验证从 GLB 文件加载纯动画数据。
 
-test_animation_asset.cpp 使用的测试骨骼结构：
+**9个测试用例**：
 
-```
-root (index 0, parent -1)
-  └─ spine (index 1, parent 0)
-       └─ head (index 2, parent 1)
-```
+#### 错误处理（2个）
+- `LoadEmptyData` - 空数据处理
+- `LoadInvalidGLB` - 无效 GLB 格式处理
 
-这是一个简单的三节点骨骼，用于测试各种动画数据验证逻辑。
+#### 数据提取（5个）
+- `LoadValidAnimatedGLB` - 成功加载有效动画文件
+- `NodeTreeExtraction` - 节点树结构验证
+- `NodeNameLookup` - 节点名称查找功能
+- `AnimationChannelExtraction` - 动画通道数据验证
+- `AnimationSamplerExtraction` - 采样器关键帧数据验证
 
-### 动画数据格式
+#### 内存管理（2个）
+- `AssetDestruction` - 资源释放和内存管理
+- `MultipleLoadsOfSameFile` - 多次加载独立性验证
 
-#### 平移/缩放动画（TRANSLATION / SCALE）
-```
-每个关键帧：3 个 float (x, y, z)
-示例：{0.0f, 0.0f, 0.0f,  // 帧1
-       1.0f, 0.0f, 0.0f}  // 帧2
-```
+**特点**：
+- 测试动画与网格解耦的核心功能
+- 验证 cgltf 集成和数据提取
+- 检查内存泄漏（可配合 valgrind/ASan）
 
-#### 旋转动画（ROTATION）
-```
-每个关键帧：4 个 float (x, y, z, w) - 四元数
-示例：{0.0f, 0.0f, 0.0f, 1.0f,  // 帧1: 单位四元数
-       0.0f, 0.707f, 0.0f, 0.707f}  // 帧2: 绕Y轴90度
-```
+## 故障排查
 
-#### 三次样条插值（CUBICSPLINE）
-```
-每个关键帧：3 组数据（入切线、值、出切线）
-对于平移：9 个 float/关键帧
-示例：{// 帧1
-       0.0f, 0.0f, 0.0f,  // 入切线
-       0.0f, 0.0f, 0.0f,  // 值
-       0.0f, 0.0f, 0.0f,  // 出切线
-       // 帧2
-       ...}
-```
+### 问题1：测试编译失败
 
----
+**现象**：CMake 报错找不到 `AnimationAsset.h` 或链接失败。
 
-## 🐛 故障排查
-
-### 常见问题
-
-#### 1. 测试编译失败
-
-**现象**: CMake 报错找不到 AnimationAsset.h
-
-**解决**:
+**解决方案**：
 ```bash
-# 确保头文件已添加到 CMakeLists.txt 的 PUBLIC_HDRS
-# 重新运行 CMake 配置
-cmake -B out/cmake-debug
+# 清理并重新配置
+rm -rf out/cmake-debug
+cmake -B out/cmake-debug -DCMAKE_BUILD_TYPE=Debug
+
+# 确保核心库先编译
+cmake --build out/cmake-debug --target gltfio_ext_core -j8
 ```
 
-#### 2. 测试运行失败
+### 问题2：找不到测试文件
 
-**现象**: 所有测试都失败，报段错误
+**现象**：运行测试时提示 "Test file not found" 或 "SKIPPED"。
 
-**排查步骤**:
-1. 确认 gltfio_ext_core 库已成功编译
-2. 检查是否有未初始化的指针
-3. 运行 Address Sanitizer:
+**原因**：工作目录错误，测试从项目根目录运行而不是构建目录。
+
+**解决方案**：
 ```bash
-# 使用 ASan 编译
+# 必须从这个目录运行！
+cd out/cmake-debug/libs/gltfio_ext
+./test_asset_loader
+
+# 验证文件存在
+ls -lh AnimatedMorphCube.glb  # 应该显示 6.6K 的文件
+```
+
+### 问题3：段错误或初始化失败
+
+**现象**：测试运行时崩溃或 Engine 初始化失败。
+
+**排查步骤**：
+
+1. 检查依赖库链接：
+```bash
+# test_asset_loader 需要这些库
+ldd ./test_asset_loader | grep -E "gltfio|filament|uberarchive"
+```
+
+2. 使用 Address Sanitizer：
+```bash
 cmake -B out/cmake-debug -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=ON
-cmake --build out/cmake-debug --target test_animation_asset
-./out/cmake-debug/libs/gltfio_ext/test_animation_asset
+cmake --build out/cmake-debug --target test_asset_loader
+cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader
 ```
 
-#### 3. 特定测试用例失败
+3. 检查 MaterialProvider 清理：
+   - 确保 `destroyMaterials()` 在析构前调用
+   - 查看 test_asset_loader.cpp:76 的 TearDown() 实现
 
-**现象**: ValidateCyclicHierarchy 等测试失败
+### 问题4：特定测试用例失败
 
-**原因**: 可能是 validate() 逻辑更改
+**ValidateCyclicHierarchy 等验证测试失败**：
+- 检查 `AnimationAsset::validate()` 实现（src/AnimationAsset.cpp）
+- 确认测试数据中有足够的 channels/samplers（否则会提前返回）
 
-**解决**: 检查 AnimationAsset::validate() 实现，确保循环检测逻辑正确
-
----
-
-## 📐 测试维护规范
+## 开发指南
 
 ### 添加新测试用例
 
-1. **命名规范**:
-   - 测试类名：`<ClassName>Test`
-   - 测试用例名：`<FunctionName>_<Scenario>` 或使用驼峰命名
+1. **选择合适的测试文件**：
+   - 数据结构验证 → test_animation_asset.cpp
+   - 加载流程测试 → test_asset_loader.cpp
+   - 完整集成测试 → test_gltfio_ext.cpp
 
-2. **注释要求**:
-   ```cpp
-   /**
-    * 测试用例N：<简短描述>
-    *
-    * 测试目标：<明确的目标>
-    * 测试场景：<详细的场景描述>
-    * 预期结果：<预期的结果>
-    * 验证点：<关键验证点>
-    */
-   TEST_F(AnimationAssetTest, NewTest) {
-       // 实现...
-   }
-   ```
+2. **编写测试**：
+```cpp
+TEST_F(AnimationAssetTest, NewFeature) {
+    // Arrange: 准备测试数据
 
-3. **更新文档**:
-   - 在本 README 的"测试用例详情"表格中添加新测试
-   - 更新"测试用例数"统计
-   - 如果是新功能，更新"测试覆盖率"表格
+    // Act: 执行被测试功能
 
-4. **测试数据**:
-   - 使用有意义的测试数据
-   - 在注释中说明数据的含义
-   - 避免魔法数字，使用命名常量
+    // Assert: 验证结果
+    EXPECT_EQ(expected, actual);
+}
+```
 
-### 修改现有测试
+3. **更新文档**：在本 README 的"测试详情"部分添加说明。
 
-1. **保持向后兼容**: 不要轻易删除测试用例
-2. **记录变更**: 在 git commit 中说明修改原因
-3. **更新注释**: 确保注释与代码一致
+4. **验证测试**：
+```bash
+cmake --build out/cmake-debug --target test_animation_asset -j8
+cd out/cmake-debug/libs/gltfio_ext && ./test_animation_asset
+```
 
-### 测试代码质量
+### CMakeLists.txt 配置
 
-- ✅ 每个测试只测试一个功能点
-- ✅ 测试名称清晰表达测试内容
-- ✅ 避免测试之间的依赖
-- ✅ 使用 EXPECT 而不是 ASSERT（除非必须）
-- ✅ 清理测试数据（使用 TearDown）
+测试配置位于 `libs/gltfio_ext/CMakeLists.txt`：
 
----
+- **第 228-242 行**：`add_test_gltf()` 函数，定义测试文件复制机制
+- **第 247-257 行**：`test_gltfio_ext` 配置
+- **第 260-266 行**：`test_animation_asset` 配置
+- **第 269-276 行**：`test_asset_loader` 配置
 
-## 📚 相关文档
+**关键点**：
+- `add_dependencies(test_asset_loader test_gltfio_ext_files)` 确保资源文件被复制
+- test_animation_asset 只需要 gltfio_ext_core（快速编译）
+- 其他测试需要完整的 gltfio_ext + uberarchive_ext
 
-- **AnimationAsset 设计文档**: `docs/animation_asset_design.md`
-- **glTF 2.0 规范**: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html
-- **Google Test 文档**: https://google.github.io/googletest/
-- **Filament 文档**: https://google.github.io/filament/
+### 相关文档
 
----
-
-## 🔄 测试历史
-
-### 版本 1.0 (2025-10-28)
-
-- ✅ 创建 AnimationAsset 单元测试
-- ✅ 实现 16 个测试用例
-- ✅ 100% 测试通过
-- ✅ 添加完整中文注释
-- ✅ 创建测试文档
-
----
-
-## 📞 联系和反馈
-
-如有测试相关问题或建议，请：
-
-1. 查看测试源文件中的注释
-2. 阅读本 README 的"故障排查"部分
-3. 查看相关设计文档
-4. 提交 Issue 或 Pull Request
-
----
-
-**最后更新**: 2025-10-28
-**维护者**: Filament Animation Team
-**文档版本**: 1.0
+- **glTF 2.0 规范**：https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html
+- **Google Test 文档**：https://google.github.io/googletest/
+- **Filament 文档**：https://google.github.io/filament/
+- **项目架构**：../../CLAUDE.md

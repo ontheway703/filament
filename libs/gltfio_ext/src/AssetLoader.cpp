@@ -1797,4 +1797,466 @@ MaterialProvider& AssetLoader::getMaterialProvider() noexcept {
     return downcast(this)->mMaterials;
 }
 
+// ================================================================================================
+// Animation Asset Loading Implementation
+// 动画资产加载实现
+// ================================================================================================
+
+namespace {
+
+/**
+ * 转换 cgltf 插值类型到 AnimationInterpolationType
+ * Converts cgltf interpolation type to AnimationInterpolationType
+ */
+AnimationInterpolationType convertInterpolationType(cgltf_interpolation_type type) {
+    switch (type) {
+        case cgltf_interpolation_type_linear:
+            return AnimationInterpolationType::LINEAR;
+        case cgltf_interpolation_type_step:
+            return AnimationInterpolationType::STEP;
+        case cgltf_interpolation_type_cubic_spline:
+            return AnimationInterpolationType::CUBICSPLINE;
+        default:
+            return AnimationInterpolationType::LINEAR;
+    }
+}
+
+/**
+ * 转换 cgltf 动画路径类型到 AnimationPathType
+ * Converts cgltf animation path type to AnimationPathType
+ */
+AnimationPathType convertPathType(cgltf_animation_path_type type) {
+    switch (type) {
+        case cgltf_animation_path_type_translation:
+            return AnimationPathType::TRANSLATION;
+        case cgltf_animation_path_type_rotation:
+            return AnimationPathType::ROTATION;
+        case cgltf_animation_path_type_scale:
+            return AnimationPathType::SCALE;
+        case cgltf_animation_path_type_weights:
+            return AnimationPathType::WEIGHTS;
+        default:
+            slog.w << "Unknown animation path type, defaulting to TRANSLATION" << io::endl;
+            return AnimationPathType::TRANSLATION;
+    }
+}
+
+/**
+ * 获取节点在数组中的索引
+ * Gets the index of a node in the nodes array
+ */
+int getNodeIndex(const cgltf_data* data, const cgltf_node* node) {
+    if (!node || !data || !data->nodes) {
+        return -1;
+    }
+    return static_cast<int>(node - data->nodes);
+}
+
+/**
+ * 从 cgltf_node 提取变换矩阵
+ * Extracts transform matrix from cgltf_node
+ *
+ * 处理两种情况：
+ * 1. 节点直接包含矩阵（has_matrix）
+ * 2. 节点包含 TRS 分量（translation, rotation, scale）
+ */
+mat4f extractTransform(const cgltf_node* node) {
+    // 情况1：直接使用矩阵
+    if (node->has_matrix) {
+        // cgltf 矩阵是列主序，与 Filament 一致
+        return mat4f(
+            node->matrix[0], node->matrix[1], node->matrix[2], node->matrix[3],
+            node->matrix[4], node->matrix[5], node->matrix[6], node->matrix[7],
+            node->matrix[8], node->matrix[9], node->matrix[10], node->matrix[11],
+            node->matrix[12], node->matrix[13], node->matrix[14], node->matrix[15]
+        );
+    }
+
+    // 情况2：从 TRS 构建矩阵
+    float3 translation(0, 0, 0);
+    quatf rotation(1, 0, 0, 0);  // w, x, y, z (单位四元数)
+    float3 scale(1, 1, 1);
+
+    if (node->has_translation) {
+        translation = float3(node->translation[0], node->translation[1], node->translation[2]);
+    }
+    if (node->has_rotation) {
+        // cgltf 使用 x, y, z, w 顺序，Filament quatf 使用 w, x, y, z 顺序
+        rotation = quatf(node->rotation[3], node->rotation[0], node->rotation[1], node->rotation[2]);
+    }
+    if (node->has_scale) {
+        scale = float3(node->scale[0], node->scale[1], node->scale[2]);
+    }
+
+    // 构建 TRS 矩阵：M = T * R * S
+    mat4f T = mat4f::translation(translation);
+    mat4f R(rotation);  // quatf 可以直接构造 mat4f
+    mat4f S = mat4f::scaling(scale);
+
+    return T * R * S;
+}
+
+/**
+ * 从 cgltf_animation_sampler 提取采样器数据
+ * Extracts sampler data from cgltf_animation_sampler
+ *
+ * @param srcSampler 源采样器（包含 input 和 output accessor）
+ * @param dstSampler 目标采样器（存储 times 和 values）
+ * @param pathType 动画路径类型（用于确定输出数据的分量数）
+ */
+bool extractSampler(const cgltf_animation_sampler* srcSampler,
+                    AnimationSampler* dstSampler,
+                    AnimationPathType pathType) {
+    if (!srcSampler || !dstSampler) {
+        return false;
+    }
+
+    // 1. 提取时间数据（input accessor）
+    const cgltf_accessor* inputAccessor = srcSampler->input;
+    if (!inputAccessor || inputAccessor->count == 0) {
+        slog.e << "Animation sampler has no input (times) data" << io::endl;
+        return false;
+    }
+
+    dstSampler->times.resize(inputAccessor->count);
+    cgltf_size numFloats = cgltf_accessor_unpack_floats(
+        inputAccessor,
+        dstSampler->times.data(),
+        inputAccessor->count
+    );
+    if (numFloats != inputAccessor->count) {
+        slog.e << "Failed to unpack sampler input times" << io::endl;
+        return false;
+    }
+
+    // 2. 提取输出数据（output accessor）
+    const cgltf_accessor* outputAccessor = srcSampler->output;
+    if (!outputAccessor || outputAccessor->count == 0) {
+        slog.e << "Animation sampler has no output data" << io::endl;
+        return false;
+    }
+
+    // 根据路径类型确定每个关键帧的分量数
+    // TRANSLATION/SCALE: 3 (vec3)
+    // ROTATION: 4 (quaternion)
+    // WEIGHTS: 变长，取决于 morph target 数量
+    size_t componentsPerKeyframe = 0;
+    switch (pathType) {
+        case AnimationPathType::TRANSLATION:
+        case AnimationPathType::SCALE:
+            componentsPerKeyframe = 3;
+            break;
+        case AnimationPathType::ROTATION:
+            componentsPerKeyframe = 4;
+            break;
+        case AnimationPathType::WEIGHTS:
+            // 对于 morph weights，直接使用 accessor 的分量数
+            componentsPerKeyframe = outputAccessor->count / inputAccessor->count;
+            break;
+    }
+
+    // CUBICSPLINE 插值需要 3 倍数据（in-tangent, value, out-tangent）
+    size_t expectedCount = inputAccessor->count * componentsPerKeyframe;
+    if (srcSampler->interpolation == cgltf_interpolation_type_cubic_spline) {
+        expectedCount *= 3;
+    }
+
+    dstSampler->values.resize(outputAccessor->count * componentsPerKeyframe);
+    numFloats = cgltf_accessor_unpack_floats(
+        outputAccessor,
+        dstSampler->values.data(),
+        outputAccessor->count * componentsPerKeyframe
+    );
+
+    if (numFloats != expectedCount) {
+        slog.w << "Animation sampler output count mismatch: expected "
+               << expectedCount << ", got " << numFloats << io::endl;
+        // 不返回 false，允许继续，但数据可能不完整
+    }
+
+    // 3. 设置插值类型
+    dstSampler->interpolation = convertInterpolationType(srcSampler->interpolation);
+
+    return true;
+}
+
+} // anonymous namespace
+
+/**
+ * 从 cgltf_data 提取节点树（不加载 mesh 几何体）
+ * Extracts node tree from cgltf_data without loading mesh geometry
+ */
+static void extractNodes(const cgltf_data* srcData, AnimationAsset* dstAsset) {
+    dstAsset->nodes.reserve(srcData->nodes_count);
+
+    for (cgltf_size i = 0; i < srcData->nodes_count; ++i) {
+        const cgltf_node* srcNode = &srcData->nodes[i];
+
+        AnimationNode dstNode;
+
+        // 复制节点名称
+        dstNode.name = getNodeName(srcNode, "");
+
+        // 计算父节点索引
+        if (srcNode->parent) {
+            dstNode.parentIndex = getNodeIndex(srcData, srcNode->parent);
+        } else {
+            dstNode.parentIndex = -1;  // 根节点
+        }
+
+        // 提取变换矩阵
+        dstNode.transform = extractTransform(srcNode);
+
+        // 设置蒙皮索引（如果有）
+        if (srcNode->skin) {
+            dstNode.skinIndex = static_cast<int>(srcNode->skin - srcData->skins);
+        } else {
+            dstNode.skinIndex = -1;
+        }
+
+        dstAsset->nodes.push_back(std::move(dstNode));
+    }
+}
+
+/**
+ * 从 cgltf_animation 提取动画通道和采样器
+ * Extracts animation channels and samplers from cgltf_animation
+ */
+static bool extractAnimationChannels(const cgltf_animation* srcAnim,
+                                     const cgltf_data* srcData,
+                                     AnimationAsset* dstAsset) {
+    if (!srcAnim || !srcData || !dstAsset) {
+        return false;
+    }
+
+    // 预分配空间
+    dstAsset->channels.reserve(srcAnim->channels_count);
+    dstAsset->samplers.reserve(srcAnim->samplers_count);
+
+    // 提取所有采样器（先提取，因为 channel 会引用采样器索引）
+    for (cgltf_size i = 0; i < srcAnim->samplers_count; ++i) {
+        const cgltf_animation_sampler* srcSampler = &srcAnim->samplers[i];
+
+        AnimationSampler dstSampler;
+
+        // 采样器提取需要路径类型，但我们还没有通道信息
+        // 这里先创建一个临时的采样器，稍后在处理通道时填充
+        dstAsset->samplers.push_back(std::move(dstSampler));
+    }
+
+    // 提取所有通道
+    for (cgltf_size i = 0; i < srcAnim->channels_count; ++i) {
+        const cgltf_animation_channel* srcChannel = &srcAnim->channels[i];
+
+        AnimationChannel dstChannel;
+
+        // 获取目标节点索引
+        if (!srcChannel->target_node) {
+            slog.w << "Animation channel " << i << " has no target node, skipping" << io::endl;
+            continue;
+        }
+        dstChannel.targetNodeIndex = getNodeIndex(srcData, srcChannel->target_node);
+        if (dstChannel.targetNodeIndex < 0) {
+            slog.w << "Animation channel " << i << " target node not found" << io::endl;
+            continue;
+        }
+
+        // 转换路径类型
+        dstChannel.path = convertPathType(srcChannel->target_path);
+
+        // 获取采样器索引
+        if (!srcChannel->sampler) {
+            slog.w << "Animation channel " << i << " has no sampler, skipping" << io::endl;
+            continue;
+        }
+        dstChannel.samplerIndex = static_cast<int>(srcChannel->sampler - srcAnim->samplers);
+        if (dstChannel.samplerIndex < 0 ||
+            dstChannel.samplerIndex >= static_cast<int>(dstAsset->samplers.size())) {
+            slog.e << "Animation channel " << i << " sampler index out of range" << io::endl;
+            continue;
+        }
+
+        // 现在提取对应的采样器数据（使用通道的路径类型）
+        if (!extractSampler(srcChannel->sampler,
+                           &dstAsset->samplers[dstChannel.samplerIndex],
+                           dstChannel.path)) {
+            slog.e << "Failed to extract sampler for channel " << i << io::endl;
+            continue;
+        }
+
+        dstAsset->channels.push_back(std::move(dstChannel));
+    }
+
+    return !dstAsset->channels.empty();
+}
+
+/**
+ * 从 cgltf_skin 提取蒙皮数据（关节和逆绑定矩阵）
+ * Extracts skin data (joints and inverse bind matrices) from cgltf_skin
+ */
+static bool extractSkinData(const cgltf_skin* srcSkin,
+                            const cgltf_data* srcData,
+                            AnimationAsset* dstAsset) {
+    if (!srcSkin || !srcData || !dstAsset) {
+        return false;
+    }
+
+    // 提取关节索引
+    dstAsset->joints.reserve(srcSkin->joints_count);
+    for (cgltf_size i = 0; i < srcSkin->joints_count; ++i) {
+        int jointIndex = getNodeIndex(srcData, srcSkin->joints[i]);
+        if (jointIndex < 0) {
+            slog.w << "Skin joint " << i << " not found in node list" << io::endl;
+            continue;
+        }
+        dstAsset->joints.push_back(jointIndex);
+    }
+
+    // 提取逆绑定矩阵
+    if (srcSkin->inverse_bind_matrices) {
+        const cgltf_accessor* accessor = srcSkin->inverse_bind_matrices;
+        if (accessor->count != srcSkin->joints_count) {
+            slog.e << "Inverse bind matrices count (" << accessor->count
+                   << ") doesn't match joints count (" << srcSkin->joints_count << ")" << io::endl;
+            return false;
+        }
+
+        dstAsset->inverseBindMatrices.resize(accessor->count);
+
+        // cgltf_accessor_unpack_floats 解包浮点数
+        // 每个矩阵 16 个浮点数
+        std::vector<float> matrices(accessor->count * 16);
+        cgltf_size numFloats = cgltf_accessor_unpack_floats(
+            accessor,
+            matrices.data(),
+            accessor->count * 16
+        );
+
+        if (numFloats != accessor->count * 16) {
+            slog.e << "Failed to unpack inverse bind matrices" << io::endl;
+            return false;
+        }
+
+        // 转换为 mat4f
+        for (size_t i = 0; i < accessor->count; ++i) {
+            const float* m = &matrices[i * 16];
+            dstAsset->inverseBindMatrices[i] = mat4f(
+                m[0], m[1], m[2], m[3],
+                m[4], m[5], m[6], m[7],
+                m[8], m[9], m[10], m[11],
+                m[12], m[13], m[14], m[15]
+            );
+        }
+    }
+
+    return true;
+}
+
+/**
+ * 加载动画资产（只包含动画数据，不包含 mesh 几何体）
+ * Loads animation asset (animation data only, no mesh geometry)
+ */
+AnimationAsset* AssetLoader::loadAnimationAsset(const uint8_t* bytes, uint32_t nbytes) {
+    // 1. 解析 GLB 文件
+    cgltf_options options = {};
+    cgltf_data* srcData = nullptr;
+
+    cgltf_result result = cgltf_parse(&options, bytes, nbytes, &srcData);
+    if (result != cgltf_result_success) {
+        slog.e << "Failed to parse glTF data: " << result << io::endl;
+        return nullptr;
+    }
+
+    // 2. 加载 buffer 数据
+    result = cgltf_load_buffers(&options, srcData, nullptr);
+    if (result != cgltf_result_success) {
+        slog.e << "Failed to load glTF buffers: " << result << io::endl;
+        cgltf_free(srcData);
+        return nullptr;
+    }
+
+    // 3. 验证 glTF 数据
+    result = cgltf_validate(srcData);
+    if (result != cgltf_result_success) {
+        slog.w << "glTF validation failed: " << result << " (continuing anyway)" << io::endl;
+    }
+
+    // 4. 创建 AnimationAsset
+    AnimationAsset* asset = new AnimationAsset();
+
+    // 5. 提取节点树
+    if (srcData->nodes_count > 0) {
+        extractNodes(srcData, asset);
+    } else {
+        slog.w << "No nodes found in glTF file" << io::endl;
+    }
+
+    // 6. 提取动画数据（只提取第一个动画）
+    if (srcData->animations_count > 0) {
+        const cgltf_animation* srcAnim = &srcData->animations[0];
+
+        // 如果有动画名称，设置到资产
+        if (srcAnim->name) {
+            asset->setName(srcAnim->name);
+        } else {
+            asset->setName("Animation0");
+        }
+
+        // 提取通道和采样器
+        if (!extractAnimationChannels(srcAnim, srcData, asset)) {
+            slog.e << "Failed to extract animation channels" << io::endl;
+            cgltf_free(srcData);
+            delete asset;
+            return nullptr;
+        }
+
+        if (srcData->animations_count > 1) {
+            slog.w << "glTF file contains " << srcData->animations_count
+                   << " animations, but only the first one will be loaded" << io::endl;
+        }
+    } else {
+        slog.w << "No animations found in glTF file" << io::endl;
+    }
+
+    // 7. 提取蒙皮数据（如果有）
+    if (srcData->skins_count > 0) {
+        // 只提取第一个 skin
+        const cgltf_skin* srcSkin = &srcData->skins[0];
+        if (!extractSkinData(srcSkin, srcData, asset)) {
+            slog.w << "Failed to extract skin data (continuing anyway)" << io::endl;
+        }
+
+        if (srcData->skins_count > 1) {
+            slog.w << "glTF file contains " << srcData->skins_count
+                   << " skins, but only the first one will be loaded" << io::endl;
+        }
+    }
+
+    // 8. 验证 AnimationAsset
+    if (!asset->validate()) {
+        slog.e << "AnimationAsset validation failed" << io::endl;
+        cgltf_free(srcData);
+        delete asset;
+        return nullptr;
+    }
+
+    // 9. 释放 cgltf_data（我们已经复制了所有需要的数据）
+    cgltf_free(srcData);
+
+    // 10. 构建节点名称映射以加速查找
+    asset->buildBoneNameMap();
+
+    slog.i << "Successfully loaded AnimationAsset: "
+           << asset->nodes.size() << " nodes, "
+           << asset->channels.size() << " channels, "
+           << asset->samplers.size() << " samplers, "
+           << "duration=" << asset->getDuration() << "s" << io::endl;
+
+    return asset;
+}
+
+void AssetLoader::destroyAnimationAsset(AnimationAsset* asset) {
+    delete asset;  // AnimationAsset 的析构函数会自动清理内部容器
+}
+
 } // namespace filament::gltfio
