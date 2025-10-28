@@ -10,6 +10,7 @@ set(ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 # Sources and headers
 # ==================================================================================================
 set(PUBLIC_HDRS
+        include/gltfio_ext/AnimationAsset.h
         include/gltfio_ext/Animator.h
         include/gltfio_ext/AssetLoader.h
         include/gltfio_ext/FilamentAsset.h
@@ -23,6 +24,7 @@ set(PUBLIC_HDRS
 )
 
 set(SRCS
+        src/AnimationAsset.cpp
         src/ArchiveCache.cpp
         src/ArchiveCache.h
         src/Animator.cpp
@@ -253,6 +255,15 @@ if (TNT_DEV AND NOT WEBGL AND NOT ANDROID AND NOT IOS)
         target_compile_options(${TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
     endif()
     set_target_properties(${TEST_TARGET} PROPERTIES FOLDER Tests)
+
+    # AnimationAsset unit test
+    set(ANIMATION_ASSET_TEST_TARGET test_animation_asset)
+    add_executable(${ANIMATION_ASSET_TEST_TARGET} test/test_animation_asset.cpp)
+    target_link_libraries(${ANIMATION_ASSET_TEST_TARGET} PRIVATE gltfio_ext_core gtest)
+    if (NOT MSVC)
+        target_compile_options(${ANIMATION_ASSET_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
+    endif()
+    set_target_properties(${ANIMATION_ASSET_TEST_TARGET} PROPERTIES FOLDER Tests)
 endif()
 
 # ==================================================================================================
