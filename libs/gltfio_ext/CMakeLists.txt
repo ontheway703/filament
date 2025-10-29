@@ -11,6 +11,7 @@ set(ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 # ==================================================================================================
 set(PUBLIC_HDRS
         include/gltfio_ext/AnimationAsset.h
+        include/gltfio_ext/AnimationBinding.h
         include/gltfio_ext/Animator.h
         include/gltfio_ext/AssetLoader.h
         include/gltfio_ext/FilamentAsset.h
@@ -25,6 +26,7 @@ set(PUBLIC_HDRS
 
 set(SRCS
         src/AnimationAsset.cpp
+        src/AnimationBinding.cpp
         src/ArchiveCache.cpp
         src/ArchiveCache.h
         src/Animator.cpp
@@ -238,6 +240,8 @@ function(add_test_gltf SOURCE TARGET)
 endfunction()
 
 add_test_gltf("third_party/models/AnimatedMorphCube/AnimatedMorphCube.glb" "AnimatedMorphCube.glb")
+add_test_gltf("tmp/test_assets/ecorche_animation_only.glb" "ecorche_animation_only.glb")
+add_test_gltf("tmp/test_assets/ecorche_full.glb" "ecorche_full.glb")
 
 add_custom_target(test_gltfio_ext_files DEPENDS ${GLTF_TEST_FILES})
 
@@ -274,6 +278,16 @@ if (TNT_DEV AND NOT WEBGL AND NOT ANDROID AND NOT IOS)
         target_compile_options(${ASSET_LOADER_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
     endif()
     set_target_properties(${ASSET_LOADER_TEST_TARGET} PROPERTIES FOLDER Tests)
+
+    # AnimationBinding test
+    set(ANIMATION_BINDING_TEST_TARGET test_animation_binding)
+    add_executable(${ANIMATION_BINDING_TEST_TARGET} test/test_animation_binding.cpp)
+    add_dependencies(${ANIMATION_BINDING_TEST_TARGET} test_gltfio_ext_files)
+    target_link_libraries(${ANIMATION_BINDING_TEST_TARGET} PRIVATE ${TARGET} gtest uberarchive_ext)
+    if (NOT MSVC)
+        target_compile_options(${ANIMATION_BINDING_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
+    endif()
+    set_target_properties(${ANIMATION_BINDING_TEST_TARGET} PROPERTIES FOLDER Tests)
 endif()
 
 # ==================================================================================================

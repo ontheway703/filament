@@ -23,13 +23,14 @@
  * 3. 动画时长计算（getDuration）
  * 4. 节点层级结构验证
  * 5. 各种插值类型和动画路径支持
+ * 6. 多动画支持（getAnimationCount, getAnimation, getAnimationByName）
  *
  * AnimationAsset 是一个轻量级数据结构，用于表示"只包含动画数据"的资产，
  * 与传统的 FilamentAsset（包含 mesh + 动画）不同。
  *
- * 测试用例总数：16 个
+ * 测试用例总数：20 个
  * 覆盖范围：
- * - 基础功能：空资产、节点查找、时长计算、名称管理
+ * - 基础功能：空资产、节点查找、时长计算、多动画访问
  * - 数据验证：通道索引、采样器索引、时间序列、层级循环
  * - 蒙皮数据：逆绑定矩阵、关节索引
  * - 动画类型：平移、旋转、三次样条插值
@@ -132,6 +133,10 @@ TEST_F(AnimationAssetTest, FindNodeByName) {
  * 验证点：完整的动画数据结构能够正常工作
  */
 TEST_F(AnimationAssetTest, ValidateValidAsset) {
+    // 创建动画
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     // 添加一个简单的动画通道
     AnimationSampler sampler;
     sampler.times = {0.0f, 1.0f, 2.0f};  // 3个关键帧的时间点
@@ -139,13 +144,15 @@ TEST_F(AnimationAssetTest, ValidateValidAsset) {
                       1.0f, 0.0f, 0.0f,  // t=1: 位置 (1,0,0)
                       2.0f, 0.0f, 0.0f}; // t=2: 位置 (2,0,0)
     sampler.interpolation = AnimationInterpolationType::LINEAR;  // 线性插值
-    asset->samplers.push_back(sampler);
+    anim.samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 1;  // 目标是 spine 节点
     channel.samplerIndex = 0;     // 使用第一个采样器
     channel.path = AnimationPathType::TRANSLATION;  // 平移动画
-    asset->channels.push_back(channel);
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
 
     EXPECT_TRUE(asset->validate());
 }
@@ -161,16 +168,21 @@ TEST_F(AnimationAssetTest, ValidateValidAsset) {
  * 验证点：数据验证逻辑能够捕获索引越界错误
  */
 TEST_F(AnimationAssetTest, ValidateInvalidTargetNode) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     AnimationSampler sampler;
     sampler.times = {0.0f, 1.0f};
     sampler.values = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
-    asset->samplers.push_back(sampler);
+    anim.samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 99;  // 无效索引：超出节点数组范围（只有3个节点）
     channel.samplerIndex = 0;
     channel.path = AnimationPathType::TRANSLATION;
-    asset->channels.push_back(channel);
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
 
     EXPECT_FALSE(asset->validate());  // 应该验证失败
 }
@@ -185,11 +197,16 @@ TEST_F(AnimationAssetTest, ValidateInvalidTargetNode) {
  * 验证点：数据验证逻辑能够捕获采样器索引错误
  */
 TEST_F(AnimationAssetTest, ValidateInvalidSamplerIndex) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     AnimationChannel channel;
     channel.targetNodeIndex = 1;
     channel.samplerIndex = 99;  // 无效索引：没有任何采样器
     channel.path = AnimationPathType::TRANSLATION;
-    asset->channels.push_back(channel);
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
 
     EXPECT_FALSE(asset->validate());  // 应该验证失败
 }
@@ -205,16 +222,21 @@ TEST_F(AnimationAssetTest, ValidateInvalidSamplerIndex) {
  * 验证点：采样器必须至少有一个关键帧时间点
  */
 TEST_F(AnimationAssetTest, ValidateEmptySamplerTimes) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     AnimationSampler sampler;
     sampler.times = {};  // 空数组：没有时间点
     sampler.values = {0.0f, 0.0f, 0.0f};
-    asset->samplers.push_back(sampler);
+    anim.samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 1;
     channel.samplerIndex = 0;
     channel.path = AnimationPathType::TRANSLATION;
-    asset->channels.push_back(channel);
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
 
     EXPECT_FALSE(asset->validate());  // 应该验证失败
 }
@@ -229,16 +251,21 @@ TEST_F(AnimationAssetTest, ValidateEmptySamplerTimes) {
  * 验证点：关键帧时间必须按时间顺序排列，才能正确插值
  */
 TEST_F(AnimationAssetTest, ValidateUnsortedTimes) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     AnimationSampler sampler;
     sampler.times = {0.0f, 2.0f, 1.0f};  // 未排序：第3个元素比第2个小
     sampler.values = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f};
-    asset->samplers.push_back(sampler);
+    anim.samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 1;
     channel.samplerIndex = 0;
     channel.path = AnimationPathType::TRANSLATION;
-    asset->channels.push_back(channel);
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
 
     EXPECT_FALSE(asset->validate());  // 应该验证失败
 }
@@ -257,17 +284,22 @@ TEST_F(AnimationAssetTest, ValidateUnsortedTimes) {
  * 错误层级：root(2) -> spine(0) -> head(1) -> root  [循环！]
  */
 TEST_F(AnimationAssetTest, ValidateCyclicHierarchy) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     // 添加虚拟通道，使 validate() 执行完整的验证逻辑
     AnimationSampler sampler;
     sampler.times = {0.0f, 1.0f};
     sampler.values = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
-    asset->samplers.push_back(sampler);
+    anim.samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 1;
     channel.samplerIndex = 0;
     channel.path = AnimationPathType::TRANSLATION;
-    asset->channels.push_back(channel);
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
 
     // 创建循环：将 root 的父节点设为 head（索引2），形成环形引用
     asset->nodes[0].parentIndex = 2;
@@ -291,17 +323,22 @@ TEST_F(AnimationAssetTest, ValidateCyclicHierarchy) {
  * 每个关节必须对应一个逆绑定矩阵。
  */
 TEST_F(AnimationAssetTest, ValidateInverseBindMatrices) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     // 添加虚拟通道
     AnimationSampler sampler;
     sampler.times = {0.0f, 1.0f};
     sampler.values = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
-    asset->samplers.push_back(sampler);
+    anim.samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 1;
     channel.samplerIndex = 0;
     channel.path = AnimationPathType::TRANSLATION;
-    asset->channels.push_back(channel);
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
 
     // 添加3个关节（对应3个节点）
     asset->joints = {0, 1, 2};
@@ -330,17 +367,22 @@ TEST_F(AnimationAssetTest, ValidateInverseBindMatrices) {
  * 验证点：所有关节索引必须指向有效的节点
  */
 TEST_F(AnimationAssetTest, ValidateInvalidJointIndex) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     // 添加虚拟通道
     AnimationSampler sampler;
     sampler.times = {0.0f, 1.0f};
     sampler.values = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
-    asset->samplers.push_back(sampler);
+    anim.samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 1;
     channel.samplerIndex = 0;
     channel.path = AnimationPathType::TRANSLATION;
-    asset->channels.push_back(channel);
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
 
     asset->joints = {0, 1, 99};  // 99 是无效索引（只有3个节点）
     asset->inverseBindMatrices = {mat4f(1.0f), mat4f(1.0f), mat4f(1.0f)};
@@ -351,53 +393,96 @@ TEST_F(AnimationAssetTest, ValidateInvalidJointIndex) {
 /**
  * 测试用例11：计算动画时长
  *
- * 测试目标：验证 getDuration() 能正确计算动画的总时长
+ * 测试目标：验证 Animation::getDuration() 能正确计算动画的总时长
  * 测试场景：
  *   - 添加两个采样器，时长分别为 2.0秒 和 3.5秒
  * 预期结果：getDuration() 返回 3.5（最大时长）
  * 验证点：动画时长应该是所有采样器中最大的时间值
  */
 TEST_F(AnimationAssetTest, GetDuration) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     // 添加第一个采样器（时长 2.0秒）
     AnimationSampler sampler1;
     sampler1.times = {0.0f, 1.0f, 2.0f};
     sampler1.values = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f};
-    asset->samplers.push_back(sampler1);
+    anim.samplers.push_back(sampler1);
 
     // 添加第二个采样器（时长 3.5秒，更长）
     AnimationSampler sampler2;
     sampler2.times = {0.0f, 0.5f, 3.5f};
     sampler2.values = {0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f};
-    asset->samplers.push_back(sampler2);
+    anim.samplers.push_back(sampler2);
 
     // 时长应该是所有采样器的最大时间值
-    EXPECT_FLOAT_EQ(asset->getDuration(), 3.5f);
+    EXPECT_FLOAT_EQ(anim.getDuration(), 3.5f);
 }
 
 /**
  * 测试用例12：空资产的时长
  *
- * 测试目标：验证没有动画数据的资产时长为 0
- * 测试场景：创建空的 AnimationAsset
+ * 测试目标：验证没有动画数据的动画时长为 0
+ * 测试场景：创建空的 Animation
  * 预期结果：getDuration() 返回 0.0
  * 验证点：边界情况处理
  */
 TEST_F(AnimationAssetTest, GetDurationEmptyAsset) {
-    AnimationAsset emptyAsset;
-    EXPECT_FLOAT_EQ(emptyAsset.getDuration(), 0.0f);
+    AnimationAsset::Animation emptyAnim;
+    emptyAnim.name = "Empty";
+    EXPECT_FLOAT_EQ(emptyAnim.getDuration(), 0.0f);
 }
 
 /**
- * 测试用例13：动画名称的 Getter/Setter
+ * 测试用例13：多动画访问
  *
- * 测试目标：验证动画名称的设置和获取功能
- * 测试场景：设置名称为 "TestAnimation"，然后读取
- * 预期结果：getName() 返回设置的名称
- * 验证点：基础属性访问
+ * 测试目标：验证 getAnimationCount(), getAnimation(), getAnimationByName() 功能
+ * 测试场景：
+ *   - 添加两个动画："idle" 和 "walk"
+ *   - 测试按索引访问和按名称访问
+ * 预期结果：
+ *   - getAnimationCount() 返回 2
+ *   - 能够按索引和名称正确访问动画
+ * 验证点：多动画支持的基础功能
  */
-TEST_F(AnimationAssetTest, NameGetterSetter) {
-    asset->setName("TestAnimation");
-    EXPECT_EQ(asset->getName(), "TestAnimation");
+TEST_F(AnimationAssetTest, MultipleAnimations) {
+    // 添加第一个动画
+    AnimationAsset::Animation idle;
+    idle.name = "idle";
+    AnimationSampler sampler1;
+    sampler1.times = {0.0f, 1.0f};
+    sampler1.values = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    idle.samplers.push_back(sampler1);
+    asset->animations.push_back(std::move(idle));
+
+    // 添加第二个动画
+    AnimationAsset::Animation walk;
+    walk.name = "walk";
+    AnimationSampler sampler2;
+    sampler2.times = {0.0f, 0.5f, 1.0f};
+    sampler2.values = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    walk.samplers.push_back(sampler2);
+    asset->animations.push_back(std::move(walk));
+
+    // 测试动画数量
+    EXPECT_EQ(asset->getAnimationCount(), 2);
+
+    // 测试按索引访问
+    EXPECT_EQ(asset->getAnimation(0).name, "idle");
+    EXPECT_EQ(asset->getAnimation(1).name, "walk");
+
+    // 测试按名称访问
+    const auto* idleAnim = asset->getAnimationByName("idle");
+    ASSERT_NE(idleAnim, nullptr);
+    EXPECT_EQ(idleAnim->name, "idle");
+
+    const auto* walkAnim = asset->getAnimationByName("walk");
+    ASSERT_NE(walkAnim, nullptr);
+    EXPECT_EQ(walkAnim->name, "walk");
+
+    // 测试不存在的动画
+    const auto* nonexistent = asset->getAnimationByName("run");
+    EXPECT_EQ(nonexistent, nullptr);
 }
 
 /**
@@ -440,6 +525,9 @@ TEST_F(AnimationAssetTest, NodeStructure) {
  * - 单位四元数 (0,0,0,1) 表示无旋转
  */
 TEST_F(AnimationAssetTest, RotationChannel) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     // 测试旋转通道，使用四元数数据（每个关键帧4个值）
     AnimationSampler sampler;
     sampler.times = {0.0f, 1.0f};
@@ -448,13 +536,15 @@ TEST_F(AnimationAssetTest, RotationChannel) {
         0.0f, 0.707f, 0.0f, 0.707f    // t=1: 绕Y轴旋转90度
     };
     sampler.interpolation = AnimationInterpolationType::LINEAR;  // 线性插值（slerp）
-    asset->samplers.push_back(sampler);
+    anim.samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 1;
     channel.samplerIndex = 0;
     channel.path = AnimationPathType::ROTATION;  // 旋转动画
-    asset->channels.push_back(channel);
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
 
     EXPECT_TRUE(asset->validate());
 }
@@ -477,6 +567,9 @@ TEST_F(AnimationAssetTest, RotationChannel) {
  * - 切线用于控制曲线的形状和速度
  */
 TEST_F(AnimationAssetTest, CubicSplineInterpolation) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
     // CUBICSPLINE 需要 3倍 的数据量（入切线、值、出切线）
     AnimationSampler sampler;
     sampler.times = {0.0f, 1.0f};
@@ -492,15 +585,159 @@ TEST_F(AnimationAssetTest, CubicSplineInterpolation) {
         0.0f, 0.0f, 0.0f   // 出切线
     };
     sampler.interpolation = AnimationInterpolationType::CUBICSPLINE;  // 三次样条插值
-    asset->samplers.push_back(sampler);
+    anim.samplers.push_back(sampler);
 
     AnimationChannel channel;
     channel.targetNodeIndex = 1;
     channel.samplerIndex = 0;
     channel.path = AnimationPathType::TRANSLATION;  // 平移动画
-    asset->channels.push_back(channel);
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
 
     EXPECT_TRUE(asset->validate());
+}
+
+/**
+ * 测试用例17：检测平移动画数据不足
+ *
+ * 测试目标：验证 validate() 能检测出平移动画采样器的值数量不足
+ * 测试场景：
+ *   - 创建一个平移动画采样器，有2个关键帧
+ *   - 平移动画需要每个关键帧3个值（x,y,z），共需要 2*3=6 个值
+ *   - 实际只提供4个值（数量不足）
+ * 预期结果：validate() 返回 false
+ * 验证点：采样器数据长度必须与路径类型匹配
+ */
+TEST_F(AnimationAssetTest, ValidateTranslationInsufficientValues) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
+    AnimationSampler sampler;
+    sampler.times = {0.0f, 1.0f};  // 2个关键帧
+    // 平移需要 2 * 3 = 6 个值，但只提供了4个
+    sampler.values = {0.0f, 0.0f, 0.0f, 1.0f};
+    sampler.interpolation = AnimationInterpolationType::LINEAR;
+    anim.samplers.push_back(sampler);
+
+    AnimationChannel channel;
+    channel.targetNodeIndex = 1;
+    channel.samplerIndex = 0;
+    channel.path = AnimationPathType::TRANSLATION;
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
+
+    EXPECT_FALSE(asset->validate());  // 应该检测到数据不足
+}
+
+/**
+ * 测试用例18：检测旋转动画数据数量不正确
+ *
+ * 测试目标：验证 validate() 能检测出旋转动画采样器的值数量不正确
+ * 测试场景：
+ *   - 创建一个旋转动画采样器，有2个关键帧
+ *   - 旋转动画需要每个关键帧4个值（四元数：x,y,z,w），共需要 2*4=8 个值
+ *   - 实际只提供6个值（不是4的倍数）
+ * 预期结果：validate() 返回 false
+ * 验证点：旋转动画必须提供四元数格式的数据，值数量必须是4的倍数
+ */
+TEST_F(AnimationAssetTest, ValidateRotationInvalidValueCount) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
+    AnimationSampler sampler;
+    sampler.times = {0.0f, 1.0f};  // 2个关键帧
+    // 旋转需要 2 * 4 = 8 个值，但只提供了6个（不是4的倍数）
+    sampler.values = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+    sampler.interpolation = AnimationInterpolationType::LINEAR;
+    anim.samplers.push_back(sampler);
+
+    AnimationChannel channel;
+    channel.targetNodeIndex = 1;
+    channel.samplerIndex = 0;
+    channel.path = AnimationPathType::ROTATION;
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
+
+    EXPECT_FALSE(asset->validate());  // 应该检测到数据数量错误
+}
+
+/**
+ * 测试用例19：检测三次样条插值数据不足
+ *
+ * 测试目标：验证 validate() 能检测出 CUBICSPLINE 插值的数据不足
+ * 测试场景：
+ *   - 使用 CUBICSPLINE 插值，有2个关键帧
+ *   - 平移动画 + CUBICSPLINE 需要：2关键帧 * 3值/关键帧 * 3倍(切线) = 18个值
+ *   - 实际只提供6个值（只够 LINEAR 插值）
+ * 预期结果：validate() 返回 false
+ * 验证点：CUBICSPLINE 的数据量必须是 LINEAR 的3倍
+ */
+TEST_F(AnimationAssetTest, ValidateCubicSplineInsufficientValues) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
+    AnimationSampler sampler;
+    sampler.times = {0.0f, 1.0f};  // 2个关键帧
+    // CUBICSPLINE 需要 2 * 3 * 3 = 18 个值，但只提供了 2 * 3 = 6 个（LINEAR的量）
+    sampler.values = {
+        0.0f, 0.0f, 0.0f,  // t=0
+        1.0f, 0.0f, 0.0f   // t=1
+    };
+    sampler.interpolation = AnimationInterpolationType::CUBICSPLINE;  // 需要3倍数据
+    anim.samplers.push_back(sampler);
+
+    AnimationChannel channel;
+    channel.targetNodeIndex = 1;
+    channel.samplerIndex = 0;
+    channel.path = AnimationPathType::TRANSLATION;
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
+
+    EXPECT_FALSE(asset->validate());  // 应该检测到数据不足
+}
+
+/**
+ * 测试用例20：不使用骨骼名称映射表的节点查找
+ *
+ * 测试目标：验证 findNodeByName() 在没有预构建映射表时也能正确工作
+ * 测试场景：
+ *   - 创建一个新的 AnimationAsset，不调用 buildBoneNameMap()
+ *   - 直接使用 findNodeByName() 查找节点
+ * 预期结果：
+ *   - 能够通过线性搜索找到存在的节点
+ *   - 不存在的节点返回 -1
+ * 验证点：findNodeByName() 的回退逻辑（线性搜索）能正常工作
+ *
+ * 背景知识：
+ * - findNodeByName() 优先使用哈希表（O(1)查找）
+ * - 如果哈希表为空，回退到线性搜索（O(n)查找）
+ * - 这个测试确保回退路径也被正确实现
+ */
+TEST_F(AnimationAssetTest, FindNodeByNameWithoutBoneMap) {
+    // 创建新资产，不构建骨骼名称映射表
+    AnimationAsset assetWithoutMap;
+
+    // 添加节点
+    AnimationNode node1;
+    node1.name = "testNode1";
+    node1.parentIndex = -1;
+    assetWithoutMap.nodes.push_back(node1);
+
+    AnimationNode node2;
+    node2.name = "testNode2";
+    node2.parentIndex = 0;
+    assetWithoutMap.nodes.push_back(node2);
+
+    // 注意：这里故意不调用 buildBoneNameMap()，强制使用线性搜索
+
+    // 测试线性搜索路径
+    EXPECT_EQ(assetWithoutMap.findNodeByName("testNode1"), 0);
+    EXPECT_EQ(assetWithoutMap.findNodeByName("testNode2"), 1);
+    EXPECT_EQ(assetWithoutMap.findNodeByName("nonexistent"), -1);
 }
 
 int main(int argc, char** argv) {

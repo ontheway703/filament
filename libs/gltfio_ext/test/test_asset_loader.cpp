@@ -34,6 +34,8 @@
 
 #include <filament/Engine.h>
 
+#include <math/mat4.h>
+
 #include "materials/uberarchive.h"
 
 #include <fstream>
@@ -41,6 +43,7 @@
 
 using namespace filament;
 using namespace filament::gltfio_ext;
+using namespace filament::math;
 
 /**
  * 测试 Fixture
@@ -165,6 +168,7 @@ TEST_F(AssetLoaderTest, LoadValidAnimatedGLB) {
 
     // 如果文件不存在，跳过测试
     if (glbData.empty()) {
+        // TODO：直接报错，返回测试失败！
         GTEST_SKIP() << "Test file not found, skipping test";
     }
 
@@ -178,11 +182,13 @@ TEST_F(AssetLoaderTest, LoadValidAnimatedGLB) {
     EXPECT_GT(asset->nodes.size(), 0);
 
     // 验证动画数据
-    EXPECT_GT(asset->channels.size(), 0);
-    EXPECT_GT(asset->samplers.size(), 0);
+    EXPECT_GT(asset->getAnimationCount(), 0);
+    const auto& anim = asset->getAnimation(0);
+    EXPECT_GT(anim.channels.size(), 0);
+    EXPECT_GT(anim.samplers.size(), 0);
 
     // 验证动画时长
-    float duration = asset->getDuration();
+    float duration = anim.getDuration();
     EXPECT_GT(duration, 0.0f);
 
     // 验证 validate() 通过
@@ -226,12 +232,18 @@ TEST_F(AssetLoaderTest, NodeTreeExtraction) {
     for (size_t i = 0; i < nodeCount; ++i) {
         const AnimationNode& node = asset->nodes[i];
 
-        // 节点应该有名称（即使是空字符串）
-        EXPECT_GE(node.name.length(), 0);
+        // 节点名称应该非空（或有默认命名策略）
+        EXPECT_FALSE(node.name.empty()) << "Node " << i << " has empty name";
 
         // 父节点索引应该有效
-        EXPECT_TRUE(node.parentIndex == -1 ||
-                   (node.parentIndex >= 0 && node.parentIndex < static_cast<int>(nodeCount)));
+        if (node.parentIndex != -1) {
+            EXPECT_GE(node.parentIndex, 0) << "Node " << i << " has negative parent index";
+            EXPECT_LT(node.parentIndex, static_cast<int>(nodeCount))
+                << "Node " << i << " parent index out of range";
+            // 父节点不能指向自己（检测自循环）
+            EXPECT_NE(node.parentIndex, static_cast<int>(i))
+                << "Node " << i << " has circular parent reference";
+        }
 
         // 变换矩阵不应该全为零（至少对角线为单位矩阵）
         bool hasNonZero = false;
@@ -242,8 +254,14 @@ TEST_F(AssetLoaderTest, NodeTreeExtraction) {
                     break;
                 }
             }
+            if (hasNonZero) break;
         }
-        EXPECT_TRUE(hasNonZero);
+        EXPECT_TRUE(hasNonZero) << "Node " << i << " has zero transform matrix";
+
+        // skinIndex 有效性检查
+        if (node.skinIndex != -1) {
+            EXPECT_GE(node.skinIndex, 0) << "Node " << i << " has negative skin index";
+        }
     }
 
     mLoader->destroyAnimationAsset(asset);
@@ -312,16 +330,18 @@ TEST_F(AssetLoaderTest, AnimationChannelExtraction) {
 
     AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
     ASSERT_NE(asset, nullptr);
+    ASSERT_GT(asset->getAnimationCount(), 0);
 
-    size_t channelCount = asset->channels.size();
-    size_t samplerCount = asset->samplers.size();
+    const auto& anim = asset->getAnimation(0);
+    size_t channelCount = anim.channels.size();
+    size_t samplerCount = anim.samplers.size();
     size_t nodeCount = asset->nodes.size();
 
     ASSERT_GT(channelCount, 0);
 
     // 验证每个通道
     for (size_t i = 0; i < channelCount; ++i) {
-        const AnimationChannel& channel = asset->channels[i];
+        const AnimationChannel& channel = anim.channels[i];
 
         // 目标节点索引应该有效
         EXPECT_GE(channel.targetNodeIndex, 0);
@@ -361,13 +381,15 @@ TEST_F(AssetLoaderTest, AnimationSamplerExtraction) {
 
     AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
     ASSERT_NE(asset, nullptr);
+    ASSERT_GT(asset->getAnimationCount(), 0);
 
-    size_t samplerCount = asset->samplers.size();
+    const auto& anim = asset->getAnimation(0);
+    size_t samplerCount = anim.samplers.size();
     ASSERT_GT(samplerCount, 0);
 
     // 验证每个采样器
     for (size_t i = 0; i < samplerCount; ++i) {
-        const AnimationSampler& sampler = asset->samplers[i];
+        const AnimationSampler& sampler = anim.samplers[i];
 
         // 时间数组不应为空
         EXPECT_GT(sampler.times.size(), 0);
@@ -448,12 +470,177 @@ TEST_F(AssetLoaderTest, MultipleLoadsOfSameFile) {
 
     // 两个资产应该有相同的数据
     EXPECT_EQ(asset1->nodes.size(), asset2->nodes.size());
-    EXPECT_EQ(asset1->channels.size(), asset2->channels.size());
-    EXPECT_EQ(asset1->samplers.size(), asset2->samplers.size());
+    EXPECT_EQ(asset1->getAnimationCount(), asset2->getAnimationCount());
+    if (asset1->getAnimationCount() > 0 && asset2->getAnimationCount() > 0) {
+        const auto& anim1 = asset1->getAnimation(0);
+        const auto& anim2 = asset2->getAnimation(0);
+        EXPECT_EQ(anim1.channels.size(), anim2.channels.size());
+        EXPECT_EQ(anim1.samplers.size(), anim2.samplers.size());
+    }
 
     // 清理
     mLoader->destroyAnimationAsset(asset1);
     mLoader->destroyAnimationAsset(asset2);
+}
+
+/**
+ * 测试用例10：加载 animation-only GLB 文件
+ *
+ * 测试目标：验证能正确加载 export_meshes=False 导出的 GLB
+ * 测试场景：加载只包含骨骼和动画、不包含 mesh 几何体的 GLB
+ * 预期结果：
+ * - 成功加载 AnimationAsset
+ * - 节点数量 > 0
+ * - 动画通道和采样器存在
+ * - 不会创建 mesh 相关的 Filament 对象
+ * 验证点：支持动画与 mesh 解耦的核心功能
+ */
+TEST_F(AssetLoaderTest, LoadAnimationOnlyGLB) {
+    // 加载 animation-only GLB 文件
+    std::vector<uint8_t> glbData = loadFile(
+        "ecorche_animation_only.glb"
+    );
+
+    // 如果文件不存在，跳过测试
+    if (glbData.empty()) {
+        // TODO：应该直接报错，返回测试失败！
+        GTEST_SKIP() << "ecorche_animation_only.glb not found, skipping test";
+    }
+
+    // 加载动画资产
+    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+
+    // 验证资产加载成功
+    ASSERT_NE(asset, nullptr) << "Failed to load animation-only GLB";
+
+    // 验证节点树存在（即使没有 mesh，骨骼节点也应该被提取）
+    EXPECT_GT(asset->nodes.size(), 0) << "Animation-only GLB should have nodes";
+
+    // 验证动画数据存在
+    EXPECT_GT(asset->getAnimationCount(), 0) << "Animation-only GLB should have animations";
+    const auto& anim = asset->getAnimation(0);
+    EXPECT_GT(anim.channels.size(), 0) << "Animation-only GLB should have channels";
+    EXPECT_GT(anim.samplers.size(), 0) << "Animation-only GLB should have samplers";
+
+    // 验证动画时长有效
+    float duration = anim.getDuration();
+    EXPECT_GT(duration, 0.0f) << "Animation duration should be positive";
+
+    // 验证 validate() 通过
+    EXPECT_TRUE(asset->validate()) << "Animation-only asset validation failed";
+
+    // 清理
+    mLoader->destroyAnimationAsset(asset);
+}
+
+/**
+ * 测试用例11：验证无蒙皮数据的情况
+ *
+ * 测试目标：验证没有蒙皮数据时，相关字段为空
+ * 测试场景：加载不包含蒙皮数据的 GLB
+ * 预期结果：
+ * - joints 数组为空
+ * - inverseBindMatrices 数组为空
+ * - 所有节点的 skinIndex 为 -1
+ * 验证点：正确处理无蒙皮数据的边界情况
+ */
+TEST_F(AssetLoaderTest, NoSkinData) {
+    // 使用不包含蒙皮数据的 GLB（AnimatedMorphCube只有morph targets动画）
+    std::vector<uint8_t> glbData = loadFile(
+        "AnimatedMorphCube.glb"
+    );
+
+    if (glbData.empty()) {
+        GTEST_SKIP() << "Test file not found";
+    }
+
+    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    ASSERT_NE(asset, nullptr);
+
+    // 验证蒙皮数据为空
+    EXPECT_EQ(asset->joints.size(), 0) << "Non-skinned model should have empty joints";
+    EXPECT_EQ(asset->inverseBindMatrices.size(), 0)
+        << "Non-skinned model should have empty inverseBindMatrices";
+
+    // 验证所有节点的 skinIndex 都是 -1
+    for (size_t i = 0; i < asset->nodes.size(); ++i) {
+        EXPECT_EQ(asset->nodes[i].skinIndex, -1)
+            << "Node " << i << " should not reference a skin";
+    }
+
+    mLoader->destroyAnimationAsset(asset);
+}
+
+/**
+ * 测试用例12：验证蒙皮数据提取
+ *
+ * 测试目标：验证从包含蒙皮数据的 GLB 中正确提取 joints 和 inverseBindMatrices
+ * 测试场景：加载完整的骨骼动画模型
+ * 预期结果：
+ * - joints 数组非空且有效
+ * - inverseBindMatrices 数量与 joints 一致
+ * - 每个 joint 索引指向有效节点
+ * - 逆绑定矩阵非零
+ * - 节点的 skinIndex 字段有效
+ * 验证点：蒙皮数据的完整性和一致性
+ */
+TEST_F(AssetLoaderTest, SkinDataExtraction) {
+    // 使用包含蒙皮数据的完整模型
+    std::vector<uint8_t> glbData = loadFile(
+        "ecorche_full.glb"
+    );
+
+    if (glbData.empty()) {
+        GTEST_SKIP() << "ecorche_full.glb not found, skipping test";
+    }
+
+    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    ASSERT_NE(asset, nullptr);
+
+    // 1. 验证 joints 数组存在且非空
+    EXPECT_GT(asset->joints.size(), 0) << "Skinned model should have joints";
+
+    // 2. 验证 inverseBindMatrices 数量与 joints 数量一致
+    EXPECT_EQ(asset->inverseBindMatrices.size(), asset->joints.size())
+        << "Inverse bind matrices count should match joints count";
+
+    // 3. 验证每个 joint 索引指向有效节点
+    size_t nodeCount = asset->nodes.size();
+    for (size_t i = 0; i < asset->joints.size(); ++i) {
+        int jointIndex = asset->joints[i];
+        EXPECT_GE(jointIndex, 0) << "Joint " << i << " has negative index";
+        EXPECT_LT(jointIndex, static_cast<int>(nodeCount))
+            << "Joint " << i << " index out of range";
+    }
+
+    // 4. 验证逆绑定矩阵不全为零
+    for (size_t i = 0; i < asset->inverseBindMatrices.size(); ++i) {
+        const mat4f& matrix = asset->inverseBindMatrices[i];
+        bool hasNonZero = false;
+        for (int row = 0; row < 4; ++row) {
+            for (int col = 0; col < 4; ++col) {
+                if (matrix[row][col] != 0.0f) {
+                    hasNonZero = true;
+                    break;
+                }
+            }
+            if (hasNonZero) break;
+        }
+        EXPECT_TRUE(hasNonZero) << "Inverse bind matrix " << i << " is all zeros";
+    }
+
+    // 5. 验证至少有一些节点引用了 skin
+    bool foundSkinnedNode = false;
+    for (const AnimationNode& node : asset->nodes) {
+        if (node.skinIndex != -1) {
+            foundSkinnedNode = true;
+            // 对于单个 skin 的情况，skinIndex 应该是 0
+            EXPECT_EQ(node.skinIndex, 0) << "Currently only single skin is supported";
+        }
+    }
+    EXPECT_TRUE(foundSkinnedNode) << "Skinned model should have nodes referencing the skin";
+
+    mLoader->destroyAnimationAsset(asset);
 }
 
 // ================================================================================================

@@ -2024,14 +2024,14 @@ static void extractNodes(const cgltf_data* srcData, AnimationAsset* dstAsset) {
  */
 static bool extractAnimationChannels(const cgltf_animation* srcAnim,
                                      const cgltf_data* srcData,
-                                     AnimationAsset* dstAsset) {
-    if (!srcAnim || !srcData || !dstAsset) {
+                                     AnimationAsset::Animation* dstAnimation) {
+    if (!srcAnim || !srcData || !dstAnimation) {
         return false;
     }
 
     // 预分配空间
-    dstAsset->channels.reserve(srcAnim->channels_count);
-    dstAsset->samplers.reserve(srcAnim->samplers_count);
+    dstAnimation->channels.reserve(srcAnim->channels_count);
+    dstAnimation->samplers.reserve(srcAnim->samplers_count);
 
     // 提取所有采样器（先提取，因为 channel 会引用采样器索引）
     for (cgltf_size i = 0; i < srcAnim->samplers_count; ++i) {
@@ -2041,7 +2041,7 @@ static bool extractAnimationChannels(const cgltf_animation* srcAnim,
 
         // 采样器提取需要路径类型，但我们还没有通道信息
         // 这里先创建一个临时的采样器，稍后在处理通道时填充
-        dstAsset->samplers.push_back(std::move(dstSampler));
+        dstAnimation->samplers.push_back(std::move(dstSampler));
     }
 
     // 提取所有通道
@@ -2071,23 +2071,23 @@ static bool extractAnimationChannels(const cgltf_animation* srcAnim,
         }
         dstChannel.samplerIndex = static_cast<int>(srcChannel->sampler - srcAnim->samplers);
         if (dstChannel.samplerIndex < 0 ||
-            dstChannel.samplerIndex >= static_cast<int>(dstAsset->samplers.size())) {
+            dstChannel.samplerIndex >= static_cast<int>(dstAnimation->samplers.size())) {
             slog.e << "Animation channel " << i << " sampler index out of range" << io::endl;
             continue;
         }
 
         // 现在提取对应的采样器数据（使用通道的路径类型）
         if (!extractSampler(srcChannel->sampler,
-                           &dstAsset->samplers[dstChannel.samplerIndex],
+                           &dstAnimation->samplers[dstChannel.samplerIndex],
                            dstChannel.path)) {
             slog.e << "Failed to extract sampler for channel " << i << io::endl;
             continue;
         }
 
-        dstAsset->channels.push_back(std::move(dstChannel));
+        dstAnimation->channels.push_back(std::move(dstChannel));
     }
 
-    return !dstAsset->channels.empty();
+    return !dstAnimation->channels.empty();
 }
 
 /**
@@ -2191,29 +2191,40 @@ AnimationAsset* AssetLoader::loadAnimationAsset(const uint8_t* bytes, uint32_t n
         slog.w << "No nodes found in glTF file" << io::endl;
     }
 
-    // 6. 提取动画数据（只提取第一个动画）
+    // 6. 提取所有动画数据
     if (srcData->animations_count > 0) {
-        const cgltf_animation* srcAnim = &srcData->animations[0];
+        asset->animations.reserve(srcData->animations_count);
 
-        // 如果有动画名称，设置到资产
-        if (srcAnim->name) {
-            asset->setName(srcAnim->name);
-        } else {
-            asset->setName("Animation0");
+        for (cgltf_size i = 0; i < srcData->animations_count; ++i) {
+            const cgltf_animation* srcAnim = &srcData->animations[i];
+
+            AnimationAsset::Animation animation;
+
+            // 设置动画名称
+            if (srcAnim->name) {
+                animation.name = srcAnim->name;
+            } else {
+                animation.name = "Animation" + std::to_string(i);
+            }
+
+            // 提取通道和采样器
+            if (!extractAnimationChannels(srcAnim, srcData, &animation)) {
+                slog.w << "Failed to extract animation " << i << " ('" << animation.name
+                       << "'), skipping" << io::endl;
+                continue;
+            }
+
+            asset->animations.push_back(std::move(animation));
         }
 
-        // 提取通道和采样器
-        if (!extractAnimationChannels(srcAnim, srcData, asset)) {
-            slog.e << "Failed to extract animation channels" << io::endl;
+        if (asset->animations.empty()) {
+            slog.e << "Failed to extract any animations from glTF file" << io::endl;
             cgltf_free(srcData);
             delete asset;
             return nullptr;
         }
 
-        if (srcData->animations_count > 1) {
-            slog.w << "glTF file contains " << srcData->animations_count
-                   << " animations, but only the first one will be loaded" << io::endl;
-        }
+        slog.i << "Loaded " << asset->animations.size() << " animation(s) from glTF file" << io::endl;
     } else {
         slog.w << "No animations found in glTF file" << io::endl;
     }
@@ -2246,11 +2257,19 @@ AnimationAsset* AssetLoader::loadAnimationAsset(const uint8_t* bytes, uint32_t n
     // 10. 构建节点名称映射以加速查找
     asset->buildBoneNameMap();
 
+    // Log summary information
     slog.i << "Successfully loaded AnimationAsset: "
            << asset->nodes.size() << " nodes, "
-           << asset->channels.size() << " channels, "
-           << asset->samplers.size() << " samplers, "
-           << "duration=" << asset->getDuration() << "s" << io::endl;
+           << asset->getAnimationCount() << " animation(s)" << io::endl;
+
+    // Log details for each animation
+    for (size_t i = 0; i < asset->getAnimationCount(); ++i) {
+        const auto& anim = asset->getAnimation(i);
+        slog.i << "  Animation " << i << " ('" << anim.name << "'): "
+               << anim.channels.size() << " channels, "
+               << anim.samplers.size() << " samplers, "
+               << "duration=" << anim.getDuration() << "s" << io::endl;
+    }
 
     return asset;
 }
