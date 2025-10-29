@@ -254,6 +254,17 @@ private:
     //! 示例：["LeftHandThumb", "RightHandThumb"] 表示这两个骨骼在网格中不存在
     std::vector<std::string> mUnmatchedBones;
 
+    // === 匹配统计信息 ===
+
+    //! 应参与匹配的节点数量（排除空名称节点）
+    //! 用途：计算匹配率的分母
+    //! 空名称节点通常是辅助节点、变换节点等，不应计入匹配率
+    size_t mEligibleNodeCount = 0;
+
+    //! 成功匹配的节点数量
+    //! 用途：计算匹配率的分子
+    size_t mMatchedNodeCount = 0;
+
     // === 容差阈值 ===
 
     //! 容差阈值：10% 不匹配是可接受的

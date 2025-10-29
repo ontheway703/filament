@@ -1961,11 +1961,13 @@ bool extractSampler(const cgltf_animation_sampler* srcSampler,
         expectedCount *= 3;
     }
 
-    dstSampler->values.resize(outputAccessor->count * componentsPerKeyframe);
+    // 使用 expectedCount 来分配内存，避免对 WEIGHTS 类型重复计算导致扩容错误
+    // 对于 WEIGHTS: outputAccessor->count 已经是总数据量，不需要再乘以 componentsPerKeyframe
+    dstSampler->values.resize(expectedCount);
     numFloats = cgltf_accessor_unpack_floats(
         outputAccessor,
         dstSampler->values.data(),
-        outputAccessor->count * componentsPerKeyframe
+        expectedCount
     );
 
     if (numFloats != expectedCount) {
@@ -1994,8 +1996,13 @@ static void extractNodes(const cgltf_data* srcData, AnimationAsset* dstAsset) {
 
         AnimationNode dstNode;
 
-        // 复制节点名称
-        dstNode.name = getNodeName(srcNode, "");
+        // 复制节点名称（保持无名节点为空字符串，避免 buildBoneNameMap 中的重名覆盖）
+        // 只有当节点明确有名称时才赋值，否则保持空字符串让 buildBoneNameMap 跳过
+        if (srcNode->name && srcNode->name[0] != '\0') {
+            dstNode.name = srcNode->name;
+        } else {
+            dstNode.name = "";  // 空名称，buildBoneNameMap 会自动跳过
+        }
 
         // 计算父节点索引
         if (srcNode->parent) {

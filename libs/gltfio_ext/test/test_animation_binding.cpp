@@ -136,7 +136,11 @@ TEST_F(AnimationBindingTest, BuildMappingSuccess) {
     auto animData = loadFile("ecorche_animation_only.glb");
 
     if (meshData.empty() || animData.empty()) {
-        GTEST_SKIP() << "Test files not found, skipping test";
+        FAIL() << "Test files 'ecorche_full.glb' or 'ecorche_animation_only.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_animation_binding";
     }
 
     // 创建资产
@@ -146,7 +150,9 @@ TEST_F(AnimationBindingTest, BuildMappingSuccess) {
     if (!meshAsset || !animAsset) {
         if (meshAsset) mLoader->destroyAsset(meshAsset);
         if (animAsset) mLoader->destroyAnimationAsset(animAsset);
-        GTEST_SKIP() << "Failed to load assets, skipping test";
+        FAIL() << "Failed to load assets from GLB files.\n"
+               << "The GLB files may be corrupted or in an unsupported format.\n"
+               << "Please verify the test files are valid glTF 2.0 files.";
     }
 
     // 检查是否有命名实体
@@ -162,7 +168,9 @@ TEST_F(AnimationBindingTest, BuildMappingSuccess) {
     if (namedEntityCount == 0) {
         mLoader->destroyAnimationAsset(animAsset);
         mLoader->destroyAsset(meshAsset);
-        GTEST_SKIP() << "No named entities in mesh, cannot test bone mapping";
+        FAIL() << "No named entities in mesh, cannot test bone mapping.\n"
+               << "AssetConfiguration.names was not configured properly.\n"
+               << "NameComponentManager is required for AnimationBinding to work.";
     }
 
     // 创建 AnimationBinding
@@ -191,7 +199,11 @@ TEST_F(AnimationBindingTest, TransformInstanceValid) {
     auto animData = loadFile("ecorche_animation_only.glb");
 
     if (meshData.empty() || animData.empty()) {
-        GTEST_SKIP() << "Test files not found, skipping test";
+        FAIL() << "Test files 'ecorche_full.glb' or 'ecorche_animation_only.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_animation_binding";
     }
 
     // 创建资产
@@ -201,7 +213,9 @@ TEST_F(AnimationBindingTest, TransformInstanceValid) {
     if (!meshAsset || !animAsset) {
         if (meshAsset) mLoader->destroyAsset(meshAsset);
         if (animAsset) mLoader->destroyAnimationAsset(animAsset);
-        GTEST_SKIP() << "Failed to load assets, skipping test";
+        FAIL() << "Failed to load assets from GLB files.\n"
+               << "The GLB files may be corrupted or in an unsupported format.\n"
+               << "Please verify the test files are valid glTF 2.0 files.";
     }
 
     // 创建 AnimationBinding

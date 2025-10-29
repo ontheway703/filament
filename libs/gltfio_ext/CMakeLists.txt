@@ -288,6 +288,16 @@ if (TNT_DEV AND NOT WEBGL AND NOT ANDROID AND NOT IOS)
         target_compile_options(${ANIMATION_BINDING_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
     endif()
     set_target_properties(${ANIMATION_BINDING_TEST_TARGET} PROPERTIES FOLDER Tests)
+
+    # Animator test (external animation support)
+    set(ANIMATOR_TEST_TARGET test_animator)
+    add_executable(${ANIMATOR_TEST_TARGET} test/test_animator.cpp)
+    add_dependencies(${ANIMATOR_TEST_TARGET} test_gltfio_ext_files)
+    target_link_libraries(${ANIMATOR_TEST_TARGET} PRIVATE ${TARGET} gtest uberarchive_ext)
+    if (NOT MSVC)
+        target_compile_options(${ANIMATOR_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
+    endif()
+    set_target_properties(${ANIMATOR_TEST_TARGET} PROPERTIES FOLDER Tests)
 endif()
 
 # ==================================================================================================

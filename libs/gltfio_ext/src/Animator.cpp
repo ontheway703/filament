@@ -15,6 +15,8 @@
  */
 
 #include <gltfio_ext/Animator.h>
+#include <gltfio_ext/AnimationAsset.h>
+#include <gltfio_ext/AnimationBinding.h>
 #include <gltfio_ext/math.h>
 
 #include "FFilamentAsset.h"
@@ -78,6 +80,13 @@ struct AnimatorImpl {
     TrsTransformManager* trsTransformManager;
     vector<float> weights;
     FixedCapacityVector<mat4f> crossFade;
+
+    // === 外部动画支持 (External animation support) ===
+    AnimationAsset* mExternalAnimAsset = nullptr;           // 弱引用，不持有所有权
+    std::unique_ptr<AnimationBinding> mExternalBinding;      // 骨骼名称映射
+    std::vector<Animation> mExternalAnimations;              // 转换后的外部动画数据数组（支持多个动画）
+    size_t mInternalAnimCount = 0;                          // 内部动画数量（用于索引区分）
+
     void addChannels(const FixedCapacityVector<Entity>& nodeMap, const cgltf_animation& srcAnim,
             Animation& dst);
     void applyAnimation(const Channel& channel, float t, size_t prevIndex, size_t nextIndex);
@@ -85,6 +94,21 @@ struct AnimatorImpl {
     void applyCrossFade(float alpha);
     void resetBoneMatrices(FFilamentInstance* instance);
     void updateBoneMatrices(FFilamentInstance* instance);
+
+    // === 外部动画方法 (External animation methods) ===
+    bool loadExternalAnimation(AnimationAsset* animAsset, filament::Engine* engine);
+
+    bool isExternalAnimationIndex(size_t index) const {
+        return index >= mInternalAnimCount && !mExternalAnimations.empty();
+    }
+
+    bool hasExternalAnimations() const {
+        return mExternalAnimAsset != nullptr && !mExternalAnimations.empty();
+    }
+
+    size_t getExternalAnimationCount() const {
+        return hasExternalAnimations() ? mExternalAnimations.size() : 0;
+    }
 };
 
 static void createSampler(const cgltf_animation_sampler& src, Sampler& dst) {
@@ -158,6 +182,65 @@ static void setTransformType(const cgltf_animation_channel& src, Channel& dst) {
             GLTFIO_EXT_WARN("Unsupported channel path.");
             break;
     }
+}
+
+// ========================================
+// AnimationAsset → Animator::Animation 转换逻辑
+// Conversion logic from AnimationAsset to Animator::Animation
+// ========================================
+
+/**
+ * 将 AnimationAsset::AnimationSampler 转换为 Animator::Sampler
+ * Converts AnimationAsset::AnimationSampler (vector) to Animator::Sampler (map)
+ *
+ * 核心转换：
+ * - times: vector<float> → map<float, size_t>（用于 O(log n) 二分查找）
+ * - values: vector<float> → vector<float>（直接复制）
+ * - interpolation: 枚举类型转换
+ */
+static void convertSampler(const AnimationSampler& srcSampler, Sampler& dstSampler) {
+    // 1. 构建时间映射表：vector → map
+    dstSampler.times.clear();
+    for (size_t i = 0; i < srcSampler.times.size(); i++) {
+        dstSampler.times[srcSampler.times[i]] = i;
+    }
+
+    // 2. 直接复制值数组（无需转换）
+    dstSampler.values = srcSampler.values;
+
+    // 3. 转换插值类型枚举
+    switch (srcSampler.interpolation) {
+        case AnimationInterpolationType::LINEAR:
+            dstSampler.interpolation = Sampler::LINEAR;
+            break;
+        case AnimationInterpolationType::STEP:
+            dstSampler.interpolation = Sampler::STEP;
+            break;
+        case AnimationInterpolationType::CUBICSPLINE:
+            dstSampler.interpolation = Sampler::CUBIC;
+            break;
+    }
+}
+
+/**
+ * 将 AnimationAsset::Animation 转换为 Animator::Animation
+ * Converts AnimationAsset::Animation to Animator::Animation
+ *
+ * 注意：此函数只转换 samplers 和元数据（name, duration）
+ * channels 需要 AnimationBinding 的映射信息，在 loadExternalAnimation 中单独处理
+ */
+static void convertAnimation(const AnimationAsset::Animation& srcAnim, Animation& dstAnim) {
+    dstAnim.name = srcAnim.name;
+    dstAnim.duration = srcAnim.getDuration();
+
+    // 转换所有 samplers
+    dstAnim.samplers.resize(srcAnim.samplers.size());
+    for (size_t i = 0; i < srcAnim.samplers.size(); i++) {
+        convertSampler(srcAnim.samplers[i], dstAnim.samplers[i]);
+    }
+
+    // channels 暂时为空，由 loadExternalAnimation 填充
+    dstAnim.channels.clear();
 }
 
 static bool validateAnimation(const cgltf_animation& anim) {
@@ -236,6 +319,9 @@ Animator::Animator(FFilamentAsset const* asset, FFilamentInstance* instance) {
             }
         }
     }
+
+    // 记录内部动画数量（用于区分内部/外部动画索引）
+    mImpl->mInternalAnimCount = mImpl->animations.size();
 }
 
 void Animator::applyCrossFade(size_t previousAnimIndex, float previousAnimTime, float alpha) {
@@ -259,15 +345,38 @@ Animator::~Animator() {
 }
 
 size_t Animator::getAnimationCount() const {
-    return mImpl->animations.size();
+    size_t count = mImpl->animations.size();
+    count += mImpl->getExternalAnimationCount();  // 添加所有外部动画
+    return count;
 }
 
 void Animator::applyAnimation(size_t animationIndex, float time) const {
-    const Animation& anim = mImpl->animations[animationIndex];
-    time = time == anim.duration ? time : fmod(time, anim.duration);
+    // 确定使用内部动画还是外部动画
+    const Animation* anim = nullptr;
+
+    if (mImpl->isExternalAnimationIndex(animationIndex)) {
+        // 外部动画
+        size_t extIndex = animationIndex - mImpl->mInternalAnimCount;
+        if (extIndex >= mImpl->mExternalAnimations.size()) {
+            slog.e << "Invalid external animation index: " << animationIndex
+                   << " (have " << mImpl->mExternalAnimations.size()
+                   << " external animations)" << io::endl;
+            return;
+        }
+        anim = &mImpl->mExternalAnimations[extIndex];
+    } else {
+        // 内部动画
+        if (animationIndex >= mImpl->animations.size()) {
+            slog.e << "Invalid animation index: " << animationIndex << io::endl;
+            return;
+        }
+        anim = &mImpl->animations[animationIndex];
+    }
+
+    time = time == anim->duration ? time : fmod(time, anim->duration);
     TransformManager& transformManager = *mImpl->transformManager;
     transformManager.openLocalTransformTransaction();
-    for (const auto& channel : anim.channels) {
+    for (const auto& channel : anim->channels) {
         const Sampler* sampler = channel.sourceData;
         if (sampler->times.size() < 2) {
             continue;
@@ -337,11 +446,58 @@ void Animator::updateBoneMatrices() {
 }
 
 float Animator::getAnimationDuration(size_t animationIndex) const {
+    if (mImpl->isExternalAnimationIndex(animationIndex)) {
+        size_t extIndex = animationIndex - mImpl->mInternalAnimCount;
+        if (extIndex >= mImpl->mExternalAnimations.size()) {
+            slog.e << "Invalid external animation index: " << animationIndex << io::endl;
+            return 0.0f;
+        }
+        return mImpl->mExternalAnimations[extIndex].duration;
+    }
+
+    if (animationIndex >= mImpl->animations.size()) {
+        slog.e << "Invalid internal animation index: " << animationIndex << io::endl;
+        return 0.0f;
+    }
     return mImpl->animations[animationIndex].duration;
 }
 
 const char* Animator::getAnimationName(size_t animationIndex) const {
+    if (mImpl->isExternalAnimationIndex(animationIndex)) {
+        size_t extIndex = animationIndex - mImpl->mInternalAnimCount;
+        if (extIndex >= mImpl->mExternalAnimations.size()) {
+            slog.e << "Invalid external animation index: " << animationIndex << io::endl;
+            return "";
+        }
+        return mImpl->mExternalAnimations[extIndex].name.c_str();
+    }
+
+    if (animationIndex >= mImpl->animations.size()) {
+        slog.e << "Invalid internal animation index: " << animationIndex << io::endl;
+        return "";
+    }
     return mImpl->animations[animationIndex].name.c_str();
+}
+
+// ========================================
+// 外部动画公共 API 实现
+// External Animation Public API Implementation
+// ========================================
+
+bool Animator::loadExternalAnimation(AnimationAsset* animAsset) {
+    return mImpl->loadExternalAnimation(animAsset, mImpl->asset->mEngine);
+}
+
+void Animator::unloadExternalAnimation() {
+    mImpl->mExternalAnimations.clear();
+    mImpl->mExternalBinding.reset();
+    mImpl->mExternalAnimAsset = nullptr;
+
+    slog.i << "External animation unloaded" << io::endl;
+}
+
+bool Animator::hasExternalAnimation() const {
+    return mImpl->hasExternalAnimations();
 }
 
 void AnimatorImpl::stashCrossFade() {
@@ -574,6 +730,115 @@ void AnimatorImpl::updateBoneMatrices(FFilamentInstance* instance) {
             renderableManager->setBones(renderable, boneMatrices.data(), boneMatrices.size());
         }
     }
+}
+
+/**
+ * 加载外部动画资产
+ * Loads external animation asset
+ *
+ * 流程：
+ * 1. 验证 AnimationAsset 有效性
+ * 2. 创建 AnimationBinding（骨骼名称映射）
+ * 3. 转换 AnimationAsset::Animation → Animator::Animation
+ * 4. 构建 channels（使用 AnimationBinding 映射 Entity）
+ * 5. 保存引用
+ */
+bool AnimatorImpl::loadExternalAnimation(AnimationAsset* animAsset, Engine* engine) {
+    // 1. 验证输入
+    if (!animAsset || !animAsset->validate()) {
+        slog.e << "Invalid AnimationAsset" << io::endl;
+        return false;
+    }
+
+    if (animAsset->getAnimationCount() == 0) {
+        slog.e << "AnimationAsset has no animations" << io::endl;
+        return false;
+    }
+
+    // 2. 保存旧状态（两段式更新 - Phase 1: 准备）
+    // 如果加载失败，需要恢复旧状态，防止状态不一致
+    if (mExternalAnimAsset) {
+        slog.w << "External animation already loaded, replacing" << io::endl;
+    }
+
+    // 3. 创建新的 AnimationBinding（骨骼名称映射）
+    // 注意：在临时变量中构建，不影响当前状态
+    auto newBinding = std::make_unique<AnimationBinding>(animAsset, asset, engine);
+
+    if (!newBinding->buildMapping()) {
+        slog.e << "Failed to build bone mapping for external animation" << io::endl;
+        float matchRate = newBinding->getMatchRate();
+        slog.e << "Match rate: " << (matchRate * 100.0f) << "%" << io::endl;
+        // 加载失败，旧状态保持不变
+        return false;
+    }
+
+    // 4. 转换所有动画到临时缓冲区
+    size_t animCount = animAsset->getAnimationCount();
+    std::vector<Animation> newAnimations(animCount);
+
+    auto& nodeToEntityMap = newBinding->getNodeToEntityMap();
+
+    for (size_t i = 0; i < animCount; i++) {
+        const auto& srcAnim = animAsset->getAnimation(i);
+
+        // 5. 转换动画数据
+        convertAnimation(srcAnim, newAnimations[i]);
+
+        // 6. 构建 channels（使用 AnimationBinding 映射）
+        auto& dstAnim = newAnimations[i];
+        const Sampler* samplers = dstAnim.samplers.data();
+
+        for (const auto& srcChannel : srcAnim.channels) {
+            int nodeIndex = srcChannel.targetNodeIndex;
+
+            // 查找对应的 Entity
+            auto it = nodeToEntityMap.find(nodeIndex);
+            if (it == nodeToEntityMap.end()) {
+                // 跳过未映射的骨骼（正常情况，不是所有骨骼都需要动画）
+                continue;
+            }
+
+            // 创建 Channel
+            Channel dstChannel;
+            dstChannel.targetEntity = it->second;
+            dstChannel.sourceData = samplers + srcChannel.samplerIndex;
+
+            // 转换路径类型
+            switch (srcChannel.path) {
+                case AnimationPathType::TRANSLATION:
+                    dstChannel.transformType = Channel::TRANSLATION;
+                    break;
+                case AnimationPathType::ROTATION:
+                    dstChannel.transformType = Channel::ROTATION;
+                    break;
+                case AnimationPathType::SCALE:
+                    dstChannel.transformType = Channel::SCALE;
+                    break;
+                case AnimationPathType::WEIGHTS:
+                    dstChannel.transformType = Channel::WEIGHTS;
+                    break;
+            }
+
+            dstAnim.channels.push_back(dstChannel);
+        }
+
+        slog.i << "Loaded external animation " << i << ": '" << dstAnim.name << "' "
+               << "(" << dstAnim.channels.size() << " channels, "
+               << "duration=" << dstAnim.duration << "s)" << io::endl;
+    }
+
+    // 7. 两段式更新 - Phase 2: 提交（所有准备工作成功，现在替换旧状态）
+    mExternalAnimations = std::move(newAnimations);
+    mExternalBinding = std::move(newBinding);
+    mExternalAnimAsset = animAsset;
+
+    // 8. 日志输出汇总
+    float matchRate = mExternalBinding->getMatchRate();
+    slog.i << "External animations loaded: " << animCount << " animations, "
+           << "bone match rate: " << (matchRate * 100.0f) << "%" << io::endl;
+
+    return true;
 }
 
 } // namespace filament::gltfio

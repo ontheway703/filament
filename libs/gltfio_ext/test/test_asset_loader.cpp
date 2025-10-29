@@ -166,10 +166,13 @@ TEST_F(AssetLoaderTest, LoadValidAnimatedGLB) {
         "AnimatedMorphCube.glb"
     );
 
-    // 如果文件不存在，跳过测试
+    // 如果文件不存在，测试失败
     if (glbData.empty()) {
-        // TODO：直接报错，返回测试失败！
-        GTEST_SKIP() << "Test file not found, skipping test";
+        FAIL() << "Test file 'AnimatedMorphCube.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
     // 加载动画资产
@@ -219,7 +222,11 @@ TEST_F(AssetLoaderTest, NodeTreeExtraction) {
     );
 
     if (glbData.empty()) {
-        GTEST_SKIP() << "Test file not found";
+        FAIL() << "Test file 'AnimatedMorphCube.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
     AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
@@ -281,7 +288,11 @@ TEST_F(AssetLoaderTest, NodeNameLookup) {
     );
 
     if (glbData.empty()) {
-        GTEST_SKIP() << "Test file not found";
+        FAIL() << "Test file 'AnimatedMorphCube.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
     AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
@@ -325,7 +336,11 @@ TEST_F(AssetLoaderTest, AnimationChannelExtraction) {
     );
 
     if (glbData.empty()) {
-        GTEST_SKIP() << "Test file not found";
+        FAIL() << "Test file 'AnimatedMorphCube.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
     AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
@@ -376,7 +391,11 @@ TEST_F(AssetLoaderTest, AnimationSamplerExtraction) {
     );
 
     if (glbData.empty()) {
-        GTEST_SKIP() << "Test file not found";
+        FAIL() << "Test file 'AnimatedMorphCube.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
     AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
@@ -427,7 +446,11 @@ TEST_F(AssetLoaderTest, AssetDestruction) {
     );
 
     if (glbData.empty()) {
-        GTEST_SKIP() << "Test file not found";
+        FAIL() << "Test file 'AnimatedMorphCube.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
     // 创建并销毁多个资产
@@ -457,7 +480,11 @@ TEST_F(AssetLoaderTest, MultipleLoadsOfSameFile) {
     );
 
     if (glbData.empty()) {
-        GTEST_SKIP() << "Test file not found";
+        FAIL() << "Test file 'AnimatedMorphCube.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
     // 加载两次
@@ -501,10 +528,13 @@ TEST_F(AssetLoaderTest, LoadAnimationOnlyGLB) {
         "ecorche_animation_only.glb"
     );
 
-    // 如果文件不存在，跳过测试
+    // 如果文件不存在，测试失败
     if (glbData.empty()) {
-        // TODO：应该直接报错，返回测试失败！
-        GTEST_SKIP() << "ecorche_animation_only.glb not found, skipping test";
+        FAIL() << "Test file 'ecorche_animation_only.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
     // 加载动画资产
@@ -551,7 +581,11 @@ TEST_F(AssetLoaderTest, NoSkinData) {
     );
 
     if (glbData.empty()) {
-        GTEST_SKIP() << "Test file not found";
+        FAIL() << "Test file 'AnimatedMorphCube.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
     AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
@@ -591,7 +625,11 @@ TEST_F(AssetLoaderTest, SkinDataExtraction) {
     );
 
     if (glbData.empty()) {
-        GTEST_SKIP() << "ecorche_full.glb not found, skipping test";
+        FAIL() << "Test file 'ecorche_full.glb' not found.\n"
+               << "Please ensure:\n"
+               << "  1. Tests are run from: out/cmake-debug/libs/gltfio_ext/\n"
+               << "  2. CMake build succeeded and copied test files\n"
+               << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
     AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());

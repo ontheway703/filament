@@ -25,6 +25,7 @@ namespace filament::gltfio_ext {
 struct FFilamentAsset;
 struct FFilamentInstance;
 struct AnimatorImpl;
+class AnimationAsset;
 
 /**
  * \class Animator Animator.h gltfio/Animator.h
@@ -93,6 +94,56 @@ public:
      * empty string if none was specified.
      */
     const char* getAnimationName(size_t animationIndex) const;
+
+    // ========================================
+    // 外部动画支持 (External Animation Support)
+    // ========================================
+
+    /**
+     * 加载外部动画资产
+     * Loads an external animation asset
+     *
+     * Associates an external AnimationAsset with this Animator, enabling it to drive bone animations.
+     * Internally creates an AnimationBinding for bone name mapping.
+     *
+     * 加载 AnimationAsset 中的所有动画。
+     * 外部动画索引从内部动画数量开始，范围为 [N, N+M)，其中：
+     * - N = 加载外部动画前的 getAnimationCount() 返回值（内部动画数量）
+     * - M = animAsset->getAnimationCount()（外部动画数量）
+     *
+     * Loads ALL animations from the AnimationAsset.
+     * External animation indices start after internal animations, ranging from [N, N+M), where:
+     * - N = getAnimationCount() before loading external animations (internal animation count)
+     * - M = animAsset->getAnimationCount() (external animation count)
+     *
+     * @param animAsset External animation asset (Animator does not take ownership; caller must ensure lifetime)
+     * @return true if loaded successfully, false if failed (bone mapping failed or invalid data)
+     *
+     * Notes:
+     * - Loads all animations from the AnimationAsset (not just the first one)
+     * - Repeated calls will replace the previously loaded external animations
+     * - animAsset must remain valid for the duration of Animator usage
+     * - Example: If internal animation count is 3 and animAsset has 2 animations,
+     *   the external animations will be at indices 3 and 4
+     */
+    bool loadExternalAnimation(AnimationAsset* animAsset);
+
+    /**
+     * 卸载外部动画
+     * Unloads the external animation
+     *
+     * Releases resources related to the external animation (AnimationBinding, converted data).
+     * Does not affect the animAsset itself (caller is responsible for destruction).
+     */
+    void unloadExternalAnimation();
+
+    /**
+     * 检查是否已加载外部动画
+     * Checks if an external animation is loaded
+     *
+     * @return true if loaded, false if not loaded
+     */
+    bool hasExternalAnimation() const;
 
     // For internal use only.
     void addInstance(FFilamentInstance* instance);

@@ -740,6 +740,74 @@ TEST_F(AnimationAssetTest, FindNodeByNameWithoutBoneMap) {
     EXPECT_EQ(assetWithoutMap.findNodeByName("nonexistent"), -1);
 }
 
+/**
+ * 测试用例21：WEIGHTS 通道（Morph Target 动画）
+ *
+ * 测试目标：验证 WEIGHTS 类型的动画通道能正确验证
+ * 测试场景：
+ *   - 创建一个 WEIGHTS 动画采样器
+ *   - 每个关键帧包含 N 个 weight 值（N = morph target 数量）
+ *   - 例如：5个morph targets，2个关键帧 = 10个值
+ * 预期结果：validate() 返回 true
+ * 验证点：可变长度的 weights 数据能正确处理
+ *
+ * 注意：当前 AnimationAsset::Animation::validate() 在处理 WEIGHTS 时会跳过值数量验证（line 138-139），
+ * 因为 morph target 数量是可变的。本测试用于验证基本的加载和结构正确性。
+ */
+TEST_F(AnimationAssetTest, WeightsChannel) {
+    AnimationAsset::Animation anim;
+    anim.name = "MorphAnim";
+
+    // 假设有 5 个 morph targets
+    const size_t numMorphTargets = 5;
+    const size_t numKeyframes = 2;
+
+    AnimationSampler sampler;
+    sampler.times = {0.0f, 1.0f};  // 2 个关键帧
+    // WEIGHTS: 每帧 5 个值，共 2 * 5 = 10 个值
+    sampler.values = {
+        0.0f, 0.0f, 0.0f, 0.0f, 0.0f,  // t=0: 5个weights
+        1.0f, 0.5f, 0.3f, 0.0f, 0.0f   // t=1: 5个weights
+    };
+    sampler.interpolation = AnimationInterpolationType::LINEAR;
+    anim.samplers.push_back(sampler);
+
+    AnimationChannel channel;
+    channel.targetNodeIndex = 1;
+    channel.samplerIndex = 0;
+    channel.path = AnimationPathType::WEIGHTS;  // WEIGHTS 路径
+    anim.channels.push_back(channel);
+
+    asset->animations.push_back(std::move(anim));
+
+    // 验证基本结构
+    ASSERT_EQ(asset->getAnimationCount(), 1);
+    const auto& loadedAnim = asset->getAnimation(0);
+    EXPECT_EQ(loadedAnim.name, "MorphAnim");
+    EXPECT_EQ(loadedAnim.channels.size(), 1);
+    EXPECT_EQ(loadedAnim.samplers.size(), 1);
+
+    // 验证通道配置
+    const auto& loadedChannel = loadedAnim.channels[0];
+    EXPECT_EQ(loadedChannel.path, AnimationPathType::WEIGHTS);
+    EXPECT_EQ(loadedChannel.samplerIndex, 0);
+
+    // 验证采样器数据
+    const auto& loadedSampler = loadedAnim.samplers[0];
+    EXPECT_EQ(loadedSampler.times.size(), numKeyframes);
+    EXPECT_EQ(loadedSampler.values.size(), numKeyframes * numMorphTargets);
+    EXPECT_EQ(loadedSampler.interpolation, AnimationInterpolationType::LINEAR);
+
+    // 验证值的正确性
+    EXPECT_FLOAT_EQ(loadedSampler.values[0], 0.0f);  // t=0, weight[0]
+    EXPECT_FLOAT_EQ(loadedSampler.values[4], 0.0f);  // t=0, weight[4]
+    EXPECT_FLOAT_EQ(loadedSampler.values[5], 1.0f);  // t=1, weight[0]
+    EXPECT_FLOAT_EQ(loadedSampler.values[6], 0.5f);  // t=1, weight[1]
+
+    // validate() 应该通过（WEIGHTS 路径会被跳过详细验证）
+    EXPECT_TRUE(asset->validate());
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

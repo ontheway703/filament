@@ -99,44 +99,66 @@ bool AnimationBinding::buildMapping() {
            << " named entities" << io::endl;
 
     // === 第 4 步：遍历动画节点，按名称匹配到网格实体 ===
-    int matchedCount = 0;
+    // 注意：跳过空名称节点（辅助节点、变换节点等），它们不参与骨骼匹配
+    mEligibleNodeCount = 0;
+    mMatchedNodeCount = 0;
+
     for (size_t i = 0; i < mExternalAnim->nodes.size(); i++) {
         const auto& node = mExternalAnim->nodes[i];
+
+        // 跳过空名称节点（不计入匹配率）
+        if (node.name.empty()) {
+            slog.v << "AnimationBinding: Skipping unnamed node at index " << i << io::endl;
+            continue;
+        }
+
+        // 计入应参与匹配的节点
+        mEligibleNodeCount++;
 
         // 尝试按名称匹配
         // 成功：mNodeToEntityMap 和 mNodeToInstanceMap 被更新
         // 失败：node.name 被添加到 mUnmatchedBones（用于调试）
         if (matchByBoneName(static_cast<int>(i), node.name, residentBoneMap)) {
-            matchedCount++;
+            mMatchedNodeCount++;
         } else {
             mUnmatchedBones.push_back(node.name);
         }
     }
 
     // === 第 5 步：计算匹配率并验证阈值 ===
-    // 匹配率 = 匹配成功的骨骼数 / 总动画节点数
-    float matchRate = static_cast<float>(matchedCount) / mExternalAnim->nodes.size();
+    // 匹配率 = 匹配成功的骨骼数 / 应参与匹配的节点数（排除空名称节点）
+    if (mEligibleNodeCount == 0) {
+        slog.e << "AnimationBinding: No named nodes in external animation" << io::endl;
+        return false;
+    }
+    float matchRate = static_cast<float>(mMatchedNodeCount) / mEligibleNodeCount;
 
     // 检查匹配率是否满足要求（>= 90%）
     if (matchRate < (1.0f - TOLERANCE_THRESHOLD)) {
         slog.e << "AnimationBinding: Bone matching rate too low: " << (matchRate * 100.0f) << "%"
-               << " (" << matchedCount << "/" << mExternalAnim->nodes.size() << ")"
+               << " (" << mMatchedNodeCount << "/" << mEligibleNodeCount << " named nodes)"
                << io::endl;
         slog.e << "AnimationBinding: Required: " << ((1.0f - TOLERANCE_THRESHOLD) * 100.0f) << "%" << io::endl;
         return false;  // 匹配率不足，绑定失败
     }
 
     // === 第 6 步：记录结果（成功） ===
+    size_t skippedNodeCount = mExternalAnim->nodes.size() - mEligibleNodeCount;
+    if (skippedNodeCount > 0) {
+        slog.i << "AnimationBinding: Skipped " << skippedNodeCount
+               << " unnamed nodes (not included in match rate)" << io::endl;
+    }
+
     // 如果有未匹配的骨骼，记录警告日志（但不影响成功）
     if (!mUnmatchedBones.empty()) {
-        slog.w << "AnimationBinding: " << mUnmatchedBones.size() << " bones not matched:" << io::endl;
+        slog.w << "AnimationBinding: " << mUnmatchedBones.size() << " named bones not matched:" << io::endl;
         for (const auto& bone : mUnmatchedBones) {
             slog.w << "  - " << bone << io::endl;
         }
     }
 
-    slog.i << "AnimationBinding: Bone mapping built successfully: " << matchedCount << "/"
-           << mExternalAnim->nodes.size() << " matched (" << (matchRate * 100.0f) << "%)" << io::endl;
+    slog.i << "AnimationBinding: Bone mapping built successfully: " << mMatchedNodeCount << "/"
+           << mEligibleNodeCount << " named nodes matched (" << (matchRate * 100.0f) << "%)" << io::endl;
 
     return true;  // 绑定成功
 }
@@ -275,12 +297,12 @@ bool AnimationBinding::validateMapping() const {
  * - 100 个动画节点，85 个匹配 → 0.85 (85%，低于阈值)
  */
 float AnimationBinding::getMatchRate() const {
-    if (!mExternalAnim || mExternalAnim->nodes.empty()) {
-        return 0.0f;  // 无动画数据，匹配率为 0
+    if (!mExternalAnim || mEligibleNodeCount == 0) {
+        return 0.0f;  // 无有效节点数据，匹配率为 0
     }
 
-    int matchedCount = static_cast<int>(mNodeToEntityMap.size());
-    return static_cast<float>(matchedCount) / mExternalAnim->nodes.size();
+    // 使用有名称的节点数作为分母（排除空名称节点）
+    return static_cast<float>(mMatchedNodeCount) / mEligibleNodeCount;
 }
 
 } // namespace filament::gltfio_ext
