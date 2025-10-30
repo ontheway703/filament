@@ -242,6 +242,7 @@ endfunction()
 add_test_gltf("third_party/models/AnimatedMorphCube/AnimatedMorphCube.glb" "AnimatedMorphCube.glb")
 add_test_gltf("tmp/test_assets/ecorche_animation_only.glb" "ecorche_animation_only.glb")
 add_test_gltf("tmp/test_assets/ecorche_full.glb" "ecorche_full.glb")
+add_test_gltf("tmp/test_assets/ecorche_mesh_only.glb" "ecorche_mesh_only.glb")
 
 add_custom_target(test_gltfio_ext_files DEPENDS ${GLTF_TEST_FILES})
 

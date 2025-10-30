@@ -2282,6 +2282,14 @@ AnimationAsset* AssetLoader::loadAnimationAsset(const uint8_t* bytes, uint32_t n
 }
 
 void AssetLoader::destroyAnimationAsset(AnimationAsset* asset) {
+    if (!asset) {
+        return;  // 安全处理 nullptr
+    }
+
+    // 诊断日志：帮助调试生命周期问题
+    slog.i << "Destroying AnimationAsset with " << asset->getAnimationCount()
+           << " animation(s)" << io::endl;
+
     delete asset;  // AnimationAsset 的析构函数会自动清理内部容器
 }
 

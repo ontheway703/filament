@@ -355,3 +355,11 @@ set_target_properties(assets PROPERTIES FOLDER Samples/Assets)
 add_custom_target(envs DEPENDS ${target_envmaps})
 add_dependencies(filament envs)
 set_target_properties(envs PROPERTIES FOLDER Samples/Assets)
+
+# ==================================================================================================
+# gltfio_ext animation samples
+# ==================================================================================================
+
+if (NOT WEBGL AND NOT ANDROID AND NOT IOS)
+    add_subdirectory(animation)
+endif()

@@ -356,6 +356,12 @@ void Animator::applyAnimation(size_t animationIndex, float time) const {
 
     if (mImpl->isExternalAnimationIndex(animationIndex)) {
         // 外部动画
+        // 安全检查：确保外部动画资产仍然有效
+        if (!mImpl->hasExternalAnimations()) {
+            slog.e << "External animation has been unloaded" << io::endl;
+            return;
+        }
+
         size_t extIndex = animationIndex - mImpl->mInternalAnimCount;
         if (extIndex >= mImpl->mExternalAnimations.size()) {
             slog.e << "Invalid external animation index: " << animationIndex
