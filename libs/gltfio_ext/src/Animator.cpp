@@ -739,15 +739,145 @@ void AnimatorImpl::updateBoneMatrices(FFilamentInstance* instance) {
 }
 
 /**
- * 加载外部动画资产
- * Loads external animation asset
+ * 【gltfio_ext 核心功能】加载外部动画资产并绑定到 Animator
+ * Loads external animation asset and binds to Animator
  *
- * 流程：
- * 1. 验证 AnimationAsset 有效性
- * 2. 创建 AnimationBinding（骨骼名称映射）
- * 3. 转换 AnimationAsset::Animation → Animator::Animation
- * 4. 构建 channels（使用 AnimationBinding 映射 Entity）
- * 5. 保存引用
+ * ============================================================================
+ * 功能概述
+ * ============================================================================
+ * 将独立的动画资产（AnimationAsset，从外部 GLB 文件加载）绑定到当前 Animator，
+ * 使其能够驱动已加载的网格骨骼。这是 gltfio_ext 最核心的功能之一，支持：
+ *   - 动画与网格分离存储（减少文件大小）
+ *   - 运行时动态加载/卸载动画
+ *   - 多个模型共享同一套动画数据
+ *
+ * ============================================================================
+ * 完整执行流程
+ * ============================================================================
+ *
+ * ┌─────────────────────────────────────────────────────────────────────┐
+ * │ 步骤 1: 验证 AnimationAsset 有效性                                   │
+ * │ ─────────────────────────────────────────────────────────────────── │
+ * │ - 检查 animAsset 指针非空                                            │
+ * │ - 调用 animAsset->validate() 验证内部数据                           │
+ * │ - 检查至少包含一个动画                                               │
+ * │                                                                      │
+ * │ 失败则返回 false（不影响当前状态）                                  │
+ * └─────────────────────────────────────────────────────────────────────┘
+ *                               ↓
+ * ┌─────────────────────────────────────────────────────────────────────┐
+ * │ 步骤 2: 创建 AnimationBinding（骨骼名称映射）                       │
+ * │ ─────────────────────────────────────────────────────────────────── │
+ * │ AnimationBinding 是核心的映射层，解决以下问题：                     │
+ * │                                                                      │
+ * │ 【问题】                                                             │
+ * │   - AnimationAsset（外部动画）使用节点索引：0, 1, 2, ...           │
+ * │   - FilamentAsset（驻留网格）使用 Entity：Entity(123), Entity(456)  │
+ * │   - 两者来自不同 GLB 文件，索引不对应                               │
+ * │                                                                      │
+ * │ 【解决方案】通过骨骼名称建立映射：                                   │
+ * │   动画节点索引 → 骨骼名称 → 网格Entity → TransformManager::Instance │
+ * │        0      → "Spine"  → Entity(123) → Instance(...)              │
+ * │        1      → "Head"   → Entity(456) → Instance(...)              │
+ * │                                                                      │
+ * │ 【映射流程】AnimationBinding::buildMapping()：                      │
+ * │   1. 从 FilamentAsset 提取所有命名实体（通过 NameComponentManager）│
+ * │   2. 构建 residentBoneMap：{ "Spine" → Entity(123), ... }           │
+ * │   3. 遍历 AnimationAsset 的节点，按名称查找对应 Entity             │
+ * │   4. 将 Entity 转换为 TransformManager::Instance（用于应用变换）   │
+ * │   5. 计算匹配率（match_rate = matched / total）                     │
+ * │   6. 验证匹配率 >= 90%（容差阈值），失败则拒绝绑定                  │
+ * │                                                                      │
+ * │ 【输出】                                                             │
+ * │   - nodeToEntityMap: map<int, Entity>                               │
+ * │   - nodeToInstanceMap: map<int, TransformManager::Instance>         │
+ * │                                                                      │
+ * │ 失败则返回 false（匹配率 < 90% 或网格无命名实体）                   │
+ * └─────────────────────────────────────────────────────────────────────┘
+ *                               ↓
+ * ┌─────────────────────────────────────────────────────────────────────┐
+ * │ 步骤 3: 转换所有动画数据（关键数据转换）                            │
+ * │ ─────────────────────────────────────────────────────────────────── │
+ * │ 遍历 AnimationAsset 的所有动画（不是单个动画！）                    │
+ * │ 例如：ecorche_animation_only.glb 有 3 个动画（Pull, Push, Squat）   │
+ * │                                                                      │
+ * │ 对每个动画执行：                                                     │
+ * │                                                                      │
+ * │ ┌─────────────────────────────────────────────────────────────────┐ │
+ * │ │ 3.1 转换 samplers 和元数据                                       │ │
+ * │ │ ───────────────────────────────────────────────────────────────  │ │
+ * │ │ convertAnimation(srcAnim, dstAnim)：                            │ │
+ * │ │   - 复制动画名称（name）                                         │ │
+ * │ │   - 复制动画时长（duration）                                     │ │
+ * │ │   - 转换 samplers（关键帧时间 + 数据）                           │ │
+ * │ └─────────────────────────────────────────────────────────────────┘ │
+ * │                                                                      │
+ * │ ┌─────────────────────────────────────────────────────────────────┐ │
+ * │ │ 3.2 重建 channels（核心转换）                                    │ │
+ * │ │ ───────────────────────────────────────────────────────────────  │ │
+ * │ │ 为什么需要重建？数据结构不同：                                   │ │
+ * │ │                                                                  │ │
+ * │ │   【AnimationAsset::Channel】 → 【Animator::Channel】           │ │
+ * │ │   targetNodeIndex: int          targetEntity: Entity            │ │
+ * │ │   samplerIndex: int             sourceData: Sampler*            │ │
+ * │ │   path: enum                    transformType: enum             │ │
+ * │ │                                                                  │ │
+ * │ │ 转换步骤（对每个 channel）：                                     │ │
+ * │ │   a) 从 srcChannel 读取 targetNodeIndex（例如 5）                │ │
+ * │ │   b) 在 nodeToEntityMap 中查找：nodeToEntityMap[5] = Entity(123)│ │
+ * │ │   c) 创建 dstChannel：                                           │ │
+ * │ │        - targetEntity = Entity(123)  ← 来自映射表                │ │
+ * │ │        - sourceData = &samplers[samplerIndex]  ← 指针引用        │ │
+ * │ │        - transformType = 路径类型转换（TRANSLATION/ROTATION/...) │ │
+ * │ │   d) 添加到 dstAnim.channels                                     │ │
+ * │ │                                                                  │ │
+ * │ │ 【容错机制】跳过未映射的骨骼（允许 10% 不匹配）                  │ │
+ * │ └─────────────────────────────────────────────────────────────────┘ │
+ * │                                                                      │
+ * │ 【输出示例】（ecorche_full.glb）                                     │
+ * │   newAnimations = [                                                 │
+ * │     { name: "Pull",  channels: [327个], duration: 1.5s },          │
+ * │     { name: "Push",  channels: [327个], duration: 1.2s },          │
+ * │     { name: "Squat", channels: [327个], duration: 1.8s }           │
+ * │   ]                                                                  │
+ * └─────────────────────────────────────────────────────────────────────┘
+ *                               ↓
+ * ┌─────────────────────────────────────────────────────────────────────┐
+ * │ 步骤 4: 两段式更新 - Phase 2: 提交                                  │
+ * │ ─────────────────────────────────────────────────────────────────── │
+ * │ 所有准备工作成功后，一次性替换旧状态：                              │
+ * │   mExternalAnimations = std::move(newAnimations)                    │
+ * │   mExternalBinding = std::move(newBinding)                          │
+ * │   mExternalAnimAsset = animAsset（弱引用）                          │
+ * │                                                                      │
+ * │ 【设计原则：原子性】                                                 │
+ * │   - Phase 1: 在临时变量中准备数据（newAnimations, newBinding）      │
+ * │   - Phase 2: 准备成功后一次性提交（替换成员变量）                   │
+ * │   - 好处：失败时旧状态保持不变，避免系统处于不一致状态              │
+ * └─────────────────────────────────────────────────────────────────────┘
+ *                               ↓
+ * ┌─────────────────────────────────────────────────────────────────────┐
+ * │ 步骤 5: 日志输出并返回成功                                          │
+ * │ ─────────────────────────────────────────────────────────────────── │
+ * │ 输出匹配率和动画数量：                                              │
+ * │   "External animations loaded: 3 animations, bone match rate: 100%" │
+ * │                                                                      │
+ * │ 返回 true（加载成功）                                               │
+ * └─────────────────────────────────────────────────────────────────────┘
+ *
+ * ============================================================================
+ * 参数说明
+ * ============================================================================
+ * @param animAsset 外部动画资产（必须在 Animator 生命周期内保持有效）
+ * @param engine    Filament 引擎实例（用于访问 TransformManager）
+ * @return true 加载成功，false 加载失败（验证失败或匹配率 < 90%）
+ *
+ * 注意事项：
+ * ---------
+ * - 如果已加载外部动画，会被新动画替换（旧的会被卸载）
+ * - animAsset 必须在 Animator 生命周期内保持有效（弱引用）
+ * - 网格必须配置 NameComponentManager（否则匹配率为 0）
+ * - 失败时不影响当前状态（原子性保证）
  */
 bool AnimatorImpl::loadExternalAnimation(AnimationAsset* animAsset, Engine* engine) {
     // 1. 验证输入
@@ -783,34 +913,150 @@ bool AnimatorImpl::loadExternalAnimation(AnimationAsset* animAsset, Engine* engi
     size_t animCount = animAsset->getAnimationCount();
     std::vector<Animation> newAnimations(animCount);
 
+    // ========================================================================
+    // 【核心概念】获取 AnimationBinding 构建的节点索引到实体的映射表
+    // ========================================================================
+    //
+    // nodeToEntityMap 的数据结构：
+    //   类型：std::map<int, Entity>
+    //   含义：动画节点索引 → 网格实体
+    //
+    // 真实数据示例（ecorche_full.glb）：
+    //   nodeToEntityMap = {
+    //     0 → Entity(100),   // 动画节点 0（"Armature"） → 网格中的 Entity 100
+    //     1 → Entity(101),   // 动画节点 1（"Spine"）    → 网格中的 Entity 101
+    //     2 → Entity(102),   // 动画节点 2（"Spine.001"）→ 网格中的 Entity 102
+    //     ...
+    //     326 → Entity(426)  // 327 个骨骼节点的映射
+    //   }
+    //
+    // 为什么需要这个映射表？
+    // -------------------------
+    // 1. **数据源差异**：
+    //    - AnimationAsset（外部动画）的 channels 使用 targetNodeIndex（整数索引）
+    //    - Animator（内部）的 channels 使用 targetEntity（Filament 实体）
+    //    - 需要将索引转换为实体
+    //
+    // 2. **来自不同 GLB 文件**：
+    //    - 外部动画和网格来自不同的 GLB 文件
+    //    - 节点索引不对应（如动画的节点 0 != 网格的节点 0）
+    //    - 必须通过骨骼名称建立映射
+    //
+    // 3. **由 AnimationBinding 构建**：
+    //    - AnimationBinding::buildMapping() 已经完成了骨骼名称匹配
+    //    - 这里直接获取构建好的映射表，用于后续的 channels 转换
+    //
+    // 下一步：遍历所有动画，使用这个映射表将 AnimationAsset::Channel 转换为 Animator::Channel
     auto& nodeToEntityMap = newBinding->getNodeToEntityMap();
 
+    // ========================================================================
+    // 【核心流程】遍历 AnimationAsset 的所有动画，转换为 Animator 内部格式
+    // ========================================================================
+    //
+    // 这个循环处理 AnimationAsset 中的**所有动画**（不是单个动画！）
+    // 例如：ecorche_animation_only.glb 包含 3 个动画（Pull, Push, Squat）
+    //       这个循环会执行 3 次，每次处理一个动画
+    //
+    // 每次循环做两件事：
+    //   1. 转换 samplers 和元数据（convertAnimation）
+    //   2. 重建 channels（将 targetNodeIndex 转换为 targetEntity）
+    //
+    // 为什么需要转换？
+    // ----------------
+    // AnimationAsset 和 Animator 的数据结构不同：
+    //
+    //   【AnimationAsset::Animation】          【Animator::Animation】
+    //   - name: string                         - name: string
+    //   - duration: float                      - duration: float
+    //   - samplers: vector<Sampler>            - samplers: vector<Sampler>
+    //   - channels: vector<Channel>            - channels: vector<Channel>
+    //       └─ targetNodeIndex: int                └─ targetEntity: Entity  ← 关键区别！
+    //       └─ samplerIndex: int                   └─ sourceData: Sampler*
+    //       └─ path: enum                          └─ transformType: enum
+    //
+    // 核心差异：
+    //   - AnimationAsset 使用节点索引（int）引用骨骼
+    //   - Animator 使用 Entity 引用骨骼
+    //   - 需要通过 nodeToEntityMap 将索引转换为 Entity
+    //
     for (size_t i = 0; i < animCount; i++) {
         const auto& srcAnim = animAsset->getAnimation(i);
 
-        // 5. 转换动画数据
+        // ====================================================================
+        // 步骤 1：转换 samplers 和元数据
+        // ====================================================================
+        // convertAnimation() 会复制：
+        //   - 动画名称（name）
+        //   - 动画时长（duration）
+        //   - samplers 数组（关键帧时间 + 数据）
+        //
+        // 注意：此时 channels 还未转换（在下面的循环中处理）
         convertAnimation(srcAnim, newAnimations[i]);
 
-        // 6. 构建 channels（使用 AnimationBinding 映射）
+        // ====================================================================
+        // 步骤 2：重建 channels（核心转换）
+        // ====================================================================
+        // 原因：AnimationAsset::Channel 使用 targetNodeIndex（整数索引）
+        //      Animator::Channel 使用 targetEntity（Filament 实体）
+        //      需要通过 nodeToEntityMap 将索引转换为 Entity
+        //
         auto& dstAnim = newAnimations[i];
         const Sampler* samplers = dstAnim.samplers.data();
 
+        // 遍历源动画的所有 channels（每个 channel 控制一个骨骼的一个属性）
+        // 示例：Pull 动画有 327 个 channels（每个骨骼的 translation/rotation/scale）
         for (const auto& srcChannel : srcAnim.channels) {
             int nodeIndex = srcChannel.targetNodeIndex;
 
-            // 查找对应的 Entity
+            // ----------------------------------------------------------------
+            // 【关键转换】使用 nodeToEntityMap 将节点索引转换为实体
+            // ----------------------------------------------------------------
+            // 例如：
+            //   srcChannel.targetNodeIndex = 5（动画节点索引）
+            //   nodeToEntityMap[5] = Entity(123)（网格中的实体）
+            //   → dstChannel.targetEntity = Entity(123)
+            //
             auto it = nodeToEntityMap.find(nodeIndex);
             if (it == nodeToEntityMap.end()) {
-                // 跳过未映射的骨骼（正常情况，不是所有骨骼都需要动画）
+                // ----------------------------------------------------------------
+                // 【容错机制】跳过未映射的骨骼
+                // ----------------------------------------------------------------
+                // 正常情况，原因可能是：
+                //   1. 动画有额外的辅助骨骼（网格中不存在）
+                //   2. AnimationBinding 允许 10% 不匹配
+                //   3. 某些骨骼在网格中被优化掉了
+                //
+                // 例如：动画有 "LeftHandThumb" 骨骼，但网格模型没有手指细节
                 continue;
             }
 
-            // 创建 Channel
+            // ----------------------------------------------------------------
+            // 创建 Animator::Channel（内部格式）
+            // ----------------------------------------------------------------
             Channel dstChannel;
+
+            // 核心字段 1：目标实体（从 nodeToEntityMap 获取）
             dstChannel.targetEntity = it->second;
+
+            // 核心字段 2：sampler 数据指针（指向 dstAnim.samplers 数组）
+            // 为什么用指针？运行时播放动画时，直接访问 sampler 数据更高效
             dstChannel.sourceData = samplers + srcChannel.samplerIndex;
 
-            // 转换路径类型
+            // ----------------------------------------------------------------
+            // 转换路径类型（枚举值映射）
+            // ----------------------------------------------------------------
+            // AnimationPathType（AnimationAsset） → Channel::TransformType（Animator）
+            //
+            // 数据转换前（AnimationAsset::Channel）：
+            //   targetNodeIndex: 5
+            //   samplerIndex: 2
+            //   path: ROTATION
+            //
+            // 数据转换后（Animator::Channel）：
+            //   targetEntity: Entity(123)  ← 通过 nodeToEntityMap[5] 查找
+            //   sourceData: &samplers[2]   ← 直接指针引用
+            //   transformType: ROTATION    ← 枚举值映射
+            //
             switch (srcChannel.path) {
                 case AnimationPathType::TRANSLATION:
                     dstChannel.transformType = Channel::TRANSLATION;
@@ -826,13 +1072,17 @@ bool AnimatorImpl::loadExternalAnimation(AnimationAsset* animAsset, Engine* engi
                     break;
             }
 
+            // 将转换后的 channel 添加到目标动画
             dstAnim.channels.push_back(dstChannel);
         }
 
+        // 日志输出：每个动画的转换结果
+        // 示例：Loaded external animation 0: 'Pull' (327 channels, duration=1.5s)
         slog.i << "Loaded external animation " << i << ": '" << dstAnim.name << "' "
                << "(" << dstAnim.channels.size() << " channels, "
                << "duration=" << dstAnim.duration << "s)" << io::endl;
     }
+
 
     // 7. 两段式更新 - Phase 2: 提交（所有准备工作成功，现在替换旧状态）
     mExternalAnimations = std::move(newAnimations);
