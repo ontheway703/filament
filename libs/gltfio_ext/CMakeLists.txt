@@ -299,6 +299,16 @@ if (TNT_DEV AND NOT WEBGL AND NOT ANDROID AND NOT IOS)
         target_compile_options(${ANIMATOR_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
     endif()
     set_target_properties(${ANIMATOR_TEST_TARGET} PROPERTIES FOLDER Tests)
+
+    # Animation cache test (Phase 2-3 lightweight cache)
+    set(ANIMATION_CACHE_TEST_TARGET test_animation_cache)
+    add_executable(${ANIMATION_CACHE_TEST_TARGET} test/test_animation_cache.cpp)
+    add_dependencies(${ANIMATION_CACHE_TEST_TARGET} test_gltfio_ext_files)
+    target_link_libraries(${ANIMATION_CACHE_TEST_TARGET} PRIVATE ${TARGET} gtest uberarchive_ext)
+    if (NOT MSVC)
+        target_compile_options(${ANIMATION_CACHE_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
+    endif()
+    set_target_properties(${ANIMATION_CACHE_TEST_TARGET} PROPERTIES FOLDER Tests)
 endif()
 
 # ==================================================================================================

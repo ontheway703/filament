@@ -81,11 +81,88 @@ struct AnimatorImpl {
     vector<float> weights;
     FixedCapacityVector<mat4f> crossFade;
 
-    // === 外部动画支持 (External animation support) ===
-    AnimationAsset* mExternalAnimAsset = nullptr;           // 弱引用，不持有所有权
-    std::unique_ptr<AnimationBinding> mExternalBinding;      // 骨骼名称映射
-    std::vector<Animation> mExternalAnimations;              // 转换后的外部动画数据数组（支持多个动画）
-    size_t mInternalAnimCount = 0;                          // 内部动画数量（用于索引区分）
+    // ========================================
+    // 外部动画缓存（轻量化）
+    // ========================================
+
+    /**
+     * 缓存条目：单个动画的完整信息
+     */
+    struct CachedAnimation {
+        std::string fullName;       // 唯一标识 "sourceId:animName"
+        std::string sourceId;       // 动画源 ID（文件标识）
+        std::string animName;       // 动画名称
+        Animation animation;         // 转换后的动画数据（深拷贝，独立存在）
+        uint64_t accessOrder;        // LRU 访问顺序（值越小越久未访问）
+    };
+
+    /**
+     * 主缓存：fullName → CachedAnimation
+     *
+     * 说明：使用 unordered_map 而非 vector，因为：
+     * 1. 动画按名称访问，不需要连续索引
+     * 2. LRU 淘汰会导致索引变化，map 更稳定
+     * 3. 查找性能 O(1)
+     *
+     * mutable：允许在 const 方法中修改（播放动画会更新LRU访问顺序）
+     */
+    mutable std::unordered_map<std::string, CachedAnimation> mAnimationCache;
+
+    /**
+     * Source 索引：sourceId → [fullName 列表]
+     *
+     * 用途：支持批量卸载（unloadAnimationsFromSource）
+     *
+     * mutable：允许在 const 方法中修改（查询操作可能触发缓存加载）
+     */
+    mutable std::unordered_map<std::string, std::vector<std::string>> mSourceIndex;
+
+    /**
+     * 名称索引：animName → [fullName 列表]
+     *
+     * 用途：
+     * 1. 支持便捷播放（applyAnimationByName）
+     * 2. 处理不同源的同名动画
+     *
+     * mutable：允许在 const 方法中修改（查询操作可能触发缓存加载）
+     */
+    mutable std::unordered_map<std::string, std::vector<std::string>> mAnimNameIndex;
+
+    // ========================================
+    // 配置与统计
+    // ========================================
+
+    /**
+     * 最大缓存数量（可运行时调整）
+     */
+    size_t mMaxCacheSize = GLTFIO_EXT_DEFAULT_ANIMATION_CACHE_SIZE;
+
+    /**
+     * LRU 访问计数器（单调递增）
+     *
+     * 说明：使用自增计数器而非时间戳，因为：
+     * 1. 性能更高（无需系统调用）
+     * 2. 绝对顺序保证
+     * 3. 实现简单
+     *
+     * mutable：允许在 const 方法中递增（播放动画会更新访问顺序）
+     */
+    mutable uint64_t mAccessCounter = 0;
+
+    /**
+     * 统计信息
+     *
+     * mutable：允许在 const 方法中更新统计（播放动画会记录命中/未命中）
+     */
+    mutable uint64_t mCacheHitCount = 0;     // 缓存命中次数
+    mutable uint64_t mCacheMissCount = 0;    // 缓存未命中次数
+
+    /**
+     * 内部动画数量（保留）
+     *
+     * 说明：内部动画仍然使用原有的 animations 向量
+     */
+    size_t mInternalAnimCount = 0;
 
     void addChannels(const FixedCapacityVector<Entity>& nodeMap, const cgltf_animation& srcAnim,
             Animation& dst);
@@ -95,20 +172,48 @@ struct AnimatorImpl {
     void resetBoneMatrices(FFilamentInstance* instance);
     void updateBoneMatrices(FFilamentInstance* instance);
 
-    // === 外部动画方法 (External animation methods) ===
+    // ========================================
+    // 外部动画方法（Phase 2-3 实现）
+    // ========================================
+
+    // Phase 2: 核心 API
+    size_t loadAnimationsFromSource(const std::string& sourceId, AnimationAsset* asset);
+    void unloadAnimationsFromSource(const std::string& sourceId);
+    void clearAnimationCache();
+    void evictLRU(size_t count);
+    bool handleSpaceManagement(const std::string& sourceId, size_t animCount);
+    void removeAnimation(const std::string& fullName);
+
+    // Phase 3: 播放与查询 API（marked const for backward compatibility）
+    bool applyAnimation(const std::string& sourceId, const std::string& animName, float time) const;
+    bool applyAnimationByName(const std::string& animName, float time) const;
+
+    bool hasAnimation(const std::string& sourceId, const std::string& animName) const;
+    bool hasAnimationByName(const std::string& animName) const;
+    bool hasSource(const std::string& sourceId) const;
+
+    float getAnimationDuration(const std::string& sourceId, const std::string& animName) const;
+    float getAnimationDurationByName(const std::string& animName) const;
+
+    std::vector<std::string> getLoadedSources() const;
+    std::vector<std::string> getAnimationsInSource(const std::string& sourceId) const;
+
+    void setAnimationCacheSize(size_t maxSize);
+    size_t getAnimationCacheSize() const;
+
+    struct CacheStats {
+        size_t cachedCount;
+        size_t maxSize;
+        size_t sourceCount;
+        uint64_t hitCount;
+        uint64_t missCount;
+        float hitRate;
+    };
+    CacheStats getAnimationCacheStats() const;
+    void resetCacheStats();
+
+    // 临时保留旧方法声明以避免编译错误（实现已禁用）
     bool loadExternalAnimation(AnimationAsset* animAsset, filament::Engine* engine);
-
-    bool isExternalAnimationIndex(size_t index) const {
-        return index >= mInternalAnimCount && !mExternalAnimations.empty();
-    }
-
-    bool hasExternalAnimations() const {
-        return mExternalAnimAsset != nullptr && !mExternalAnimations.empty();
-    }
-
-    size_t getExternalAnimationCount() const {
-        return hasExternalAnimations() ? mExternalAnimations.size() : 0;
-    }
 };
 
 static void createSampler(const cgltf_animation_sampler& src, Sampler& dst) {
@@ -345,43 +450,21 @@ Animator::~Animator() {
 }
 
 size_t Animator::getAnimationCount() const {
-    size_t count = mImpl->animations.size();
-    count += mImpl->getExternalAnimationCount();  // 添加所有外部动画
-    return count;
+    return mImpl->animations.size();
 }
 
 void Animator::applyAnimation(size_t animationIndex, float time) const {
-    // 确定使用内部动画还是外部动画
-    const Animation* anim = nullptr;
-
-    if (mImpl->isExternalAnimationIndex(animationIndex)) {
-        // 外部动画
-        // 安全检查：确保外部动画资产仍然有效
-        if (!mImpl->hasExternalAnimations()) {
-            slog.e << "External animation has been unloaded" << io::endl;
-            return;
-        }
-
-        size_t extIndex = animationIndex - mImpl->mInternalAnimCount;
-        if (extIndex >= mImpl->mExternalAnimations.size()) {
-            slog.e << "Invalid external animation index: " << animationIndex
-                   << " (have " << mImpl->mExternalAnimations.size()
-                   << " external animations)" << io::endl;
-            return;
-        }
-        anim = &mImpl->mExternalAnimations[extIndex];
-    } else {
-        // 内部动画
-        if (animationIndex >= mImpl->animations.size()) {
-            slog.e << "Invalid animation index: " << animationIndex << io::endl;
-            return;
-        }
-        anim = &mImpl->animations[animationIndex];
+    if (animationIndex >= mImpl->animations.size()) {
+        slog.e << "Invalid animation index: " << animationIndex << io::endl;
+        return;
     }
 
+    const Animation* anim = &mImpl->animations[animationIndex];
     time = time == anim->duration ? time : fmod(time, anim->duration);
+
     TransformManager& transformManager = *mImpl->transformManager;
     transformManager.openLocalTransformTransaction();
+
     for (const auto& channel : anim->channels) {
         const Sampler* sampler = channel.sourceData;
         if (sampler->times.size() < 2) {
@@ -452,58 +535,98 @@ void Animator::updateBoneMatrices() {
 }
 
 float Animator::getAnimationDuration(size_t animationIndex) const {
-    if (mImpl->isExternalAnimationIndex(animationIndex)) {
-        size_t extIndex = animationIndex - mImpl->mInternalAnimCount;
-        if (extIndex >= mImpl->mExternalAnimations.size()) {
-            slog.e << "Invalid external animation index: " << animationIndex << io::endl;
-            return 0.0f;
-        }
-        return mImpl->mExternalAnimations[extIndex].duration;
-    }
-
     if (animationIndex >= mImpl->animations.size()) {
-        slog.e << "Invalid internal animation index: " << animationIndex << io::endl;
+        slog.e << "Invalid animation index: " << animationIndex << io::endl;
         return 0.0f;
     }
     return mImpl->animations[animationIndex].duration;
 }
 
 const char* Animator::getAnimationName(size_t animationIndex) const {
-    if (mImpl->isExternalAnimationIndex(animationIndex)) {
-        size_t extIndex = animationIndex - mImpl->mInternalAnimCount;
-        if (extIndex >= mImpl->mExternalAnimations.size()) {
-            slog.e << "Invalid external animation index: " << animationIndex << io::endl;
-            return "";
-        }
-        return mImpl->mExternalAnimations[extIndex].name.c_str();
-    }
-
     if (animationIndex >= mImpl->animations.size()) {
-        slog.e << "Invalid internal animation index: " << animationIndex << io::endl;
+        slog.e << "Invalid animation index: " << animationIndex << io::endl;
         return "";
     }
     return mImpl->animations[animationIndex].name.c_str();
 }
 
 // ========================================
-// 外部动画公共 API 实现
-// External Animation Public API Implementation
+// 动画缓存公共 API 实现
+// Animation Cache Public API Implementation
 // ========================================
 
-bool Animator::loadExternalAnimation(AnimationAsset* animAsset) {
-    return mImpl->loadExternalAnimation(animAsset, mImpl->asset->mEngine);
+size_t Animator::loadAnimationsFromSource(const char* sourceId, AnimationAsset* asset) {
+    return mImpl->loadAnimationsFromSource(sourceId, asset);
 }
 
-void Animator::unloadExternalAnimation() {
-    mImpl->mExternalAnimations.clear();
-    mImpl->mExternalBinding.reset();
-    mImpl->mExternalAnimAsset = nullptr;
-
-    slog.i << "External animation unloaded" << io::endl;
+void Animator::unloadAnimationsFromSource(const char* sourceId) {
+    mImpl->unloadAnimationsFromSource(sourceId);
 }
 
-bool Animator::hasExternalAnimation() const {
-    return mImpl->hasExternalAnimations();
+void Animator::clearAnimationCache() {
+    mImpl->clearAnimationCache();
+}
+
+bool Animator::applyAnimation(const char* sourceId, const char* animName, float time) const {
+    return mImpl->applyAnimation(sourceId, animName, time);
+}
+
+bool Animator::applyAnimationByName(const char* animName, float time) const {
+    return mImpl->applyAnimationByName(animName, time);
+}
+
+bool Animator::hasAnimation(const char* sourceId, const char* animName) const {
+    return mImpl->hasAnimation(sourceId, animName);
+}
+
+bool Animator::hasAnimationByName(const char* animName) const {
+    return mImpl->hasAnimationByName(animName);
+}
+
+bool Animator::hasSource(const char* sourceId) const {
+    return mImpl->hasSource(sourceId);
+}
+
+float Animator::getAnimationDuration(const char* sourceId, const char* animName) const {
+    return mImpl->getAnimationDuration(sourceId, animName);
+}
+
+float Animator::getAnimationDurationByName(const char* animName) const {
+    return mImpl->getAnimationDurationByName(animName);
+}
+
+std::vector<std::string> Animator::getLoadedSources() const {
+    return mImpl->getLoadedSources();
+}
+
+std::vector<std::string> Animator::getAnimationsInSource(const char* sourceId) const {
+    return mImpl->getAnimationsInSource(sourceId);
+}
+
+void Animator::setAnimationCacheSize(size_t maxSize) {
+    mImpl->setAnimationCacheSize(maxSize);
+}
+
+size_t Animator::getAnimationCacheSize() const {
+    return mImpl->getAnimationCacheSize();
+}
+
+Animator::CacheStats Animator::getAnimationCacheStats() const {
+    auto implStats = mImpl->getAnimationCacheStats();
+
+    CacheStats stats;
+    stats.cachedCount = implStats.cachedCount;
+    stats.maxSize = implStats.maxSize;
+    stats.sourceCount = implStats.sourceCount;
+    stats.hitCount = implStats.hitCount;
+    stats.missCount = implStats.missCount;
+    stats.hitRate = implStats.hitRate;
+
+    return stats;
+}
+
+void Animator::resetCacheStats() {
+    mImpl->resetCacheStats();
 }
 
 void AnimatorImpl::stashCrossFade() {
@@ -880,6 +1003,15 @@ void AnimatorImpl::updateBoneMatrices(FFilamentInstance* instance) {
  * - 失败时不影响当前状态（原子性保证）
  */
 bool AnimatorImpl::loadExternalAnimation(AnimationAsset* animAsset, Engine* engine) {
+    // ========================================
+    // Phase 1: 临时禁用（数据结构已重构）
+    // ========================================
+    slog.e << "AnimatorImpl::loadExternalAnimation() is disabled (Phase 1 data structure refactoring)" << io::endl;
+    slog.e << "This function will be replaced with loadAnimationsFromSource() in Phase 2" << io::endl;
+    return false;
+
+    // 原实现代码保留供参考（Phase 2 重写时可参考）
+    #if 0
     // 1. 验证输入
     if (!animAsset || !animAsset->validate()) {
         slog.e << "Invalid AnimationAsset" << io::endl;
@@ -1095,6 +1227,636 @@ bool AnimatorImpl::loadExternalAnimation(AnimationAsset* animAsset, Engine* engi
            << "bone match rate: " << (matchRate * 100.0f) << "%" << io::endl;
 
     return true;
+    #endif  // 结束 Phase 1 临时禁用的代码块
+}
+
+// ========================================
+// Phase 2: 核心 API 实现
+// ========================================
+
+/**
+ * 从缓存和所有索引中移除单个动画
+ */
+void AnimatorImpl::removeAnimation(const std::string& fullName) {
+    auto it = mAnimationCache.find(fullName);
+    if (it == mAnimationCache.end()) {
+        return;  // 动画不存在，直接返回
+    }
+
+    const CachedAnimation& cached = it->second;
+
+    // ========================================
+    // 1. 从名称索引移除
+    // ========================================
+    auto animNameIt = mAnimNameIndex.find(cached.animName);
+    if (animNameIt != mAnimNameIndex.end()) {
+        auto& fullNames = animNameIt->second;
+        fullNames.erase(
+            std::remove(fullNames.begin(), fullNames.end(), fullName),
+            fullNames.end()
+        );
+
+        // 如果该名称没有动画了，移除整个条目
+        if (fullNames.empty()) {
+            mAnimNameIndex.erase(animNameIt);
+        }
+    }
+
+    // ========================================
+    // 2. 从 Source 索引移除
+    // ========================================
+    auto sourceIt = mSourceIndex.find(cached.sourceId);
+    if (sourceIt != mSourceIndex.end()) {
+        auto& fullNames = sourceIt->second;
+        fullNames.erase(
+            std::remove(fullNames.begin(), fullNames.end(), fullName),
+            fullNames.end()
+        );
+
+        // 如果该源没有动画了，移除整个条目
+        if (fullNames.empty()) {
+            mSourceIndex.erase(sourceIt);
+        }
+    }
+
+    // ========================================
+    // 3. 从主缓存移除
+    // ========================================
+    mAnimationCache.erase(it);
+}
+
+/**
+ * LRU 淘汰：移除最久未访问的 N 个动画
+ */
+void AnimatorImpl::evictLRU(size_t count) {
+    if (count == 0 || mAnimationCache.empty()) {
+        return;
+    }
+
+    // ========================================
+    // 1. 收集所有缓存条目并排序
+    // ========================================
+    std::vector<std::pair<std::string, uint64_t>> candidates;
+    candidates.reserve(mAnimationCache.size());
+
+    for (const auto& [fullName, cached] : mAnimationCache) {
+        candidates.push_back({fullName, cached.accessOrder});
+    }
+
+    // 按访问顺序排序（最久未访问的在前）
+    std::sort(candidates.begin(), candidates.end(),
+        [](const auto& a, const auto& b) {
+            return a.second < b.second;  // accessOrder 越小越久
+        });
+
+    // ========================================
+    // 2. 淘汰最久未访问的 N 个
+    // ========================================
+    size_t actualEvict = std::min(count, candidates.size());
+
+    for (size_t i = 0; i < actualEvict; i++) {
+        const std::string& fullName = candidates[i].first;
+        removeAnimation(fullName);
+    }
+
+    slog.i << "Evicted " << actualEvict << " animations (LRU)" << io::endl;
+}
+
+/**
+ * 空间管理（方案A：拒绝超限源）
+ */
+bool AnimatorImpl::handleSpaceManagement(const std::string& sourceId, size_t animCount) {
+    size_t currentSize = mAnimationCache.size();
+    size_t requiredSpace = currentSize + animCount;
+
+    if (requiredSpace <= mMaxCacheSize) {
+        // 空间充足，无需淘汰
+        return true;
+    }
+
+    // ========================================
+    // 场景 A：超限源 → 拒绝加载（方案A）
+    // ========================================
+    if (animCount > mMaxCacheSize) {
+        slog.e << "Failed to load source '" << sourceId << "': "
+               << "animation count (" << animCount << ") exceeds cache size ("
+               << mMaxCacheSize << ")" << io::endl;
+        slog.e << "Please unload other sources or increase cache size." << io::endl;
+
+        return false;  // ❌ 拒绝加载
+    }
+
+    // ========================================
+    // 场景 B：正常情况（LRU 淘汰）
+    // ========================================
+    size_t needEvict = requiredSpace - mMaxCacheSize;
+    slog.i << "Need to evict " << needEvict << " animations before loading source '"
+           << sourceId << "'" << io::endl;
+
+    evictLRU(needEvict);
+
+    // 验证淘汰是否成功
+    if (mAnimationCache.size() + animCount > mMaxCacheSize) {
+        slog.w << "Warning: eviction may be insufficient, cache might exceed limit" << io::endl;
+    }
+
+    return true;  // ✅ 可以加载
+}
+
+/**
+ * 清空所有外部动画缓存
+ */
+void AnimatorImpl::clearAnimationCache() {
+    size_t count = mAnimationCache.size();
+
+    mAnimationCache.clear();
+    mSourceIndex.clear();
+    mAnimNameIndex.clear();
+
+    slog.i << "Cleared animation cache (" << count << " animations)" << io::endl;
+}
+
+/**
+ * 卸载整个源的所有动画
+ */
+void AnimatorImpl::unloadAnimationsFromSource(const std::string& sourceId) {
+    auto it = mSourceIndex.find(sourceId);
+    if (it == mSourceIndex.end()) {
+        slog.w << "Source '" << sourceId << "' not found in cache" << io::endl;
+        return;
+    }
+
+    // 获取该源的所有动画
+    const std::vector<std::string>& fullNames = it->second;
+    size_t count = fullNames.size();
+
+    // 逐个移除（需要拷贝，因为 removeAnimation 会修改 mSourceIndex）
+    std::vector<std::string> fullNamesCopy = fullNames;
+    for (const auto& fullName : fullNamesCopy) {
+        removeAnimation(fullName);
+    }
+
+    slog.i << "Unloaded " << count << " animations from source '" << sourceId << "'" << io::endl;
+}
+
+/**
+ * 从动画源加载所有动画
+ *
+ * @param sourceId 动画源标识符（如 "chest_basic"，格式无关）
+ * @param asset 动画资产（转换后可立即释放）
+ * @return 成功加载的动画数量
+ */
+size_t AnimatorImpl::loadAnimationsFromSource(const std::string& sourceId, AnimationAsset* asset) {
+    // ========================================
+    // 1. 验证输入
+    // ========================================
+    if (!asset || sourceId.empty()) {
+        slog.e << "Invalid arguments: asset=" << (void*)asset
+               << ", sourceId=" << sourceId << io::endl;
+        return 0;
+    }
+
+    size_t animCount = asset->getAnimationCount();
+    if (animCount == 0) {
+        slog.w << "Source '" << sourceId << "' contains no animations" << io::endl;
+        return 0;
+    }
+
+    // ========================================
+    // 2. 如果 sourceId 已存在，先卸载（替换模式）
+    // ========================================
+    if (mSourceIndex.count(sourceId)) {
+        slog.i << "Source '" << sourceId << "' already loaded, replacing..." << io::endl;
+        unloadAnimationsFromSource(sourceId);
+    }
+
+    // ========================================
+    // 3. 空间检查与淘汰
+    // ========================================
+    if (!handleSpaceManagement(sourceId, animCount)) {
+        // 超限源，拒绝加载
+        return 0;
+    }
+
+    // ========================================
+    // 4. 构建 AnimationBinding（骨架映射）
+    // ========================================
+    auto binding = std::make_unique<AnimationBinding>(
+        asset,
+        this->asset,
+        this->asset->mEngine
+    );
+
+    if (!binding->buildMapping()) {
+        slog.e << "Failed to build mapping for source '" << sourceId
+               << "': match rate too low" << io::endl;
+        return 0;
+    }
+
+    float matchRate = binding->getMatchRate();
+    slog.i << "AnimationBinding for '" << sourceId << "': "
+           << "match rate = " << (matchRate * 100.0f) << "%" << io::endl;
+
+    // ========================================
+    // 5. 转换并缓存所有动画
+    // ========================================
+    const auto& nodeToEntityMap = binding->getNodeToEntityMap();
+    size_t loadedCount = 0;
+
+    for (size_t i = 0; i < animCount; i++) {
+        const AnimationAsset::Animation& srcAnim = asset->getAnimation(i);
+
+        // 转换动画（复用现有逻辑）
+        Animation convertedAnim;
+        convertAnimation(srcAnim, convertedAnim);
+
+        // ========================================
+        // 6. 重建 channels（使用 AnimationBinding 映射）
+        // ========================================
+        const Sampler* samplers = convertedAnim.samplers.data();
+
+        for (const auto& srcChannel : srcAnim.channels) {
+            int nodeIndex = srcChannel.targetNodeIndex;
+
+            // 使用 nodeToEntityMap 将节点索引转换为实体
+            auto it = nodeToEntityMap.find(nodeIndex);
+            if (it == nodeToEntityMap.end()) {
+                // 跳过未映射的骨骼（正常情况，AnimationBinding 允许 10% 不匹配）
+                continue;
+            }
+
+            Channel dstChannel;
+            dstChannel.targetEntity = it->second;
+            dstChannel.sourceData = samplers + srcChannel.samplerIndex;
+
+            // 转换路径类型
+            switch (srcChannel.path) {
+                case AnimationPathType::TRANSLATION:
+                    dstChannel.transformType = Channel::TRANSLATION;
+                    break;
+                case AnimationPathType::ROTATION:
+                    dstChannel.transformType = Channel::ROTATION;
+                    break;
+                case AnimationPathType::SCALE:
+                    dstChannel.transformType = Channel::SCALE;
+                    break;
+                case AnimationPathType::WEIGHTS:
+                    dstChannel.transformType = Channel::WEIGHTS;
+                    break;
+            }
+
+            convertedAnim.channels.push_back(dstChannel);
+        }
+
+        // ========================================
+        // 7. 创建缓存条目并插入（使用移动语义）
+        // ========================================
+        CachedAnimation cached;
+        cached.sourceId = sourceId;
+        cached.animName = srcAnim.name.empty() ? ("anim_" + std::to_string(i)) : srcAnim.name;
+        cached.fullName = sourceId + ":" + cached.animName;
+        cached.accessOrder = ++mAccessCounter;  // 初始访问顺序
+
+        // ⚠️ 关键：使用移动语义（防止 Channel::sourceData 指针悬挂）
+        cached.animation = std::move(convertedAnim);
+
+        // ⚠️ 重要：在移动前保存字符串（否则移动后为空）
+        std::string fullName = cached.fullName;
+        std::string animName = cached.animName;
+
+        // 在移动前保存日志信息
+        size_t channelCount = cached.animation.channels.size();
+        float duration = cached.animation.duration;
+
+        // 插入主缓存（使用移动语义）
+        mAnimationCache[fullName] = std::move(cached);
+
+        // 维护 Source 索引
+        mSourceIndex[sourceId].push_back(fullName);
+
+        // 维护名称索引
+        mAnimNameIndex[animName].push_back(fullName);
+
+        loadedCount++;
+
+        slog.i << "Loaded animation '" << animName << "' from source '" << sourceId << "' "
+               << "(" << channelCount << " channels, "
+               << "duration=" << duration << "s)" << io::endl;
+    }
+
+    slog.i << "Loaded " << loadedCount << " animations from source '" << sourceId << "'" << io::endl;
+
+    return loadedCount;
+}
+
+// ========================================
+// Phase 3: 播放与查询 API 实现
+// ========================================
+
+/**
+ * 精确播放：使用 sourceId 和 animName 播放动画
+ */
+bool AnimatorImpl::applyAnimation(const std::string& sourceId, const std::string& animName, float time) const {
+    std::string fullName = sourceId + ":" + animName;
+
+    auto it = mAnimationCache.find(fullName);
+    if (it == mAnimationCache.end()) {
+        mCacheMissCount++;
+        return false;  // 动画不存在
+    }
+
+    // 更新访问顺序（LRU）
+    it->second.accessOrder = ++mAccessCounter;
+    mCacheHitCount++;
+
+    const Animation& anim = it->second.animation;
+    time = time == anim.duration ? time : fmod(time, anim.duration);
+
+    TransformManager& tm = *this->transformManager;
+    tm.openLocalTransformTransaction();
+
+    for (const auto& channel : anim.channels) {
+        const Sampler* sampler = channel.sourceData;
+        if (sampler->times.size() < 2) {
+            continue;
+        }
+
+        const TimeValues& times = sampler->times;
+        TimeValues::const_iterator iter = times.lower_bound(time);
+
+        // Compute interpolant and keyframe indices
+        float t = 0.0f;
+        size_t nextIndex, prevIndex;
+        if (iter == times.end()) {
+            nextIndex = times.size() - 1;
+            prevIndex = nextIndex;
+        } else if (iter == times.begin()) {
+            nextIndex = 0;
+            prevIndex = 0;
+        } else {
+            TimeValues::const_iterator prev = iter; --prev;
+            nextIndex = iter->second;
+            prevIndex = prev->second;
+            const float nextTime = iter->first;
+            const float prevTime = prev->first;
+            float deltaTime = nextTime - prevTime;
+            assert(deltaTime >= 0);
+            if (deltaTime > 0) {
+                t = (time - prevTime) / deltaTime;
+            }
+        }
+
+        if (sampler->interpolation == Sampler::STEP) {
+            t = 0.0f;
+        }
+
+        const_cast<AnimatorImpl*>(this)->applyAnimation(channel, t, prevIndex, nextIndex);
+    }
+
+    tm.commitLocalTransformTransaction();
+    return true;
+}
+
+/**
+ * 便捷播放：仅使用 animName 播放动画（自动选择最近访问的）
+ */
+bool AnimatorImpl::applyAnimationByName(const std::string& animName, float time) const {
+    auto it = mAnimNameIndex.find(animName);
+    if (it == mAnimNameIndex.end() || it->second.empty()) {
+        mCacheMissCount++;
+        return false;  // 动画名称不存在
+    }
+
+    // 如果只有一个源包含该动画，直接使用
+    if (it->second.size() == 1) {
+        const std::string& fullName = it->second[0];
+        auto cachedIt = mAnimationCache.find(fullName);
+        if (cachedIt != mAnimationCache.end()) {
+            // 更新访问顺序
+            cachedIt->second.accessOrder = ++mAccessCounter;
+            mCacheHitCount++;
+
+            const Animation& anim = cachedIt->second.animation;
+            time = time == anim.duration ? time : fmod(time, anim.duration);
+            TransformManager& tm = *this->transformManager;
+            tm.openLocalTransformTransaction();
+
+            for (const auto& channel : anim.channels) {
+                const Sampler* sampler = channel.sourceData;
+                if (sampler->times.size() < 2) {
+                    continue;
+                }
+
+                const TimeValues& times = sampler->times;
+                TimeValues::const_iterator iter = times.lower_bound(time);
+
+                // Compute interpolant and keyframe indices
+                float t = 0.0f;
+                size_t nextIndex, prevIndex;
+                if (iter == times.end()) {
+                    nextIndex = times.size() - 1;
+                    prevIndex = nextIndex;
+                } else if (iter == times.begin()) {
+                    nextIndex = 0;
+                    prevIndex = 0;
+                } else {
+                    TimeValues::const_iterator prev = iter; --prev;
+                    nextIndex = iter->second;
+                    prevIndex = prev->second;
+                    const float nextTime = iter->first;
+                    const float prevTime = prev->first;
+                    float deltaTime = nextTime - prevTime;
+                    assert(deltaTime >= 0);
+                    if (deltaTime > 0) {
+                        t = (time - prevTime) / deltaTime;
+                    }
+                }
+
+                if (sampler->interpolation == Sampler::STEP) {
+                    t = 0.0f;
+                }
+
+                const_cast<AnimatorImpl*>(this)->applyAnimation(channel, t, prevIndex, nextIndex);
+            }
+
+            tm.commitLocalTransformTransaction();
+            return true;
+        }
+        return false;
+    }
+
+    // 多个源包含同名动画，选择最近访问的（accessOrder 最大）
+    std::string bestFullName;
+    uint64_t bestAccessOrder = 0;
+
+    for (const auto& fullName : it->second) {
+        auto cachedIt = mAnimationCache.find(fullName);
+        if (cachedIt != mAnimationCache.end()) {
+            if (cachedIt->second.accessOrder > bestAccessOrder) {
+                bestAccessOrder = cachedIt->second.accessOrder;
+                bestFullName = fullName;
+            }
+        }
+    }
+
+    if (bestFullName.empty()) {
+        mCacheMissCount++;
+        return false;
+    }
+
+    // 播放最近访问的动画
+    auto cachedIt = mAnimationCache.find(bestFullName);
+    cachedIt->second.accessOrder = ++mAccessCounter;
+    mCacheHitCount++;
+
+    const Animation& anim = cachedIt->second.animation;
+    time = time == anim.duration ? time : fmod(time, anim.duration);
+    TransformManager& tm = *this->transformManager;
+    tm.openLocalTransformTransaction();
+
+    for (const auto& channel : anim.channels) {
+        const Sampler* sampler = channel.sourceData;
+        if (sampler->times.size() < 2) {
+            continue;
+        }
+
+        const TimeValues& times = sampler->times;
+        TimeValues::const_iterator iter = times.lower_bound(time);
+
+        // Compute interpolant and keyframe indices
+        float t = 0.0f;
+        size_t nextIndex, prevIndex;
+        if (iter == times.end()) {
+            nextIndex = times.size() - 1;
+            prevIndex = nextIndex;
+        } else if (iter == times.begin()) {
+            nextIndex = 0;
+            prevIndex = 0;
+        } else {
+            TimeValues::const_iterator prev = iter; --prev;
+            nextIndex = iter->second;
+            prevIndex = prev->second;
+            const float nextTime = iter->first;
+            const float prevTime = prev->first;
+            float deltaTime = nextTime - prevTime;
+            assert(deltaTime >= 0);
+            if (deltaTime > 0) {
+                t = (time - prevTime) / deltaTime;
+            }
+        }
+
+        if (sampler->interpolation == Sampler::STEP) {
+            t = 0.0f;
+        }
+
+        const_cast<AnimatorImpl*>(this)->applyAnimation(channel, t, prevIndex, nextIndex);
+    }
+
+    tm.commitLocalTransformTransaction();
+    return true;
+}
+
+/**
+ * 查询 API 实现
+ */
+bool AnimatorImpl::hasAnimation(const std::string& sourceId, const std::string& animName) const {
+    std::string fullName = sourceId + ":" + animName;
+    return mAnimationCache.count(fullName) > 0;
+}
+
+bool AnimatorImpl::hasAnimationByName(const std::string& animName) const {
+    auto it = mAnimNameIndex.find(animName);
+    return it != mAnimNameIndex.end() && !it->second.empty();
+}
+
+bool AnimatorImpl::hasSource(const std::string& sourceId) const {
+    return mSourceIndex.count(sourceId) > 0;
+}
+
+float AnimatorImpl::getAnimationDuration(const std::string& sourceId, const std::string& animName) const {
+    std::string fullName = sourceId + ":" + animName;
+    auto it = mAnimationCache.find(fullName);
+    if (it == mAnimationCache.end()) {
+        return 0.0f;
+    }
+    return it->second.animation.duration;
+}
+
+float AnimatorImpl::getAnimationDurationByName(const std::string& animName) const {
+    auto it = mAnimNameIndex.find(animName);
+    if (it == mAnimNameIndex.end() || it->second.empty()) {
+        return 0.0f;
+    }
+
+    // 返回第一个匹配的动画时长
+    const std::string& fullName = it->second[0];
+    auto cachedIt = mAnimationCache.find(fullName);
+    if (cachedIt == mAnimationCache.end()) {
+        return 0.0f;
+    }
+    return cachedIt->second.animation.duration;
+}
+
+std::vector<std::string> AnimatorImpl::getLoadedSources() const {
+    std::vector<std::string> sources;
+    sources.reserve(mSourceIndex.size());
+    for (const auto& [sourceId, _] : mSourceIndex) {
+        sources.push_back(sourceId);
+    }
+    return sources;
+}
+
+std::vector<std::string> AnimatorImpl::getAnimationsInSource(const std::string& sourceId) const {
+    auto it = mSourceIndex.find(sourceId);
+    if (it == mSourceIndex.end()) {
+        return {};
+    }
+
+    // 提取动画名称（去掉 "sourceId:" 前缀）
+    std::vector<std::string> animNames;
+    animNames.reserve(it->second.size());
+    for (const auto& fullName : it->second) {
+        size_t colonPos = fullName.find(':');
+        if (colonPos != std::string::npos) {
+            animNames.push_back(fullName.substr(colonPos + 1));
+        }
+    }
+    return animNames;
+}
+
+/**
+ * 配置与统计 API 实现
+ */
+void AnimatorImpl::setAnimationCacheSize(size_t maxSize) {
+    mMaxCacheSize = maxSize;
+
+    // 如果当前缓存超过新的上限，立即淘汰
+    if (mAnimationCache.size() > mMaxCacheSize) {
+        evictLRU(mAnimationCache.size() - mMaxCacheSize);
+    }
+}
+
+size_t AnimatorImpl::getAnimationCacheSize() const {
+    return mMaxCacheSize;
+}
+
+AnimatorImpl::CacheStats AnimatorImpl::getAnimationCacheStats() const {
+    CacheStats stats;
+    stats.cachedCount = mAnimationCache.size();
+    stats.maxSize = mMaxCacheSize;
+    stats.sourceCount = mSourceIndex.size();
+    stats.hitCount = mCacheHitCount;
+    stats.missCount = mCacheMissCount;
+
+    uint64_t totalAccess = stats.hitCount + stats.missCount;
+    stats.hitRate = (totalAccess > 0) ? (static_cast<float>(stats.hitCount) / totalAccess * 100.0f) : 0.0f;
+
+    return stats;
+}
+
+void AnimatorImpl::resetCacheStats() {
+    mCacheHitCount = 0;
+    mCacheMissCount = 0;
 }
 
 } // namespace filament::gltfio

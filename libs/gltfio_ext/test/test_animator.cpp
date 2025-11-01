@@ -15,15 +15,17 @@
  */
 
 /**
- * Animator 外部动画测试
- * Tests for Animator external animation support
+ * Animator Cache-Based Animation API Tests
+ * Tests for Animator cache-based animation support
  *
- * 本测试文件验证 Animator 的外部动画加载功能，包括：
- * 1. 外部动画加载
- * 2. 外部动画卸载
- * 3. 动画计数
- * 4. 外部动画播放
- * 5. 内部/外部动画切换
+ * This test file verifies the Animator's new cache-based animation API, including:
+ * 1. Loading animations from multiple sources
+ * 2. Unloading sources and clearing cache
+ * 3. Animation playback by sourceId + animName
+ * 4. Animation playback by animName only (LRU selection)
+ * 5. Cache size management and LRU eviction
+ * 6. Cache statistics
+ * 7. Internal animations (legacy index-based API)
  */
 
 #include <gtest/gtest.h>
@@ -53,7 +55,7 @@ using namespace filament::gltfio_ext;
 using namespace utils;
 
 /**
- * 读取二进制文件
+ * Read binary file
  */
 static std::vector<uint8_t> readBinaryFile(const char* path) {
     std::ifstream file(path, std::ios::binary | std::ios::ate);
@@ -68,25 +70,25 @@ static std::vector<uint8_t> readBinaryFile(const char* path) {
 }
 
 /**
- * 测试 Fixture
+ * Test Fixture
  */
 class AnimatorTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // 创建 Filament Engine
+        // Create Filament Engine
         mEngine = Engine::create(Engine::Backend::NOOP);
         ASSERT_NE(mEngine, nullptr);
 
-        // 创建 NameComponentManager
+        // Create NameComponentManager
         mNameManager = new NameComponentManager(EntityManager::get());
         ASSERT_NE(mNameManager, nullptr);
 
-        // 创建 MaterialProvider
+        // Create MaterialProvider
         mMaterials = createUbershaderProvider(mEngine, UBERARCHIVE_DEFAULT_DATA,
                 UBERARCHIVE_DEFAULT_SIZE);
         ASSERT_NE(mMaterials, nullptr);
 
-        // 创建 AssetLoader
+        // Create AssetLoader
         AssetConfiguration config;
         config.engine = mEngine;
         config.materials = mMaterials;
@@ -95,7 +97,7 @@ protected:
         mLoader = AssetLoader::create(config);
         ASSERT_NE(mLoader, nullptr);
 
-        // 创建 ResourceLoader
+        // Create ResourceLoader
         ResourceConfiguration resourceConfig;
         resourceConfig.engine = mEngine;
         resourceConfig.gltfPath = nullptr;
@@ -117,7 +119,7 @@ protected:
     }
 
     /**
-     * 辅助方法：加载 GLB 文件并初始化资源
+     * Helper method: Load GLB file and initialize resources
      */
     FilamentAsset* loadAssetWithResources(const char* path) {
         auto meshData = readBinaryFile(path);
@@ -130,7 +132,7 @@ protected:
             return nullptr;
         }
 
-        // 加载资源（这会设置 mResourcesLoaded = true 并创建 Animator）
+        // Load resources (this sets mResourcesLoaded = true and creates Animator)
         mResourceLoader->loadResources(asset);
 
         return asset;
@@ -143,51 +145,14 @@ protected:
     NameComponentManager* mNameManager = nullptr;
 };
 
-/**
- * 测试：加载外部动画（Invalid Asset）
- */
-TEST_F(AnimatorTest, LoadExternalAnimationInvalidAsset) {
-    // 加载一个简单的 mesh asset
-    FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
-    ASSERT_NE(meshAsset, nullptr);
-
-    FilamentInstance* instance = meshAsset->getInstance();
-    ASSERT_NE(instance, nullptr);
-
-    auto* animator = instance->getAnimator();
-    ASSERT_NE(animator, nullptr);
-
-    // 测试传入 nullptr
-    bool success = animator->loadExternalAnimation(nullptr);
-    EXPECT_FALSE(success);
-    EXPECT_FALSE(animator->hasExternalAnimation());
-
-    mLoader->destroyAsset(meshAsset);
-}
+// ============================================================================
+// INTERNAL ANIMATION TESTS (kept unchanged, use legacy index-based API)
+// ============================================================================
 
 /**
- * 测试：检查未加载外部动画的状态
+ * Test: Get internal animation count
  */
-TEST_F(AnimatorTest, HasExternalAnimationInitiallyFalse) {
-    FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
-    ASSERT_NE(meshAsset, nullptr);
-
-    FilamentInstance* instance = meshAsset->getInstance();
-    ASSERT_NE(instance, nullptr);
-
-    auto* animator = instance->getAnimator();
-    ASSERT_NE(animator, nullptr);
-
-    // 初始状态应该是 false
-    EXPECT_FALSE(animator->hasExternalAnimation());
-
-    mLoader->destroyAsset(meshAsset);
-}
-
-/**
- * 测试：动画计数（无外部动画）
- */
-TEST_F(AnimatorTest, GetAnimationCountWithoutExternal) {
+TEST_F(AnimatorTest, GetInternalAnimationCount) {
     FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
     ASSERT_NE(meshAsset, nullptr);
 
@@ -198,33 +163,13 @@ TEST_F(AnimatorTest, GetAnimationCountWithoutExternal) {
     ASSERT_NE(animator, nullptr);
 
     size_t count = animator->getAnimationCount();
-    EXPECT_GT(count, 0);  // AnimatedMorphCube 有内部动画
+    EXPECT_GT(count, 0);  // AnimatedMorphCube has internal animations
 
     mLoader->destroyAsset(meshAsset);
 }
 
 /**
- * 测试：卸载未加载的外部动画（不应崩溃）
- */
-TEST_F(AnimatorTest, UnloadExternalAnimationWhenNoneLoaded) {
-    FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
-    ASSERT_NE(meshAsset, nullptr);
-
-    FilamentInstance* instance = meshAsset->getInstance();
-    ASSERT_NE(instance, nullptr);
-
-    auto* animator = instance->getAnimator();
-    ASSERT_NE(animator, nullptr);
-
-    // 卸载不存在的外部动画不应崩溃
-    EXPECT_NO_THROW(animator->unloadExternalAnimation());
-    EXPECT_FALSE(animator->hasExternalAnimation());
-
-    mLoader->destroyAsset(meshAsset);
-}
-
-/**
- * 测试：播放内部动画（确保未破坏原有功能）
+ * Test: Play internal animation (ensure original functionality is not broken)
  */
 TEST_F(AnimatorTest, ApplyInternalAnimation) {
     FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
@@ -238,7 +183,7 @@ TEST_F(AnimatorTest, ApplyInternalAnimation) {
 
     size_t animCount = animator->getAnimationCount();
     if (animCount > 0) {
-        // 应该能正常播放内部动画
+        // Should be able to play internal animations normally
         EXPECT_NO_THROW({
             animator->applyAnimation(0, 0.0f);
             animator->applyAnimation(0, 0.5f);
@@ -250,7 +195,7 @@ TEST_F(AnimatorTest, ApplyInternalAnimation) {
 }
 
 /**
- * 测试：播放无效索引的动画（应该输出错误但不崩溃）
+ * Test: Play animation with invalid index (should log error but not crash)
  */
 TEST_F(AnimatorTest, ApplyAnimationInvalidIndex) {
     FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
@@ -264,7 +209,7 @@ TEST_F(AnimatorTest, ApplyAnimationInvalidIndex) {
 
     size_t animCount = animator->getAnimationCount();
 
-    // 尝试播放超出范围的索引（不应崩溃）
+    // Try to play out-of-range index (should not crash)
     EXPECT_NO_THROW({
         animator->applyAnimation(animCount + 100, 0.0f);
     });
@@ -273,7 +218,7 @@ TEST_F(AnimatorTest, ApplyAnimationInvalidIndex) {
 }
 
 /**
- * 测试：获取内部动画的元数据
+ * Test: Get internal animation metadata
  */
 TEST_F(AnimatorTest, GetInternalAnimationMetadata) {
     FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
@@ -287,7 +232,7 @@ TEST_F(AnimatorTest, GetInternalAnimationMetadata) {
 
     size_t animCount = animator->getAnimationCount();
     if (animCount > 0) {
-        // 获取第一个动画的元数据
+        // Get first animation metadata
         float duration = animator->getAnimationDuration(0);
         const char* name = animator->getAnimationName(0);
 
@@ -299,53 +244,7 @@ TEST_F(AnimatorTest, GetInternalAnimationMetadata) {
 }
 
 /**
- * 测试：外部动画元数据边界检查（Duration）
- */
-TEST_F(AnimatorTest, GetExternalAnimationDurationBoundaryCheck) {
-    FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
-    ASSERT_NE(meshAsset, nullptr);
-
-    FilamentInstance* instance = meshAsset->getInstance();
-    ASSERT_NE(instance, nullptr);
-
-    auto* animator = instance->getAnimator();
-    ASSERT_NE(animator, nullptr);
-
-    size_t internalCount = animator->getAnimationCount();
-
-    // 测试访问不存在的外部动画索引（应返回 0.0f，不崩溃）
-    size_t invalidExternalIndex = internalCount + 100;
-    float duration = animator->getAnimationDuration(invalidExternalIndex);
-    EXPECT_EQ(duration, 0.0f) << "Invalid external animation index should return 0.0f";
-
-    mLoader->destroyAsset(meshAsset);
-}
-
-/**
- * 测试：外部动画元数据边界检查（Name）
- */
-TEST_F(AnimatorTest, GetExternalAnimationNameBoundaryCheck) {
-    FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
-    ASSERT_NE(meshAsset, nullptr);
-
-    FilamentInstance* instance = meshAsset->getInstance();
-    ASSERT_NE(instance, nullptr);
-
-    auto* animator = instance->getAnimator();
-    ASSERT_NE(animator, nullptr);
-
-    size_t internalCount = animator->getAnimationCount();
-
-    // 测试访问不存在的外部动画索引（应返回空字符串，不崩溃）
-    size_t invalidExternalIndex = internalCount + 100;
-    const char* name = animator->getAnimationName(invalidExternalIndex);
-    EXPECT_STREQ(name, "") << "Invalid external animation index should return empty string";
-
-    mLoader->destroyAsset(meshAsset);
-}
-
-/**
- * 测试：内部动画索引边界检查（Duration）
+ * Test: Internal animation duration boundary check
  */
 TEST_F(AnimatorTest, GetInternalAnimationDurationBoundaryCheck) {
     FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
@@ -359,9 +258,9 @@ TEST_F(AnimatorTest, GetInternalAnimationDurationBoundaryCheck) {
 
     size_t animCount = animator->getAnimationCount();
 
-    // 测试访问越界的内部动画索引（如果只有 1 个动画，访问索引 1 应该失败）
+    // Test out-of-bounds internal animation index
     if (animCount > 0) {
-        size_t invalidIndex = animCount + 10;  // 明确超出范围
+        size_t invalidIndex = animCount + 10;
         float duration = animator->getAnimationDuration(invalidIndex);
         EXPECT_EQ(duration, 0.0f) << "Invalid internal animation index should return 0.0f";
     }
@@ -370,7 +269,7 @@ TEST_F(AnimatorTest, GetInternalAnimationDurationBoundaryCheck) {
 }
 
 /**
- * 测试：内部动画索引边界检查（Name）
+ * Test: Internal animation name boundary check
  */
 TEST_F(AnimatorTest, GetInternalAnimationNameBoundaryCheck) {
     FilamentAsset* meshAsset = loadAssetWithResources("AnimatedMorphCube.glb");
@@ -384,9 +283,9 @@ TEST_F(AnimatorTest, GetInternalAnimationNameBoundaryCheck) {
 
     size_t animCount = animator->getAnimationCount();
 
-    // 测试访问越界的内部动画索引
+    // Test out-of-bounds internal animation index
     if (animCount > 0) {
-        size_t invalidIndex = animCount + 10;  // 明确超出范围
+        size_t invalidIndex = animCount + 10;
         const char* name = animator->getAnimationName(invalidIndex);
         EXPECT_STREQ(name, "") << "Invalid internal animation index should return empty string";
     }
@@ -394,153 +293,12 @@ TEST_F(AnimatorTest, GetInternalAnimationNameBoundaryCheck) {
     mLoader->destroyAsset(meshAsset);
 }
 
-/**
- * 测试：成功加载外部动画（集成测试）
- */
-TEST_F(AnimatorTest, LoadExternalAnimationSuccess) {
-    // 加载分离的 mesh 和 animation 文件
-    auto meshData = readBinaryFile("ecorche_full.glb");
-    auto animData = readBinaryFile("ecorche_animation_only.glb");
-
-    if (meshData.empty() || animData.empty()) {
-        GTEST_SKIP() << "Test assets not found (ecorche_full.glb or ecorche_animation_only.glb)";
-    }
-
-    // 创建资产
-    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
-    ASSERT_NE(meshAsset, nullptr);
-
-    // 加载资源（创建 Animator）
-    mResourceLoader->loadResources(meshAsset);
-
-    FilamentInstance* instance = meshAsset->getInstance();
-    ASSERT_NE(instance, nullptr);
-
-    auto* animator = instance->getAnimator();
-    ASSERT_NE(animator, nullptr);
-
-    // 记录初始动画数量
-    size_t initialAnimCount = animator->getAnimationCount();
-
-    // 加载外部动画
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
-    ASSERT_NE(animAsset, nullptr);
-
-    bool success = animator->loadExternalAnimation(animAsset);
-    EXPECT_TRUE(success) << "Failed to load external animation";
-
-    // 验证状态
-    EXPECT_TRUE(animator->hasExternalAnimation());
-
-    // 验证动画数量增加
-    size_t totalAnimCount = animator->getAnimationCount();
-    size_t externalAnimCount = animAsset->getAnimationCount();
-    EXPECT_EQ(totalAnimCount, initialAnimCount + externalAnimCount)
-        << "Total animation count should be internal + external";
-
-    // 验证可以获取外部动画的元数据
-    for (size_t i = 0; i < externalAnimCount; i++) {
-        size_t externalIndex = initialAnimCount + i;
-        float duration = animator->getAnimationDuration(externalIndex);
-        const char* name = animator->getAnimationName(externalIndex);
-
-        EXPECT_GT(duration, 0.0f) << "External animation " << i << " should have valid duration";
-        EXPECT_NE(name, nullptr) << "External animation " << i << " should have a name";
-    }
-
-    // 清理
-    mLoader->destroyAnimationAsset(animAsset);
-    mLoader->destroyAsset(meshAsset);
-}
+// ============================================================================
+// CACHE-BASED ANIMATION TESTS (migrated from old external animation tests)
+// ============================================================================
 
 /**
- * 测试：替换外部动画（验证两段式更新）
- */
-TEST_F(AnimatorTest, ReplaceExternalAnimation) {
-    // 加载资产
-    auto meshData = readBinaryFile("ecorche_full.glb");
-    auto animData = readBinaryFile("ecorche_animation_only.glb");
-
-    if (meshData.empty() || animData.empty()) {
-        GTEST_SKIP() << "Test assets not found";
-    }
-
-    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
-    ASSERT_NE(meshAsset, nullptr);
-
-    mResourceLoader->loadResources(meshAsset);
-
-    FilamentInstance* instance = meshAsset->getInstance();
-    auto* animator = instance->getAnimator();
-    ASSERT_NE(animator, nullptr);
-
-    size_t initialAnimCount = animator->getAnimationCount();
-
-    // 第一次加载外部动画
-    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
-    ASSERT_NE(animAsset1, nullptr);
-
-    bool success1 = animator->loadExternalAnimation(animAsset1);
-    EXPECT_TRUE(success1);
-    EXPECT_TRUE(animator->hasExternalAnimation());
-
-    size_t countAfterFirst = animator->getAnimationCount();
-    EXPECT_GT(countAfterFirst, initialAnimCount);
-
-    // 第二次加载（替换）
-    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
-    ASSERT_NE(animAsset2, nullptr);
-
-    bool success2 = animator->loadExternalAnimation(animAsset2);
-    EXPECT_TRUE(success2) << "Should successfully replace external animation";
-    EXPECT_TRUE(animator->hasExternalAnimation());
-
-    // 验证动画数量保持一致（因为加载的是同一个文件）
-    size_t countAfterSecond = animator->getAnimationCount();
-    EXPECT_EQ(countAfterSecond, countAfterFirst) << "Animation count should remain the same after replacement";
-
-    // 清理
-    mLoader->destroyAnimationAsset(animAsset1);
-    mLoader->destroyAnimationAsset(animAsset2);
-    mLoader->destroyAsset(meshAsset);
-}
-
-/**
- * 测试：加载失败后状态保持一致（验证两段式更新的回滚）
- */
-TEST_F(AnimatorTest, LoadExternalAnimationFailureKeepsOldState) {
-    auto meshData = readBinaryFile("AnimatedMorphCube.glb");
-    ASSERT_FALSE(meshData.empty());
-
-    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
-    ASSERT_NE(meshAsset, nullptr);
-
-    mResourceLoader->loadResources(meshAsset);
-
-    FilamentInstance* instance = meshAsset->getInstance();
-    auto* animator = instance->getAnimator();
-    ASSERT_NE(animator, nullptr);
-
-    // 初始状态：没有外部动画
-    EXPECT_FALSE(animator->hasExternalAnimation());
-    size_t initialCount = animator->getAnimationCount();
-
-    // 尝试加载 nullptr（应该失败）
-    bool success = animator->loadExternalAnimation(nullptr);
-    EXPECT_FALSE(success);
-
-    // 验证状态保持不变
-    EXPECT_FALSE(animator->hasExternalAnimation()) << "Should still have no external animation after failure";
-    EXPECT_EQ(animator->getAnimationCount(), initialCount) << "Animation count should not change after failure";
-
-    mLoader->destroyAsset(meshAsset);
-}
-
-// 注意：上述集成测试验证了完整的外部动画加载流程，
-// 包括成功加载、替换现有动画、以及失败后的状态回滚。
-
-/**
- * 测试：AnimationAsset 销毁后使用 Animator（生命周期测试）
+ * Test: Safe playback after AnimationAsset destruction (lifecycle test)
  */
 TEST_F(AnimatorTest, SafePlayAfterAssetDestroy) {
     auto meshData = readBinaryFile("ecorche_full.glb");
@@ -559,37 +317,35 @@ TEST_F(AnimatorTest, SafePlayAfterAssetDestroy) {
     auto* animator = instance->getAnimator();
     ASSERT_NE(animator, nullptr);
 
-    size_t initialCount = animator->getAnimationCount();
-
-    // 加载外部动画
+    // Load animations from source
     AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    bool success = animator->loadExternalAnimation(animAsset);
-    ASSERT_TRUE(success);
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    ASSERT_GT(count, 0);
 
-    size_t externalIndex = initialCount;  // 第一个外部动画的索引
+    // Verify we can play
+    std::vector<std::string> anims = animator->getAnimationsInSource("character_anims");
+    ASSERT_GT(anims.size(), 0);
+    EXPECT_NO_THROW(animator->applyAnimation("character_anims", anims[0].c_str(), 1.0f));
 
-    // 验证可以播放
-    EXPECT_NO_THROW(animator->applyAnimation(externalIndex, 1.0f));
-
-    // 错误顺序：先销毁 AnimationAsset（但没有 unload）
+    // Wrong order: destroy AnimationAsset first (without unloading)
     mLoader->destroyAnimationAsset(animAsset);
 
-    // 尝试播放：应该安全返回（不崩溃），并输出错误日志
-    EXPECT_NO_THROW(animator->applyAnimation(externalIndex, 1.0f));
+    // Try to play: should safely return (not crash) and log error
+    EXPECT_NO_THROW(animator->applyAnimation("character_anims", anims[0].c_str(), 1.0f));
 
-    // 现在正确卸载
-    animator->unloadExternalAnimation();
+    // Now properly unload
+    animator->unloadAnimationsFromSource("character_anims");
 
-    // 验证状态已清理
-    EXPECT_FALSE(animator->hasExternalAnimation());
+    // Verify state is cleaned
+    EXPECT_FALSE(animator->hasSource("character_anims"));
 
     mLoader->destroyAsset(meshAsset);
 }
 
 /**
- * 测试：多次 load/unload 循环（内存稳定性测试）
+ * Test: Multiple load/unload cycles (memory stability test)
  */
 TEST_F(AnimatorTest, MultipleLoadUnloadCycles) {
     auto meshData = readBinaryFile("ecorche_full.glb");
@@ -608,42 +364,40 @@ TEST_F(AnimatorTest, MultipleLoadUnloadCycles) {
     auto* animator = instance->getAnimator();
     ASSERT_NE(animator, nullptr);
 
-    size_t initialCount = animator->getAnimationCount();
-
-    // 循环 10 次（降低测试时间，原计划 100 次）
+    // Cycle 10 times
     for (int i = 0; i < 10; i++) {
-        // 加载外部动画
+        // Load animations from source
         AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
         ASSERT_NE(animAsset, nullptr);
 
-        bool success = animator->loadExternalAnimation(animAsset);
-        ASSERT_TRUE(success) << "Load failed at iteration " << i;
+        size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+        ASSERT_GT(count, 0) << "Load failed at iteration " << i;
 
-        // 验证状态
-        EXPECT_TRUE(animator->hasExternalAnimation());
-        EXPECT_GT(animator->getAnimationCount(), initialCount);
+        // Verify state
+        EXPECT_TRUE(animator->hasSource("character_anims"));
 
-        // 播放一下
-        size_t externalIndex = initialCount;
-        EXPECT_NO_THROW(animator->applyAnimation(externalIndex, 1.0f));
+        // Play animation
+        std::vector<std::string> anims = animator->getAnimationsInSource("character_anims");
+        if (anims.size() > 0) {
+            EXPECT_NO_THROW(animator->applyAnimation("character_anims", anims[0].c_str(), 1.0f));
+        }
 
-        // 正确卸载
-        animator->unloadExternalAnimation();
+        // Properly unload
+        animator->unloadAnimationsFromSource("character_anims");
         mLoader->destroyAnimationAsset(animAsset);
 
-        // 验证状态已清理
-        EXPECT_FALSE(animator->hasExternalAnimation());
-        EXPECT_EQ(animator->getAnimationCount(), initialCount);
+        // Verify state is cleaned
+        EXPECT_FALSE(animator->hasSource("character_anims"));
     }
 
     mLoader->destroyAsset(meshAsset);
 
-    // 验证内存稳定（无泄漏、无崩溃）
+    // Verify memory stability (no leaks, no crashes)
     SUCCEED();
 }
 
 /**
- * 测试：正确的销毁顺序（生命周期最佳实践）
+ * Test: Correct destruction order (lifecycle best practice)
  */
 TEST_F(AnimatorTest, CorrectDestructionOrder) {
     auto meshData = readBinaryFile("ecorche_full.glb");
@@ -662,37 +416,36 @@ TEST_F(AnimatorTest, CorrectDestructionOrder) {
     auto* animator = instance->getAnimator();
     ASSERT_NE(animator, nullptr);
 
-    // 加载外部动画
+    // Load animations from source
     AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    bool success = animator->loadExternalAnimation(animAsset);
-    ASSERT_TRUE(success);
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    ASSERT_GT(count, 0);
 
-    // 验证已加载
-    EXPECT_TRUE(animator->hasExternalAnimation());
+    // Verify loaded
+    EXPECT_TRUE(animator->hasSource("character_anims"));
 
-    // 正确的销毁顺序：
-    // 1. 卸载 Animator 引用
-    animator->unloadExternalAnimation();
-    EXPECT_FALSE(animator->hasExternalAnimation());
+    // Correct destruction order:
+    // 1. Unload Animator reference
+    animator->unloadAnimationsFromSource("character_anims");
+    EXPECT_FALSE(animator->hasSource("character_anims"));
 
-    // 2. 销毁 AnimationAsset
+    // 2. Destroy AnimationAsset
     mLoader->destroyAnimationAsset(animAsset);
 
-    // 3. 销毁 FilamentAsset
+    // 3. Destroy FilamentAsset
     mLoader->destroyAsset(meshAsset);
 
-    // 验证无崩溃、无泄漏
+    // Verify no crash, no leak
     SUCCEED();
 }
 
 /**
- * 集成测试 1：完整工作流（完整资产 + 外部动画）
- * Integration Test 1: Complete workflow with full asset and external animation
+ * Integration Test 1: Complete workflow with cache-based API
  */
 TEST_F(AnimatorTest, CompleteWorkflowIntegration) {
-    // 使用 ecorche_full.glb（有内嵌动画的完整资产）
+    // Use ecorche_full.glb (full asset with embedded animations)
     auto meshData = readBinaryFile("ecorche_full.glb");
 
     if (meshData.empty()) {
@@ -708,12 +461,12 @@ TEST_F(AnimatorTest, CompleteWorkflowIntegration) {
     auto* animator = instance->getAnimator();
     ASSERT_NE(animator, nullptr);
 
-    // 验证初始状态：有内嵌动画
+    // Verify initial state: has internal animations
     size_t initialAnimCount = animator->getAnimationCount();
     EXPECT_GT(initialAnimCount, 0) << "Full asset should have embedded animations";
-    EXPECT_FALSE(animator->hasExternalAnimation());
+    EXPECT_FALSE(animator->hasSource("external_anims"));
 
-    // 加载外部动画资产
+    // Load external animation asset
     auto animData = readBinaryFile("ecorche_animation_only.glb");
     if (animData.empty()) {
         mLoader->destroyAsset(meshAsset);
@@ -723,60 +476,57 @@ TEST_F(AnimatorTest, CompleteWorkflowIntegration) {
     AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    bool success = animator->loadExternalAnimation(animAsset);
-    ASSERT_TRUE(success) << "Failed to load external animation";
+    size_t loadedCount = animator->loadAnimationsFromSource("external_anims", animAsset);
+    ASSERT_GT(loadedCount, 0) << "Failed to load animations from source";
 
-    // 验证加载后状态
-    EXPECT_TRUE(animator->hasExternalAnimation());
-    size_t totalAnimCount = animator->getAnimationCount();
-    size_t externalAnimCount = animAsset->getAnimationCount();
-    EXPECT_EQ(totalAnimCount, initialAnimCount + externalAnimCount) << "Total should be internal + external";
-    EXPECT_GT(externalAnimCount, 0) << "Should have at least one external animation";
+    // Verify loaded state
+    EXPECT_TRUE(animator->hasSource("external_anims"));
+    std::vector<std::string> loadedAnims = animator->getAnimationsInSource("external_anims");
+    EXPECT_EQ(loadedAnims.size(), loadedCount);
 
-    // 播放第一个外部动画（多帧播放）
-    size_t firstAnimIndex = initialAnimCount;  // 外部动画从内部动画数量开始
-    float animDuration = animator->getAnimationDuration(firstAnimIndex);
-    EXPECT_GT(animDuration, 0.0f);
+    // Play first animation from source (multiple frames)
+    if (loadedAnims.size() > 0) {
+        const char* animName = loadedAnims[0].c_str();
+        float animDuration = animator->getAnimationDuration("external_anims", animName);
+        EXPECT_GT(animDuration, 0.0f);
 
-    // 播放多帧
-    std::vector<float> timePoints = {0.0f, 0.5f, 1.0f};
-    for (float time : timePoints) {
-        if (time <= animDuration) {
-            EXPECT_NO_THROW({
-                animator->applyAnimation(firstAnimIndex, time);
-            }) << "Failed to apply animation at time " << time;
+        // Play multiple frames
+        std::vector<float> timePoints = {0.0f, 0.5f, 1.0f};
+        for (float time : timePoints) {
+            if (time <= animDuration) {
+                EXPECT_NO_THROW({
+                    animator->applyAnimation("external_anims", animName, time);
+                }) << "Failed to apply animation at time " << time;
+            }
         }
     }
 
-    // 如果有多个外部动画，切换到第二个外部动画
-    if (externalAnimCount > 1) {
-        size_t secondAnimIndex = initialAnimCount + 1;
-        float secondDuration = animator->getAnimationDuration(secondAnimIndex);
+    // If multiple animations exist, switch to second animation
+    if (loadedAnims.size() > 1) {
+        const char* secondAnimName = loadedAnims[1].c_str();
+        float secondDuration = animator->getAnimationDuration("external_anims", secondAnimName);
         EXPECT_GT(secondDuration, 0.0f);
 
         EXPECT_NO_THROW({
-            animator->applyAnimation(secondAnimIndex, 0.0f);
-            animator->applyAnimation(secondAnimIndex, secondDuration * 0.5f);
+            animator->applyAnimation("external_anims", secondAnimName, 0.0f);
+            animator->applyAnimation("external_anims", secondAnimName, secondDuration * 0.5f);
         }) << "Failed to switch to second animation";
     }
 
-    // 注意：不调用 updateBoneMatrices()，因为 ecorche 有 327 bones，
-    // 会填满 NOOP backend 的 circular buffer
-    // updateBoneMatrices() 的功能在其他测试中已经验证
+    // Note: Not calling updateBoneMatrices() because ecorche has 327 bones
+    // which would fill the NOOP backend's circular buffer
 
-    // 卸载外部动画
-    animator->unloadExternalAnimation();
-    EXPECT_FALSE(animator->hasExternalAnimation());
-    EXPECT_EQ(animator->getAnimationCount(), initialAnimCount) << "Count should return to initial value after unload";
+    // Unload animations from source
+    animator->unloadAnimationsFromSource("external_anims");
+    EXPECT_FALSE(animator->hasSource("external_anims"));
 
-    // 清理
+    // Cleanup
     mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
 /**
- * 集成测试 2：Mesh 驻留性验证
- * Integration Test 2: Verify mesh pointer remains stable during animation switching
+ * Integration Test 2: Mesh residency verification
  */
 TEST_F(AnimatorTest, MeshResidentVerification) {
     auto meshData = readBinaryFile("ecorche_full.glb");
@@ -795,59 +545,62 @@ TEST_F(AnimatorTest, MeshResidentVerification) {
     auto* animator = instance->getAnimator();
     ASSERT_NE(animator, nullptr);
 
-    // 记录初始 mesh 指针和实体数量
+    // Record initial mesh pointer and entity counts
     const FilamentAsset* meshPtr1 = meshAsset;
     size_t initialEntityCount = meshAsset->getEntityCount();
     size_t initialRenderableCount = meshAsset->getRenderableEntityCount();
 
-    // 加载外部动画
+    // Load animations from source 1
     AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset1, nullptr);
 
-    bool success1 = animator->loadExternalAnimation(animAsset1);
-    ASSERT_TRUE(success1);
+    size_t count1 = animator->loadAnimationsFromSource("source1", animAsset1);
+    ASSERT_GT(count1, 0);
 
-    // 验证 mesh 指针未改变
+    // Verify mesh pointer unchanged
     EXPECT_EQ(meshPtr1, meshAsset) << "Mesh pointer should remain stable after loading animation";
     EXPECT_EQ(meshAsset->getEntityCount(), initialEntityCount) << "Entity count should not change";
     EXPECT_EQ(meshAsset->getRenderableEntityCount(), initialRenderableCount) << "Renderable count should not change";
 
-    // 播放动画（不调用 updateBoneMatrices 避免填满 circular buffer）
-    animator->applyAnimation(0, 1.0f);
+    // Play animation (not calling updateBoneMatrices to avoid circular buffer overflow)
+    std::vector<std::string> anims = animator->getAnimationsInSource("source1");
+    if (anims.size() > 0) {
+        animator->applyAnimationByName(anims[0].c_str(), 1.0f);
+    }
 
-    // 验证 mesh 指针仍未改变
+    // Verify mesh pointer still unchanged
     EXPECT_EQ(meshPtr1, meshAsset) << "Mesh pointer should remain stable after playing animation";
 
-    // 卸载并加载不同的动画（替换）
-    animator->unloadExternalAnimation();
+    // Unload and load different animations (replace)
+    animator->unloadAnimationsFromSource("source1");
     mLoader->destroyAnimationAsset(animAsset1);
 
     AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset2, nullptr);
 
-    bool success2 = animator->loadExternalAnimation(animAsset2);
-    ASSERT_TRUE(success2);
+    size_t count2 = animator->loadAnimationsFromSource("source2", animAsset2);
+    ASSERT_GT(count2, 0);
 
-    // 验证 mesh 指针在切换动画后仍未改变
+    // Verify mesh pointer still unchanged after switching
     EXPECT_EQ(meshPtr1, meshAsset) << "Mesh pointer should remain stable after switching animations";
     EXPECT_EQ(meshAsset->getEntityCount(), initialEntityCount) << "Entity count should not change after switching";
     EXPECT_EQ(meshAsset->getRenderableEntityCount(), initialRenderableCount) << "Renderable count should not change after switching";
 
-    // 播放新动画（不调用 updateBoneMatrices）
-    if (animator->getAnimationCount() > 0) {
-        animator->applyAnimation(0, 0.5f);
+    // Play new animation (not calling updateBoneMatrices)
+    anims = animator->getAnimationsInSource("source2");
+    if (anims.size() > 0) {
+        animator->applyAnimationByName(anims[0].c_str(), 0.5f);
     }
 
-    // 最终验证
+    // Final verification
     EXPECT_EQ(meshPtr1, meshAsset) << "Mesh pointer should remain stable throughout entire workflow";
 
-    // 清理
+    // Cleanup
     mLoader->destroyAnimationAsset(animAsset2);
     mLoader->destroyAsset(meshAsset);
 }
 
 /**
- * 集成测试 3：多 Animator 同步播放
  * Integration Test 3: Multiple Animators playing simultaneously
  */
 TEST_F(AnimatorTest, MultipleAnimatorsSync) {
@@ -858,13 +611,13 @@ TEST_F(AnimatorTest, MultipleAnimatorsSync) {
         GTEST_SKIP() << "Test assets not found";
     }
 
-    // 创建主资产
+    // Create main asset
     FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
     ASSERT_NE(meshAsset, nullptr);
 
     mResourceLoader->loadResources(meshAsset);
 
-    // 获取两个独立的实例
+    // Get two independent instances
     FilamentInstance* instance1 = meshAsset->getInstance();
     FilamentInstance* instance2 = mLoader->createInstance(meshAsset);
 
@@ -877,75 +630,75 @@ TEST_F(AnimatorTest, MultipleAnimatorsSync) {
     ASSERT_NE(animator1, nullptr);
     ASSERT_NE(animator2, nullptr);
 
-    // 验证两个 Animator 是独立的
+    // Verify two Animators are independent
     EXPECT_NE(animator1, animator2) << "Two instances should have different Animator objects";
 
-    // 加载外部动画资产（两个实例共享）
+    // Load animation asset (shared by both instances)
     AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    // 为两个 Animator 分别加载外部动画
-    bool success1 = animator1->loadExternalAnimation(animAsset);
-    bool success2 = animator2->loadExternalAnimation(animAsset);
+    // Load animations for both Animators
+    size_t count1 = animator1->loadAnimationsFromSource("shared_anims", animAsset);
+    size_t count2 = animator2->loadAnimationsFromSource("shared_anims", animAsset);
 
-    ASSERT_TRUE(success1) << "Animator 1 failed to load external animation";
-    ASSERT_TRUE(success2) << "Animator 2 failed to load external animation";
+    ASSERT_GT(count1, 0) << "Animator 1 failed to load animations";
+    ASSERT_GT(count2, 0) << "Animator 2 failed to load animations";
 
-    EXPECT_TRUE(animator1->hasExternalAnimation());
-    EXPECT_TRUE(animator2->hasExternalAnimation());
+    EXPECT_TRUE(animator1->hasSource("shared_anims"));
+    EXPECT_TRUE(animator2->hasSource("shared_anims"));
 
-    // 验证两个 Animator 的动画数量一致
-    EXPECT_EQ(animator1->getAnimationCount(), animator2->getAnimationCount());
+    // Get animation names
+    std::vector<std::string> anims1 = animator1->getAnimationsInSource("shared_anims");
+    std::vector<std::string> anims2 = animator2->getAnimationsInSource("shared_anims");
 
-    size_t animCount = animator1->getAnimationCount();
-    ASSERT_GT(animCount, 1) << "Need at least 2 animations for this test";
+    EXPECT_EQ(anims1.size(), anims2.size());
+    ASSERT_GT(anims1.size(), 1) << "Need at least 2 animations for this test";
 
-    // 同步播放：Animator1 播放第一个动画，Animator2 播放第二个动画
-    size_t anim1Index = 0;
-    size_t anim2Index = 1;
+    // Synchronized playback: Animator1 plays first animation, Animator2 plays second
+    const char* anim1Name = anims1[0].c_str();
+    const char* anim2Name = anims2[1].c_str();
 
     float time1 = 0.0f;
     float time2 = 0.5f;
 
     EXPECT_NO_THROW({
-        // Animator1 播放动画 0 at time 0.0
-        animator1->applyAnimation(anim1Index, time1);
+        // Animator1 plays animation 0 at time 0.0
+        animator1->applyAnimation("shared_anims", anim1Name, time1);
 
-        // Animator2 播放动画 1 at time 0.5
-        animator2->applyAnimation(anim2Index, time2);
+        // Animator2 plays animation 1 at time 0.5
+        animator2->applyAnimation("shared_anims", anim2Name, time2);
     }) << "Failed to play animations simultaneously on two Animators";
 
-    // 模拟多帧同步播放（不调用 updateBoneMatrices 避免填满 circular buffer）
+    // Simulate multi-frame synchronized playback (not calling updateBoneMatrices)
     for (int frame = 0; frame < 3; frame++) {
         float t1 = frame * 0.1f;
         float t2 = frame * 0.2f;
 
         EXPECT_NO_THROW({
-            animator1->applyAnimation(anim1Index, t1);
-            animator2->applyAnimation(anim2Index, t2);
+            animator1->applyAnimation("shared_anims", anim1Name, t1);
+            animator2->applyAnimation("shared_anims", anim2Name, t2);
         }) << "Failed at frame " << frame;
     }
 
-    // 注意：不调用 updateBoneMatrices() 避免填满 NOOP backend 的 circular buffer
+    // Note: Not calling updateBoneMatrices() to avoid NOOP backend circular buffer overflow
 
-    // 验证状态独立性：卸载 Animator1 的外部动画
-    animator1->unloadExternalAnimation();
-    EXPECT_FALSE(animator1->hasExternalAnimation());
-    EXPECT_TRUE(animator2->hasExternalAnimation()) << "Animator2 should still have external animation";
+    // Verify state independence: unload Animator1's animations
+    animator1->unloadAnimationsFromSource("shared_anims");
+    EXPECT_FALSE(animator1->hasSource("shared_anims"));
+    EXPECT_TRUE(animator2->hasSource("shared_anims")) << "Animator2 should still have animations";
 
-    // Animator2 应该仍然可以播放（不调用 updateBoneMatrices）
+    // Animator2 should still be able to play (not calling updateBoneMatrices)
     EXPECT_NO_THROW({
-        animator2->applyAnimation(anim2Index, 1.0f);
+        animator2->applyAnimation("shared_anims", anim2Name, 1.0f);
     });
 
-    // 清理
+    // Cleanup
     mLoader->destroyAnimationAsset(animAsset);
-    mLoader->destroyAsset(meshAsset);  // 会自动清理所有实例
+    mLoader->destroyAsset(meshAsset);  // Automatically cleans up all instances
 }
 
 /**
- * 集成测试 4：快速动画切换（性能测试）
- * Integration Test 4: Fast animation switching performance test
+ * Integration Test 4: Fast animation switching (performance test)
  */
 TEST_F(AnimatorTest, FastAnimationSwitching) {
     auto meshData = readBinaryFile("ecorche_full.glb");
@@ -964,67 +717,61 @@ TEST_F(AnimatorTest, FastAnimationSwitching) {
     auto* animator = instance->getAnimator();
     ASSERT_NE(animator, nullptr);
 
-    size_t initialCount = animator->getAnimationCount();
-
-    // 10 次快速 load/play/unload 循环
+    // 10 fast load/play/unload cycles
     const int CYCLES = 10;
 
     auto startTime = std::chrono::high_resolution_clock::now();
 
     for (int cycle = 0; cycle < CYCLES; cycle++) {
-        // 加载外部动画
+        // Load animations from source
         AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
         ASSERT_NE(animAsset, nullptr) << "Failed to load animation at cycle " << cycle;
 
-        bool success = animator->loadExternalAnimation(animAsset);
-        ASSERT_TRUE(success) << "Failed to load external animation at cycle " << cycle;
+        size_t count = animator->loadAnimationsFromSource("fast_switch", animAsset);
+        ASSERT_GT(count, 0) << "Failed to load animations at cycle " << cycle;
 
-        // 快速播放多个动画（减少 updateBoneMatrices 调用）
-        size_t animCount = animator->getAnimationCount();
-        ASSERT_GT(animCount, initialCount) << "Animation count not updated at cycle " << cycle;
+        // Quickly play multiple animations (not calling updateBoneMatrices)
+        std::vector<std::string> anims = animator->getAnimationsInSource("fast_switch");
+        ASSERT_GT(anims.size(), 0) << "No animations loaded at cycle " << cycle;
 
-        // 播放第一个外部动画（不调用 updateBoneMatrices 避免填满 circular buffer）
-        if (animCount > initialCount) {
-            animator->applyAnimation(initialCount, 0.0f);
-            animator->applyAnimation(initialCount, 0.5f);
+        // Play first animation (not calling updateBoneMatrices to avoid circular buffer overflow)
+        if (anims.size() > 0) {
+            animator->applyAnimation("fast_switch", anims[0].c_str(), 0.0f);
+            animator->applyAnimation("fast_switch", anims[0].c_str(), 0.5f);
         }
 
-        // 卸载外部动画
-        animator->unloadExternalAnimation();
-        EXPECT_FALSE(animator->hasExternalAnimation()) << "Failed to unload at cycle " << cycle;
+        // Unload animations
+        animator->unloadAnimationsFromSource("fast_switch");
+        EXPECT_FALSE(animator->hasSource("fast_switch")) << "Failed to unload at cycle " << cycle;
 
-        // 销毁资产
+        // Destroy asset
         mLoader->destroyAnimationAsset(animAsset);
-
-        // 验证状态已恢复
-        EXPECT_EQ(animator->getAnimationCount(), initialCount) << "Count not restored at cycle " << cycle;
     }
 
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
 
-    // 输出性能信息（仅供参考，不做严格断言）
+    // Output performance info (for reference, not strict assertion)
     std::cout << "FastAnimationSwitching: " << CYCLES << " cycles completed in "
               << duration.count() << " ms ("
               << (duration.count() / static_cast<double>(CYCLES)) << " ms/cycle)" << std::endl;
 
-    // 性能合理性检查：平均每个周期不应超过 5 秒（非常宽松的限制）
+    // Performance reasonableness check: should not exceed 5 seconds per cycle (very loose limit)
     EXPECT_LT(duration.count(), CYCLES * 5000) << "Performance is unexpectedly slow";
 
-    // 清理
+    // Cleanup
     mLoader->destroyAsset(meshAsset);
 }
 
 /**
- * 集成测试 5：动画播放和骨骼更新集成测试
  * Integration Test 5: Animation playback and bone update integration
  *
- * 使用 AnimatedMorphCube 而不是 ecorche，因为：
- * - AnimatedMorphCube 骨骼数量较少，不会填满 NOOP backend 的 circular buffer
- * - ecorche 有 327 bones，即使调用一次 updateBoneMatrices() 也会崩溃
+ * Uses AnimatedMorphCube instead of ecorche because:
+ * - AnimatedMorphCube has fewer bones, won't fill NOOP backend's circular buffer
+ * - ecorche has 327 bones, even one updateBoneMatrices() call will crash
  *
- * 注意：AnimatedMorphCube 使用 morph target 动画，不是骨骼动画，
- * 所以我们只验证API调用成功，不验证 Transform 变化
+ * Note: AnimatedMorphCube uses morph target animations, not skeletal animations,
+ * so we only verify API calls succeed, not Transform changes
  */
 TEST_F(AnimatorTest, AnimationPlaybackIntegration) {
     auto meshData = readBinaryFile("AnimatedMorphCube.glb");
@@ -1048,9 +795,9 @@ TEST_F(AnimatorTest, AnimationPlaybackIntegration) {
     float animDuration = animator->getAnimationDuration(0);
     EXPECT_GT(animDuration, 0.0f);
 
-    // 验证：可以成功播放动画并更新骨骼（不崩溃）
+    // Verify: can successfully play animation and update bones (no crash)
     EXPECT_NO_THROW({
-        // 播放多个时间点
+        // Play at multiple time points
         animator->applyAnimation(0, 0.0f);
         animator->updateBoneMatrices();
 
@@ -1058,32 +805,31 @@ TEST_F(AnimatorTest, AnimationPlaybackIntegration) {
         animator->updateBoneMatrices();
 
         animator->applyAnimation(0, animDuration);
-        // 最后一次不调用 updateBoneMatrices 以避免潜在的 circular buffer 问题
+        // Last time don't call updateBoneMatrices to avoid potential circular buffer issues
     }) << "Should be able to play animation and update bone matrices without crashing";
 
-    // 验证：可以重复播放
+    // Verify: can replay
     EXPECT_NO_THROW({
         animator->applyAnimation(0, 0.0f);
     }) << "Should be able to replay animation";
 
-    // 清理
+    // Cleanup
     mLoader->destroyAsset(meshAsset);
 }
 
 /**
- * 集成测试 6：骨骼变换正确性验证
  * Integration Test 6: Bone transform correctness verification
  *
- * 验证分离的 mesh + animation 与完整 GLB 产生相同的骨骼变换
- * 由于 NOOP backend 的 circular buffer 限制（ecorche 有 327 bones），
- * 我们不调用 updateBoneMatrices()，而是验证：
- * 1. 相同的动画名称和时长
- * 2. 相同的骨骼匹配率（100%）
- * 3. applyAnimation() 后局部变换的一致性（采样验证）
+ * Verifies that separated mesh + animation produces same bone transforms as full GLB
+ * Due to NOOP backend circular buffer limitations (ecorche has 327 bones),
+ * we don't call updateBoneMatrices(), instead we verify:
+ * 1. Same animation names and durations
+ * 2. Same bone matching rate (100%)
+ * 3. Consistency of local transforms after applyAnimation() (sampling verification)
  */
 TEST_F(AnimatorTest, BoneTransformCorrectness) {
     auto fullData = readBinaryFile("ecorche_full.glb");
-    auto meshData = readBinaryFile("ecorche_full.glb");  // 使用 full 作为 mesh（有相同骨骼结构）
+    auto meshData = readBinaryFile("ecorche_full.glb");  // Use full as mesh (has same bone structure)
     auto animData = readBinaryFile("ecorche_animation_only.glb");
 
     if (fullData.empty() || meshData.empty() || animData.empty()) {
@@ -1091,7 +837,7 @@ TEST_F(AnimatorTest, BoneTransformCorrectness) {
     }
 
     // ============================================================
-    // Baseline: 加载完整 GLB（内嵌动画）
+    // Baseline: Load full GLB (with embedded animations)
     // ============================================================
     FilamentAsset* fullAsset = mLoader->createAsset(fullData.data(), fullData.size());
     ASSERT_NE(fullAsset, nullptr);
@@ -1105,7 +851,7 @@ TEST_F(AnimatorTest, BoneTransformCorrectness) {
     ASSERT_GT(fullAnimCount, 0) << "Full asset should have embedded animations";
 
     // ============================================================
-    // Test: 加载分离的 mesh + animation
+    // Test: Load separated mesh + animation
     // ============================================================
     FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
     ASSERT_NE(meshAsset, nullptr);
@@ -1115,86 +861,685 @@ TEST_F(AnimatorTest, BoneTransformCorrectness) {
     auto* meshAnimator = meshInstance->getAnimator();
     ASSERT_NE(meshAnimator, nullptr);
 
-    size_t initialAnimCount = meshAnimator->getAnimationCount();
-
-    // 加载外部动画
+    // Load animations from source
     AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    bool success = meshAnimator->loadExternalAnimation(animAsset);
-    ASSERT_TRUE(success) << "Failed to load external animation";
-
-    size_t externalAnimCount = animAsset->getAnimationCount();
-    EXPECT_EQ(meshAnimator->getAnimationCount(), initialAnimCount + externalAnimCount);
+    size_t loadedCount = meshAnimator->loadAnimationsFromSource("external_source", animAsset);
+    ASSERT_GT(loadedCount, 0) << "Failed to load animations from source";
 
     // ============================================================
-    // 验证 1: 动画元数据一致性
+    // Verification 1: Animation metadata consistency
     // ============================================================
-    ASSERT_EQ(externalAnimCount, fullAnimCount)
+    std::vector<std::string> externalAnims = meshAnimator->getAnimationsInSource("external_source");
+    ASSERT_EQ(externalAnims.size(), fullAnimCount)
         << "External animation count should match full asset's embedded animation count";
 
     for (size_t i = 0; i < fullAnimCount; i++) {
-        size_t fullAnimIndex = i;
-        size_t externalAnimIndex = initialAnimCount + i;
-
-        // 验证时长一致（允许浮点误差）
-        float fullDuration = fullAnimator->getAnimationDuration(fullAnimIndex);
-        float externalDuration = meshAnimator->getAnimationDuration(externalAnimIndex);
+        // Verify duration consistency (allow floating point error)
+        float fullDuration = fullAnimator->getAnimationDuration(i);
+        float externalDuration = meshAnimator->getAnimationDuration("external_source", externalAnims[i].c_str());
         EXPECT_NEAR(fullDuration, externalDuration, 0.001f)
             << "Animation " << i << " duration mismatch";
 
-        // 验证名称一致
-        const char* fullName = fullAnimator->getAnimationName(fullAnimIndex);
-        const char* externalName = meshAnimator->getAnimationName(externalAnimIndex);
+        // Verify name consistency
+        const char* fullName = fullAnimator->getAnimationName(i);
+        const char* externalName = externalAnims[i].c_str();
         EXPECT_STREQ(fullName, externalName)
             << "Animation " << i << " name mismatch";
     }
 
     // ============================================================
-    // 验证 2: 骨骼匹配率（应该是 100%，因为来自同一模型）
+    // Verification 2: Bone matching rate (should be 100% since from same model)
     // ============================================================
-    // 通过日志验证（AnimationBinding 会输出匹配信息）
-    // 由于 AnimationBinding 是内部类，我们通过成功加载来间接验证
-    EXPECT_TRUE(meshAnimator->hasExternalAnimation())
+    // Verified through logs (AnimationBinding outputs matching info)
+    // Since AnimationBinding is internal class, we verify indirectly through successful load
+    EXPECT_TRUE(meshAnimator->hasSource("external_source"))
         << "Should successfully load external animation with 100% bone match";
 
     // ============================================================
-    // 验证 3: 动画应用的一致性（采样测试）
+    // Verification 3: Animation application consistency (sampling test)
     // ============================================================
-    // 对第一个动画在多个时间点采样，验证不会崩溃
-    if (fullAnimCount > 0) {
+    // Sample first animation at multiple time points, verify no crash
+    if (fullAnimCount > 0 && externalAnims.size() > 0) {
         float duration = fullAnimator->getAnimationDuration(0);
         std::vector<float> sampleTimes = {0.0f, duration * 0.25f, duration * 0.5f, duration * 0.75f, duration};
 
         for (float time : sampleTimes) {
-            // Baseline: 完整 GLB
+            // Baseline: full GLB
             EXPECT_NO_THROW({
                 fullAnimator->applyAnimation(0, time);
             }) << "Full asset should play at time " << time;
 
-            // Test: 分离的 mesh + animation
+            // Test: separated mesh + animation
             EXPECT_NO_THROW({
-                meshAnimator->applyAnimation(initialAnimCount, time);
+                meshAnimator->applyAnimation("external_source", externalAnims[0].c_str(), time);
             }) << "Mesh + external animation should play at time " << time;
         }
     }
 
     // ============================================================
-    // 注意事项
+    // Notes
     // ============================================================
-    // 1. 不调用 updateBoneMatrices()，因为 ecorche 有 327 bones 会填满 circular buffer
-    // 2. 不比较世界变换矩阵，因为无法在 NOOP backend 中获取最终矩阵
-    // 3. 通过元数据一致性 + 成功加载 + 无崩溃播放来验证正确性
-    // 4. 真实的矩阵比较需要在真实渲染 backend 中进行（Metal/Vulkan/OpenGL）
+    // 1. Not calling updateBoneMatrices() because ecorche has 327 bones will fill circular buffer
+    // 2. Not comparing world transform matrices because can't get final matrices in NOOP backend
+    // 3. Verify correctness through metadata consistency + successful load + no-crash playback
+    // 4. Real matrix comparison requires real rendering backend (Metal/Vulkan/OpenGL)
 
-    // 清理
+    // Cleanup
     mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
     mLoader->destroyAsset(fullAsset);
+}
+
+// ============================================================================
+// NEW CACHE FUNCTIONALITY TESTS
+// ============================================================================
+
+/**
+ * Test: Load animations from source - basic functionality
+ */
+TEST_F(AnimatorTest, LoadAnimationsFromSourceBasic) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Load animations from source
+    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset, nullptr);
+
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    EXPECT_GT(count, 0) << "Should load at least one animation";
+
+    // Verify source exists
+    EXPECT_TRUE(animator->hasSource("character_anims"));
+
+    // Verify animations are queryable
+    std::vector<std::string> anims = animator->getAnimationsInSource("character_anims");
+    EXPECT_EQ(anims.size(), count);
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Load from multiple sources
+ */
+TEST_F(AnimatorTest, LoadMultipleSources) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Load from source 1
+    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset1, nullptr);
+    size_t count1 = animator->loadAnimationsFromSource("character_anims", animAsset1);
+    EXPECT_GT(count1, 0);
+
+    // Load from source 2
+    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset2, nullptr);
+    size_t count2 = animator->loadAnimationsFromSource("weapon_anims", animAsset2);
+    EXPECT_GT(count2, 0);
+
+    // Verify both sources exist
+    EXPECT_TRUE(animator->hasSource("character_anims"));
+    EXPECT_TRUE(animator->hasSource("weapon_anims"));
+
+    // Verify loaded sources list
+    std::vector<std::string> sources = animator->getLoadedSources();
+    EXPECT_EQ(sources.size(), 2);
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset1);
+    mLoader->destroyAnimationAsset(animAsset2);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Unload a specific source
+ */
+TEST_F(AnimatorTest, UnloadSource) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Load from two sources
+    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset1, nullptr);
+    ASSERT_NE(animAsset2, nullptr);
+
+    animator->loadAnimationsFromSource("source1", animAsset1);
+    animator->loadAnimationsFromSource("source2", animAsset2);
+
+    EXPECT_TRUE(animator->hasSource("source1"));
+    EXPECT_TRUE(animator->hasSource("source2"));
+
+    // Unload source1
+    animator->unloadAnimationsFromSource("source1");
+    EXPECT_FALSE(animator->hasSource("source1"));
+    EXPECT_TRUE(animator->hasSource("source2")) << "source2 should remain loaded";
+
+    // Verify loaded sources list
+    std::vector<std::string> sources = animator->getLoadedSources();
+    EXPECT_EQ(sources.size(), 1);
+    EXPECT_EQ(sources[0], "source2");
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset1);
+    mLoader->destroyAnimationAsset(animAsset2);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Clear all cache
+ */
+TEST_F(AnimatorTest, ClearAllCache) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Load from multiple sources
+    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset1, nullptr);
+    ASSERT_NE(animAsset2, nullptr);
+
+    animator->loadAnimationsFromSource("source1", animAsset1);
+    animator->loadAnimationsFromSource("source2", animAsset2);
+
+    EXPECT_TRUE(animator->hasSource("source1"));
+    EXPECT_TRUE(animator->hasSource("source2"));
+
+    // Clear all cache
+    animator->clearAnimationCache();
+
+    // Verify all sources are cleared
+    EXPECT_FALSE(animator->hasSource("source1"));
+    EXPECT_FALSE(animator->hasSource("source2"));
+
+    std::vector<std::string> sources = animator->getLoadedSources();
+    EXPECT_EQ(sources.size(), 0);
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset1);
+    mLoader->destroyAnimationAsset(animAsset2);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Apply animation by sourceId and animation name (precise playback)
+ */
+TEST_F(AnimatorTest, ApplyAnimationBySourceAndName) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Load animations
+    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset, nullptr);
+
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    ASSERT_GT(count, 0);
+
+    // Get animation names
+    std::vector<std::string> anims = animator->getAnimationsInSource("character_anims");
+    ASSERT_GT(anims.size(), 0);
+
+    // Apply animation by sourceId + animName
+    const char* animName = anims[0].c_str();
+    EXPECT_TRUE(animator->hasAnimation("character_anims", animName));
+
+    bool success = animator->applyAnimation("character_anims", animName, 1.0f);
+    EXPECT_TRUE(success) << "Should successfully apply animation by sourceId and name";
+
+    // Try non-existent animation
+    bool failResult = animator->applyAnimation("character_anims", "nonexistent_anim", 0.0f);
+    EXPECT_FALSE(failResult) << "Should fail for non-existent animation";
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Apply animation by name only (convenient playback with LRU selection)
+ */
+TEST_F(AnimatorTest, ApplyAnimationByNameOnly) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Load animations
+    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset, nullptr);
+
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    ASSERT_GT(count, 0);
+
+    // Get animation names
+    std::vector<std::string> anims = animator->getAnimationsInSource("character_anims");
+    ASSERT_GT(anims.size(), 0);
+
+    // Apply animation by name only (no sourceId)
+    const char* animName = anims[0].c_str();
+    EXPECT_TRUE(animator->hasAnimationByName(animName));
+
+    bool success = animator->applyAnimationByName(animName, 1.0f);
+    EXPECT_TRUE(success) << "Should successfully apply animation by name only";
+
+    // Try non-existent animation
+    bool failResult = animator->applyAnimationByName("nonexistent_anim", 0.0f);
+    EXPECT_FALSE(failResult) << "Should fail for non-existent animation";
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Multiple sources with same animation name (LRU selection)
+ */
+TEST_F(AnimatorTest, MultipleSourcesSameAnimName) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Load same animations from two different sources
+    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset1, nullptr);
+    ASSERT_NE(animAsset2, nullptr);
+
+    animator->loadAnimationsFromSource("source1", animAsset1);
+    animator->loadAnimationsFromSource("source2", animAsset2);
+
+    // Get animation name (same in both sources)
+    std::vector<std::string> anims1 = animator->getAnimationsInSource("source1");
+    std::vector<std::string> anims2 = animator->getAnimationsInSource("source2");
+    ASSERT_GT(anims1.size(), 0);
+    ASSERT_GT(anims2.size(), 0);
+
+    const char* animName = anims1[0].c_str();
+
+    // Verify animation exists in both sources
+    EXPECT_TRUE(animator->hasAnimation("source1", animName));
+    EXPECT_TRUE(animator->hasAnimation("source2", animName));
+    EXPECT_TRUE(animator->hasAnimationByName(animName));
+
+    // Play by name only - should use LRU (most recently loaded is source2)
+    bool success = animator->applyAnimationByName(animName, 0.0f);
+    EXPECT_TRUE(success);
+
+    // Play from specific source
+    success = animator->applyAnimation("source1", animName, 0.0f);
+    EXPECT_TRUE(success);
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset1);
+    mLoader->destroyAnimationAsset(animAsset2);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Cache LRU eviction when cache is full
+ */
+TEST_F(AnimatorTest, CacheLRUEviction) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // First load animations with large cache size
+    animator->setAnimationCacheSize(100);
+
+    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset, nullptr);
+
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    ASSERT_GT(count, 2) << "Need at least 3 animations for LRU eviction test";
+
+    // Verify all animations loaded
+    auto stats = animator->getAnimationCacheStats();
+    EXPECT_EQ(stats.cachedCount, count);
+
+    // Get animation names
+    std::vector<std::string> anims = animator->getAnimationsInSource("character_anims");
+    ASSERT_GE(anims.size(), 3);
+
+    // Update access order by playing animations
+    animator->applyAnimationByName(anims[0].c_str(), 0.0f);  // Oldest
+    animator->applyAnimationByName(anims[1].c_str(), 0.0f);  // Middle
+    animator->applyAnimationByName(anims[2].c_str(), 0.0f);  // Newest
+
+    // Now reduce cache size to 2 - should trigger LRU eviction
+    animator->setAnimationCacheSize(2);
+
+    // Cache should now have only 2 animations (anims[1] and anims[2])
+    stats = animator->getAnimationCacheStats();
+    EXPECT_EQ(stats.cachedCount, 2);
+
+    // anims[0] should have been evicted
+    // anims[1] and anims[2] should still be in cache
+    // Play them to verify they still work
+    EXPECT_TRUE(animator->applyAnimationByName(anims[1].c_str(), 0.0f));
+    EXPECT_TRUE(animator->applyAnimationByName(anims[2].c_str(), 0.0f));
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Cache size management
+ */
+TEST_F(AnimatorTest, CacheSizeManagement) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Set cache size to 5
+    animator->setAnimationCacheSize(5);
+
+    // Load animations
+    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset, nullptr);
+
+    animator->loadAnimationsFromSource("character_anims", animAsset);
+
+    // Get cache stats
+    auto stats = animator->getAnimationCacheStats();
+    EXPECT_EQ(stats.maxSize, 5);
+
+    // Change cache size to 10
+    animator->setAnimationCacheSize(10);
+    stats = animator->getAnimationCacheStats();
+    EXPECT_EQ(stats.maxSize, 10);
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Cache statistics
+ */
+TEST_F(AnimatorTest, CacheStatistics) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Set cache size
+    animator->setAnimationCacheSize(10);
+
+    // Initial stats - cache should be empty
+    auto stats = animator->getAnimationCacheStats();
+    EXPECT_EQ(stats.cachedCount, 0);
+    EXPECT_EQ(stats.maxSize, 10);
+    EXPECT_EQ(stats.hitCount, 0);
+    EXPECT_EQ(stats.missCount, 0);
+
+    // Load animations
+    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset, nullptr);
+
+    size_t loadedCount = animator->loadAnimationsFromSource("character_anims", animAsset);
+    ASSERT_GT(loadedCount, 0);
+
+    // After loading, all animations should be in cache (eager loading)
+    stats = animator->getAnimationCacheStats();
+    EXPECT_EQ(stats.cachedCount, loadedCount);
+    EXPECT_EQ(stats.sourceCount, 1);
+
+    // Get animation names
+    std::vector<std::string> anims = animator->getAnimationsInSource("character_anims");
+    ASSERT_EQ(anims.size(), loadedCount);
+
+    // Play first animation - already in cache (eager loading)
+    animator->applyAnimationByName(anims[0].c_str(), 0.0f);
+    stats = animator->getAnimationCacheStats();
+    EXPECT_GT(stats.hitCount, 0);  // Hit because already loaded
+
+    // Play same animation again - another cache hit
+    size_t prevHits = stats.hitCount;
+    animator->applyAnimationByName(anims[0].c_str(), 0.5f);
+    stats = animator->getAnimationCacheStats();
+    EXPECT_GT(stats.hitCount, prevHits);
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Query animation duration by sourceId + name and by name only
+ */
+TEST_F(AnimatorTest, QueryAnimationDuration) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Load animations
+    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset, nullptr);
+
+    animator->loadAnimationsFromSource("character_anims", animAsset);
+
+    // Get animation names
+    std::vector<std::string> anims = animator->getAnimationsInSource("character_anims");
+    ASSERT_GT(anims.size(), 0);
+
+    const char* animName = anims[0].c_str();
+
+    // Query duration by sourceId + name
+    float duration1 = animator->getAnimationDuration("character_anims", animName);
+    EXPECT_GT(duration1, 0.0f);
+
+    // Query duration by name only
+    float duration2 = animator->getAnimationDurationByName(animName);
+    EXPECT_GT(duration2, 0.0f);
+
+    // Should be the same
+    EXPECT_NEAR(duration1, duration2, 0.001f);
+
+    // Query non-existent animation
+    float invalidDuration = animator->getAnimationDuration("character_anims", "nonexistent");
+    EXPECT_EQ(invalidDuration, 0.0f);
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset);
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: Query loaded sources and animations in each source
+ */
+TEST_F(AnimatorTest, QuerySourcesAndAnimations) {
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+
+    if (meshData.empty() || animData.empty()) {
+        GTEST_SKIP() << "Test assets not found";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Initially no sources loaded
+    std::vector<std::string> sources = animator->getLoadedSources();
+    EXPECT_EQ(sources.size(), 0);
+
+    // Load from source 1
+    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset1, nullptr);
+    size_t count1 = animator->loadAnimationsFromSource("character_anims", animAsset1);
+    EXPECT_GT(count1, 0);
+
+    // Load from source 2
+    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset2, nullptr);
+    size_t count2 = animator->loadAnimationsFromSource("weapon_anims", animAsset2);
+    EXPECT_GT(count2, 0);
+
+    // Query loaded sources
+    sources = animator->getLoadedSources();
+    EXPECT_EQ(sources.size(), 2);
+
+    // Verify source names
+    bool hasCharacter = false;
+    bool hasWeapon = false;
+    for (const auto& source : sources) {
+        if (source == "character_anims") hasCharacter = true;
+        if (source == "weapon_anims") hasWeapon = true;
+    }
+    EXPECT_TRUE(hasCharacter);
+    EXPECT_TRUE(hasWeapon);
+
+    // Query animations in each source
+    std::vector<std::string> charAnims = animator->getAnimationsInSource("character_anims");
+    std::vector<std::string> weaponAnims = animator->getAnimationsInSource("weapon_anims");
+
+    EXPECT_EQ(charAnims.size(), count1);
+    EXPECT_EQ(weaponAnims.size(), count2);
+
+    // Query non-existent source
+    std::vector<std::string> invalidAnims = animator->getAnimationsInSource("nonexistent");
+    EXPECT_EQ(invalidAnims.size(), 0);
+
+    // Cleanup
+    mLoader->destroyAnimationAsset(animAsset1);
+    mLoader->destroyAnimationAsset(animAsset2);
+    mLoader->destroyAsset(meshAsset);
 }
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
-

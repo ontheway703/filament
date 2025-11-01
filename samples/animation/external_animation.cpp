@@ -20,15 +20,16 @@
  * 演示加载外部动画资产的基本工作流程：
  * 1. 加载仅含网格的 GLB (ecorche_mesh_only.glb, 82 MB)
  * 2. 加载仅含动画的 GLB (ecorche_animation_only.glb, 679 KB)
- * 3. 将外部动画绑定到网格的 Animator
- * 4. 使用键盘(1/2/3 键)切换动画
+ * 3. 将外部动画绑定到网格的 Animator（使用缓存系统）
+ * 4. 使用键盘(1/2/3 键)切换动画（通过名称访问）
  *
  * 这验证了完整的外部动画加载-绑定-播放流程。
  *
- * 【gltfio_ext 核心特性】外部动画系统：
+ * 【gltfio_ext 核心特性】基于缓存的动画系统：
  * - 支持将动画和网格分离存储，显著减少资源大小
- * - 允许在运行时动态加载和卸载动画
- * - 多个模型可以共享同一套动画数据
+ * - 允许在运行时动态加载和卸载动画源
+ * - 通过缓存机制共享动画数据，提高内存效率
+ * - 支持按名称访问动画，提供更灵活的动画控制
  */
 
 #include "common/AnimationUtils.h"
@@ -64,6 +65,8 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <vector>
+#include <string>
 
 using namespace filament;
 using namespace filament::math;
@@ -75,6 +78,9 @@ static constexpr int WINDOW_HEIGHT = 768;
 // 资产路径（来自 PLAN.md）
 static constexpr const char* MESH_GLB = "ecorche_mesh_only.glb";      // 仅含网格和骨骼的 GLB
 static constexpr const char* ANIM_GLB = "ecorche_animation_only.glb";  // 仅含动画数据的 GLB
+
+// 【新 API】缓存源 ID，用于标识动画源
+static constexpr const char* ANIM_SOURCE_ID = "character_anims";
 
 struct App {
     // SDL 和窗口
@@ -107,12 +113,12 @@ struct App {
     // 光照
     Entity keyLight, fillLight;
 
-    // 动画状态
-    size_t internalAnimCount = 0;  // 网格内部的动画数量（本例中为0）
-    size_t totalAnimCount = 0;     // 加载外部动画后的总动画数量
-    int currentAnimation = 0;      // 当前播放的动画索引
-    float animTime = 0.0f;         // 当前动画时间
-    bool animPlaying = true;       // 是否正在播放
+    // 【新 API】动画状态
+    // 使用动画名称列表和索引，而不是总数计数
+    std::vector<std::string> animationNames;  // 从源中加载的动画名称列表
+    int currentAnimIndex = 0;                 // 当前播放的动画在列表中的索引
+    float animTime = 0.0f;                    // 当前动画时间
+    bool animPlaying = true;                  // 是否正在播放
 };
 
 // 初始化 SDL 窗口系统
@@ -296,7 +302,7 @@ static bool loadMesh(App& app) {
     return true;
 }
 
-// 【gltfio_ext 核心特性】加载外部动画资产
+// 【gltfio_ext 核心特性】加载外部动画资产（使用新的缓存 API）
 // 这是 gltfio_ext 最重要的功能之一：支持将动画数据与网格分离
 static bool loadExternalAnimation(App& app) {
     std::cout << "\n=== Loading external animation ===" << std::endl;
@@ -328,28 +334,35 @@ static bool loadExternalAnimation(App& app) {
         return false;
     }
 
-    // 获取网格内部的动画数量（用于验证外部动画是否成功加载）
-    app.internalAnimCount = app.animator->getAnimationCount();
-    std::cout << "Internal animations in mesh: " << app.internalAnimCount << std::endl;
+    // 获取网格内部的动画数量（现在只返回内部动画）
+    size_t internalAnimCount = app.animator->getAnimationCount();
+    std::cout << "Internal animations in mesh: " << internalAnimCount << std::endl;
 
-    // 【gltfio_ext 核心 API】将外部动画绑定到 Animator
-    // loadExternalAnimation() 会：
-    // 1. 解析外部动画的骨骼层级和通道
-    // 2. 将其与网格的骨骼进行名称匹配和绑定
-    // 3. 将动画添加到 Animator 的动画列表中
-    if (!app.animator->loadExternalAnimation(app.animAsset)) {
-        std::cerr << "Failed to bind external animation to animator" << std::endl;
+    // 【新 API】loadAnimationsFromSource() - 将外部动画加载到缓存中
+    // 参数：sourceId - 唯一标识此动画源的字符串
+    //       asset - AnimationAsset 指针
+    // 返回：加载的动画数量
+    size_t loadedCount = app.animator->loadAnimationsFromSource(ANIM_SOURCE_ID, app.animAsset);
+    if (loadedCount == 0) {
+        std::cerr << "Failed to load animations from source" << std::endl;
         return false;
     }
 
-    app.totalAnimCount = app.animator->getAnimationCount();
     std::cout << "External animation loaded successfully" << std::endl;
-    std::cout << "Total animations after loading: " << app.totalAnimCount << std::endl;
-    std::cout << "External animations added: " << (app.totalAnimCount - app.internalAnimCount) << std::endl;
+    std::cout << "Animations loaded from source: " << loadedCount << std::endl;
+
+    // 【新 API】getAnimationsInSource() - 获取源中的动画名称列表
+    // 返回一个 vector<string>，包含该源中所有动画的名称
+    app.animationNames = app.animator->getAnimationsInSource(ANIM_SOURCE_ID);
+
+    std::cout << "Available animations:" << std::endl;
+    for (size_t i = 0; i < app.animationNames.size(); i++) {
+        std::cout << "  " << (i + 1) << ". " << app.animationNames[i] << std::endl;
+    }
 
     // 验证外部动画是否成功添加
-    if (app.totalAnimCount <= app.internalAnimCount) {
-        std::cerr << "Warning: No new animations added from external asset" << std::endl;
+    if (app.animationNames.empty()) {
+        std::cerr << "Warning: No animations found in external asset" << std::endl;
     }
 
     return true;
@@ -359,16 +372,19 @@ static bool loadExternalAnimation(App& app) {
 static void updateAnimation(App& app, double deltaTime) {
     if (!app.animator) return;
 
-    if (app.totalAnimCount == 0) return;
+    if (app.animationNames.empty()) return;
 
     // 确保动画索引有效
-    if (app.currentAnimation < 0 || app.currentAnimation >= (int)app.totalAnimCount) {
-        app.currentAnimation = 0;
+    if (app.currentAnimIndex < 0 || app.currentAnimIndex >= (int)app.animationNames.size()) {
+        app.currentAnimIndex = 0;
     }
 
     // 更新动画时间（如果正在播放）
     if (app.animPlaying) {
-        const float duration = app.animator->getAnimationDuration((size_t)app.currentAnimation);
+        // 【新 API】getAnimationDurationByName() - 通过名称获取动画时长
+        const std::string& animName = app.animationNames[app.currentAnimIndex];
+        const float duration = app.animator->getAnimationDurationByName(animName.c_str());
+
         if (duration > 0.0f) {
             app.animTime += (float)deltaTime;
             // 循环播放动画
@@ -378,21 +394,21 @@ static void updateAnimation(App& app, double deltaTime) {
         }
     }
 
-    // 【gltfio_ext API】应用动画并更新骨骼矩阵
-    // applyAnimation() - 根据时间采样动画数据并更新骨骼的本地变换
-    // updateBoneMatrices() - 计算骨骼的全局变换矩阵（用于蒙皮）
-    app.animator->applyAnimation((size_t)app.currentAnimation, app.animTime);
+    // 【新 API】applyAnimationByName() - 通过名称应用动画
+    // 这会使用 LRU 缓存机制，自动管理内存
+    const std::string& animName = app.animationNames[app.currentAnimIndex];
+    app.animator->applyAnimationByName(animName.c_str(), app.animTime);
     app.animator->updateBoneMatrices();
 }
 
 // 清理资源（按照正确的顺序销毁所有对象）
 static void cleanup(App& app) {
     if (app.engine) {
-        // 【gltfio_ext 核心 API】卸载外部动画
+        // 【新 API】unloadAnimationsFromSource() - 卸载指定源的所有动画
         // 必须在销毁动画资产之前先从 Animator 中卸载
-        if (app.animator && app.animAsset) {
-            std::cout << "\nUnloading external animation..." << std::endl;
-            app.animator->unloadExternalAnimation();
+        if (app.animator && !app.animationNames.empty()) {
+            std::cout << "\nUnloading external animation source..." << std::endl;
+            app.animator->unloadAnimationsFromSource(ANIM_SOURCE_ID);
         }
 
         // 【gltfio_ext 独特 API】销毁外部动画资产
@@ -445,7 +461,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "=== External Animation Sample ===" << std::endl;
     std::cout << "This sample demonstrates loading external animation assets" << std::endl;
-    std::cout << "using the gltfio_ext library.\n" << std::endl;
+    std::cout << "using the gltfio_ext cache-based animation API.\n" << std::endl;
 
     // 初始化 SDL 和 Filament
     if (!initSDL(app)) {
@@ -463,8 +479,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // 【示例工作流程步骤 2】加载外部动画资产并绑定到网格
-    // 这是 gltfio_ext 的核心特性：动画与网格分离
+    // 【示例工作流程步骤 2】加载外部动画资产并绑定到网格（使用缓存系统）
+    // 这是 gltfio_ext 的核心特性：动画与网格分离，通过缓存机制共享
     if (!loadExternalAnimation(app)) {
         cleanup(app);
         return 1;
@@ -511,32 +527,32 @@ int main(int argc, char* argv[]) {
                         std::cout << (app.animPlaying ? "Playing" : "Paused") << std::endl;
                         break;
 
-                    // 【示例工作流程步骤 3】切换动画
-                    // 外部动画加载后，可以像内部动画一样通过索引切换
+                    // 【示例工作流程步骤 3】切换动画（使用名称索引）
+                    // 外部动画加载后，可以通过名称访问
                     case SDLK_1:
                     case SDLK_KP_1:
-                        if (app.totalAnimCount > 0) {
-                            app.currentAnimation = 0;
+                        if (app.animationNames.size() > 0) {
+                            app.currentAnimIndex = 0;
                             app.animTime = 0.0f;
-                            std::cout << "Switched to animation 1" << std::endl;
+                            std::cout << "Switched to animation 1: " << app.animationNames[0] << std::endl;
                         }
                         break;
 
                     case SDLK_2:
                     case SDLK_KP_2:
-                        if (app.totalAnimCount > 1) {
-                            app.currentAnimation = 1;
+                        if (app.animationNames.size() > 1) {
+                            app.currentAnimIndex = 1;
                             app.animTime = 0.0f;
-                            std::cout << "Switched to animation 2" << std::endl;
+                            std::cout << "Switched to animation 2: " << app.animationNames[1] << std::endl;
                         }
                         break;
 
                     case SDLK_3:
                     case SDLK_KP_3:
-                        if (app.totalAnimCount > 2) {
-                            app.currentAnimation = 2;
+                        if (app.animationNames.size() > 2) {
+                            app.currentAnimIndex = 2;
                             app.animTime = 0.0f;
-                            std::cout << "Switched to animation 3" << std::endl;
+                            std::cout << "Switched to animation 3: " << app.animationNames[2] << std::endl;
                         }
                         break;
 

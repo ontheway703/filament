@@ -17,25 +17,25 @@
 /*
  * Sample 3: multi_character_animation.cpp
  *
- * 【验证目标】多实例共享 AnimationAsset 的内存效率与并发安全性
+ * 【验证目标】多实例共享缓存动画的内存效率与并发安全性
  *
  * 演示场景：
  * 1. 创建 5 个角色实例（5 个 FilamentAsset，每个 82MB 网格数据）
  * 2. 加载 1 个共享动画资产（1 个 AnimationAsset，679KB 动画数据）
- * 3. 将共享动画绑定到所有 5 个 Animator
+ * 3. 将共享动画绑定到所有 5 个 Animator（使用相同的源 ID）
  * 4. 支持两种播放模式：独立播放和同步播放
  *
  * 【核心验证点】
  * - 【内存效率】验证动画数据只存储一份，节约内存（传统方式需要 679KB × 5 = 3.4MB）
  * - 【独立状态】验证每个 Animator 维护独立的播放状态（时间、索引）
- * - 【并发安全】验证多个 Animator 并发访问同一 AnimationAsset 的安全性
+ * - 【并发安全】验证多个 Animator 并发访问同一缓存的安全性
  * - 【资源管理】验证共享资源的正确清理顺序（先解绑所有 Animator，再销毁一次 AnimationAsset）
  *
- * 【gltfio_ext 关键特性】
- * - AnimationAsset 可以被多个 Animator 共享
- * - 每个 Animator 调用 loadExternalAnimation() 时传入相同的 AnimationAsset 指针
- * - 播放时每个 Animator 独立调用 applyAnimation()，但读取的是共享数据
- * - 清理时必须先对所有 Animator 调用 unloadExternalAnimation()，最后才能 destroyAnimationAsset()
+ * 【gltfio_ext 关键特性】基于缓存的动画共享系统
+ * - AnimationAsset 可以被多个 Animator 共享（通过相同的源 ID）
+ * - 每个 Animator 调用 loadAnimationsFromSource() 时传入相同的源 ID
+ * - 播放时每个 Animator 独立调用 applyAnimationByName()，但读取的是共享缓存
+ * - 清理时必须先对所有 Animator 调用 unloadAnimationsFromSource()，最后才能 destroyAnimationAsset()
  *
  * 【内存对比】
  * - 传统方式（不共享）：5 × (82MB mesh + 679KB anim) = 413MB
@@ -78,6 +78,7 @@
 #include <chrono>
 #include <thread>
 #include <vector>
+#include <string>
 #include <cmath>
 #include <cstdlib>
 
@@ -96,6 +97,10 @@ static constexpr float CHARACTER_SPACING = 2.5f;  // Spacing between characters
 static constexpr const char* MESH_GLB = "ecorche_mesh_only.glb";
 static constexpr const char* ANIM_GLB = "ecorche_animation_only.glb";
 
+// 【新 API】共享的动画源 ID
+// 所有角色使用相同的源 ID，实现缓存共享
+static constexpr const char* SHARED_ANIM_SOURCE = "shared_anims";
+
 // Playback modes
 enum PlayMode {
     INDEPENDENT,   // Each character plays different animation/time
@@ -104,7 +109,7 @@ enum PlayMode {
 
 // Character state for independent mode
 struct CharacterState {
-    size_t animIndex = 0;
+    std::string currentAnimName;  // 【新 API】使用动画名称而不是索引
     float animTime = 0.0f;
 };
 
@@ -132,21 +137,20 @@ struct App {
     // 【多角色资产】
     // meshAssets: 存储 5 个 FilamentAsset，每个代表一个角色的网格和骨骼数据
     // animators: 存储 5 个 Animator，每个从对应的 FilamentAsset 获取
-    // 关键：每个角色有独立的 FilamentAsset 和 Animator，但共享同一个 AnimationAsset
+    // 关键：每个角色有独立的 FilamentAsset 和 Animator，但共享同一个动画缓存源
     std::vector<gltfio_ext::FilamentAsset*> meshAssets;
     std::vector<gltfio_ext::Animator*> animators;
 
     // 【gltfio_ext 核心特性】共享的外部动画资产
-    // 这是本示例的核心：1 个 AnimationAsset 被 5 个 Animator 共享
+    // 这是本示例的核心：1 个 AnimationAsset 被 5 个 Animator 共享（通过相同的源 ID）
     // 内存只分配一次（679KB），但可以被多个角色使用
     gltfio_ext::AnimationAsset* sharedAnimAsset = nullptr;
 
     // Lighting
     Entity keyLight, fillLight;
 
-    // 【动画状态】
-    size_t internalAnimCount = 0;    // 内部动画数量（来自网格 GLB，本示例为 0）
-    size_t totalAnimCount = 0;       // 总动画数量（内部 + 外部）
+    // 【新 API】动画状态
+    std::vector<std::string> animationNames;  // 可用的动画名称列表
 
     // 【播放控制】
     PlayMode playMode = SYNCHRONIZED;               // 当前播放模式
@@ -154,7 +158,7 @@ struct App {
 
     // 【同步模式状态】
     // 同步模式下所有角色播放相同的动画和时间
-    size_t syncAnimIndex = 0;
+    int syncAnimIndex = 0;        // 当前动画在名称列表中的索引
     float syncAnimTime = 0.0f;
     bool animPlaying = true;
 };
@@ -368,11 +372,10 @@ static bool loadMultipleCharacters(App& app) {
     }
 
     // Get internal animation count from first animator
-    app.internalAnimCount = app.animators[0]->getAnimationCount();
-    app.totalAnimCount = app.internalAnimCount;
+    size_t internalAnimCount = app.animators[0]->getAnimationCount();
 
     std::cout << "Successfully created " << NUM_CHARACTERS << " characters" << std::endl;
-    std::cout << "Internal animations per character: " << app.internalAnimCount << std::endl;
+    std::cout << "Internal animations per character: " << internalAnimCount << std::endl;
 
     return true;
 }
@@ -380,20 +383,20 @@ static bool loadMultipleCharacters(App& app) {
 // 【验证核心功能】加载共享的外部动画资产并绑定到多个 Animator
 //
 // 【验证目标】
-// 1. 证明 AnimationAsset 可以被多个 Animator 共享
+// 1. 证明 AnimationAsset 可以被多个 Animator 共享（通过相同的源 ID）
 // 2. 证明只需加载一次动画数据，内存效率高
-// 3. 证明每个 Animator 都能成功绑定到同一个 AnimationAsset
+// 3. 证明每个 Animator 都能成功绑定到同一个缓存源
 // 4. 证明绑定后每个 Animator 都能独立播放动画
 //
-// 【gltfio_ext 共享机制】
+// 【新 API 共享机制】
 // - 步骤 1: loadAnimationAsset() 只调用一次，创建唯一的 AnimationAsset 对象
-// - 步骤 2: 对每个 Animator 调用 loadExternalAnimation(同一个指针)
-// - 步骤 3: 每个 Animator 内部建立到 AnimationAsset 的引用
+// - 步骤 2: 对每个 Animator 调用 loadAnimationsFromSource(相同的源 ID)
+// - 步骤 3: 每个 Animator 内部建立到同一缓存源的引用
 // - 结果：动画数据（通道、采样器、关键帧）只存储一份，被多个 Animator 读取
 //
 // 【内存效率分析】
 // 不共享方式：每个 Animator 加载独立的 AnimationAsset = 5 × 679KB = 3.4MB
-// 共享方式：1 个 AnimationAsset 被 5 个 Animator 引用 = 1 × 679KB = 679KB
+// 共享方式：1 个 AnimationAsset，5 个 Animator 使用相同源 ID = 1 × 679KB = 679KB
 // 节省：2.7MB（在更多角色或更大动画时效果更明显）
 static bool loadSharedAnimation(App& app) {
     std::cout << "\n=== Loading shared animation asset ===" << std::endl;
@@ -408,7 +411,7 @@ static bool loadSharedAnimation(App& app) {
 
     // 【gltfio_ext API】loadAnimationAsset() - 只加载一次！
     // 这是共享机制的关键：AnimationAsset 只创建一次，内存只分配一次
-    // 返回的指针将被传递给多个 Animator
+    // 返回的指针将被传递给多个 Animator（通过相同的源 ID）
     app.sharedAnimAsset = app.assetLoader->loadAnimationAsset(animBytes.data(), animBytes.size());
     if (!app.sharedAnimAsset) {
         std::cerr << "Failed to load shared AnimationAsset" << std::endl;
@@ -418,68 +421,80 @@ static bool loadSharedAnimation(App& app) {
     std::cout << "Shared AnimationAsset loaded successfully" << std::endl;
     std::cout << "Binding to " << app.animators.size() << " animators..." << std::endl;
 
-    // 【gltfio_ext 共享核心】将同一个 AnimationAsset 绑定到所有 Animator
-    // 注意：每次循环都传入同一个 sharedAnimAsset 指针！
+    // 【新 API 共享核心】将同一个 AnimationAsset 加载到所有 Animator（使用相同的源 ID）
+    // 注意：每次循环都传入相同的 SHARED_ANIM_SOURCE 和 sharedAnimAsset！
     for (size_t i = 0; i < app.animators.size(); i++) {
-        // 每个 Animator 调用 loadExternalAnimation() 时传入相同的指针
-        // Animator 内部建立到 AnimationAsset 的引用，但不拷贝数据
-        if (!app.animators[i]->loadExternalAnimation(app.sharedAnimAsset)) {
-            std::cerr << "Failed to bind animation to animator " << i << std::endl;
-            return false;
-        }
+        // 每个 Animator 调用 loadAnimationsFromSource() 时传入相同的源 ID
+        // Animator 内部会检查缓存，如果源 ID 已存在则直接使用，否则创建新缓存条目
+        size_t loadedCount = app.animators[i]->loadAnimationsFromSource(
+            SHARED_ANIM_SOURCE,
+            app.sharedAnimAsset
+        );
 
-        // 【验证】绑定后检查状态
-        if (!app.animators[i]->hasExternalAnimation()) {
-            std::cerr << "Animator " << i << " doesn't have external animation after binding!" << std::endl;
+        if (loadedCount == 0) {
+            std::cerr << "Failed to load animations for animator " << i << std::endl;
             return false;
         }
     }
 
-    // 【状态更新】所有 Animator 的动画数量应该相同
-    app.totalAnimCount = app.animators[0]->getAnimationCount();
-    size_t externalAnimCount = app.totalAnimCount - app.internalAnimCount;
+    // 【新 API】getAnimationsInSource() - 获取源中的动画名称列表
+    // 所有 Animator 应该返回相同的列表（因为使用相同的源 ID）
+    app.animationNames = app.animators[0]->getAnimationsInSource(SHARED_ANIM_SOURCE);
 
     std::cout << "Animation binding successful!" << std::endl;
-    std::cout << "  Total animations: " << app.totalAnimCount << std::endl;
-    std::cout << "  External animations: " << externalAnimCount << std::endl;
+    std::cout << "  Shared source ID: " << SHARED_ANIM_SOURCE << std::endl;
+    std::cout << "  Animations in source: " << app.animationNames.size() << std::endl;
     std::cout << "  Memory efficiency: 1 AnimationAsset shared by " << NUM_CHARACTERS << " animators" << std::endl;
+
+    std::cout << "  Available animations:" << std::endl;
+    for (size_t i = 0; i < app.animationNames.size(); i++) {
+        std::cout << "    " << (i + 1) << ". " << app.animationNames[i] << std::endl;
+    }
 
     // 初始化独立播放模式的状态
     app.characterStates.resize(NUM_CHARACTERS);
     for (int i = 0; i < NUM_CHARACTERS; i++) {
-        app.characterStates[i].animIndex = i % app.totalAnimCount;
+        // 使用动画名称而不是索引
+        size_t animIdx = i % app.animationNames.size();
+        app.characterStates[i].currentAnimName = app.animationNames[animIdx];
         app.characterStates[i].animTime = 0.0f;
     }
 
     return true;
 }
 
-// 【验证核心功能】多 Animator 独立播放动画，验证共享数据的并发安全性
+// 【验证核心功能】多 Animator 独立播放动画，验证共享缓存的并发安全性
 //
 // 【验证目标】
-// 1. 验证每个 Animator 可以独立调用 applyAnimation()
-// 2. 验证多个 Animator 并发读取同一 AnimationAsset 是安全的
-// 3. 验证每个 Animator 维护独立的播放状态（时间、索引）
+// 1. 验证每个 Animator 可以独立调用 applyAnimationByName()
+// 2. 验证多个 Animator 并发读取同一缓存是安全的
+// 3. 验证每个 Animator 维护独立的播放状态（时间、动画名称）
 // 4. 验证两种播放模式：同步（所有角色同步）和独立（各自独立）
 //
-// 【gltfio_ext 并发访问机制】
-// - 每个 Animator 内部维护独立的播放状态（时间偏移、动画索引）
-// - applyAnimation() 只读取 AnimationAsset 的数据（通道、采样器、关键帧）
-// - 多个 Animator 并发调用 applyAnimation() 是线程安全的（只读操作）
+// 【新 API 并发访问机制】
+// - 每个 Animator 内部维护独立的播放状态（时间偏移、动画名称）
+// - applyAnimationByName() 只读取缓存的数据（通道、采样器、关键帧）
+// - 多个 Animator 并发调用 applyAnimationByName() 是线程安全的（只读操作）
 // - updateBoneMatrices() 更新各自 Animator 的骨骼矩阵，互不干扰
 //
 // 【并发安全性说明】
-// AnimationAsset 的数据是只读的，多个 Animator 同时读取不会冲突
+// 缓存中的动画数据是只读的，多个 Animator 同时读取不会冲突
 // 每个 Animator 写入的是自己的骨骼矩阵缓冲区，不共享
 static void updateAnimation(App& app, double deltaTime) {
-    if (app.animators.empty() || app.totalAnimCount == 0) return;
+    if (app.animators.empty() || app.animationNames.empty()) return;
 
     if (!app.animPlaying) return;
 
     if (app.playMode == SYNCHRONIZED) {
         // 【同步播放模式】所有角色播放相同的动画和时间
-        // 所有 Animator 使用相同的 animIndex 和 animTime
-        float duration = app.animators[0]->getAnimationDuration(app.syncAnimIndex);
+        // 所有 Animator 使用相同的动画名称和 animTime
+        if (app.syncAnimIndex < 0 || app.syncAnimIndex >= (int)app.animationNames.size()) {
+            app.syncAnimIndex = 0;
+        }
+
+        const std::string& animName = app.animationNames[app.syncAnimIndex];
+        float duration = app.animators[0]->getAnimationDurationByName(animName.c_str());
+
         if (duration > 0.0f) {
             app.syncAnimTime += (float)deltaTime;
             if (app.syncAnimTime > duration) {
@@ -487,21 +502,24 @@ static void updateAnimation(App& app, double deltaTime) {
             }
         }
 
-        // 【gltfio_ext 并发调用】每个 Animator 独立调用 applyAnimation()
+        // 【新 API 并发调用】每个 Animator 独立调用 applyAnimationByName()
         // 虽然参数相同，但每个 Animator 会更新各自的骨骼矩阵
-        // 关键：所有 Animator 读取的是同一个 AnimationAsset（共享数据）
+        // 关键：所有 Animator 读取的是同一个缓存源（SHARED_ANIM_SOURCE）
         for (auto* animator : app.animators) {
-            animator->applyAnimation(app.syncAnimIndex, app.syncAnimTime);
+            animator->applyAnimationByName(animName.c_str(), app.syncAnimTime);
             animator->updateBoneMatrices();
         }
     } else {
         // 【独立播放模式】每个角色播放不同的动画和时间
-        // 每个 Animator 使用各自的 animIndex 和 animTime
+        // 每个 Animator 使用各自的动画名称和 animTime
         // 这是验证独立状态的最佳方式
         for (size_t i = 0; i < app.animators.size(); i++) {
             auto& state = app.characterStates[i];
 
-            float duration = app.animators[i]->getAnimationDuration(state.animIndex);
+            float duration = app.animators[i]->getAnimationDurationByName(
+                state.currentAnimName.c_str()
+            );
+
             if (duration > 0.0f) {
                 state.animTime += (float)deltaTime;
                 if (state.animTime > duration) {
@@ -509,11 +527,14 @@ static void updateAnimation(App& app, double deltaTime) {
                 }
             }
 
-            // 【gltfio_ext 独立状态验证】
-            // 每个 Animator 使用不同的 animIndex 和 animTime
-            // 但都从同一个 sharedAnimAsset 读取动画数据
-            // 验证：即使参数不同，共享数据访问仍然安全
-            app.animators[i]->applyAnimation(state.animIndex, state.animTime);
+            // 【新 API 独立状态验证】
+            // 每个 Animator 使用不同的动画名称和 animTime
+            // 但都从同一个 SHARED_ANIM_SOURCE 缓存读取动画数据
+            // 验证：即使参数不同，共享缓存访问仍然安全
+            app.animators[i]->applyAnimationByName(
+                state.currentAnimName.c_str(),
+                state.animTime
+            );
             app.animators[i]->updateBoneMatrices();
         }
     }
@@ -524,14 +545,15 @@ static void switchToIndependentMode(App& app) {
 
     // Randomize each character's animation
     for (size_t i = 0; i < app.characterStates.size(); i++) {
-        app.characterStates[i].animIndex = rand() % app.totalAnimCount;
+        size_t randomIdx = rand() % app.animationNames.size();
+        app.characterStates[i].currentAnimName = app.animationNames[randomIdx];
         app.characterStates[i].animTime = 0.0f;
     }
 
     std::cout << "\n[Mode] Switched to INDEPENDENT mode" << std::endl;
     std::cout << "Each character plays a random animation:" << std::endl;
     for (size_t i = 0; i < app.characterStates.size(); i++) {
-        std::cout << "  Character " << i << ": Animation " << app.characterStates[i].animIndex << std::endl;
+        std::cout << "  Character " << i << ": " << app.characterStates[i].currentAnimName << std::endl;
     }
 }
 
@@ -539,8 +561,12 @@ static void switchToSynchronizedMode(App& app) {
     app.playMode = SYNCHRONIZED;
     app.syncAnimTime = 0.0f;
 
+    if (app.syncAnimIndex < 0 || app.syncAnimIndex >= (int)app.animationNames.size()) {
+        app.syncAnimIndex = 0;
+    }
+
     std::cout << "\n[Mode] Switched to SYNCHRONIZED mode" << std::endl;
-    std::cout << "All characters play animation " << app.syncAnimIndex << std::endl;
+    std::cout << "All characters play: " << app.animationNames[app.syncAnimIndex] << std::endl;
 }
 
 static void performanceTest(App& app) {
@@ -549,7 +575,7 @@ static void performanceTest(App& app) {
 
     std::cout << "\n=== Performance Test ===" << std::endl;
     std::cout << "Rapidly switching animations for " << TEST_DURATION_SEC << " seconds..." << std::endl;
-    std::cout << "This tests concurrent access to shared AnimationAsset" << std::endl;
+    std::cout << "This tests concurrent access to shared animation cache" << std::endl;
 
     auto startTime = std::chrono::steady_clock::now();
     int totalSwitches = 0;
@@ -563,8 +589,9 @@ static void performanceTest(App& app) {
         // Rapidly switch animations on all characters
         for (int iter = 0; iter < ITERATIONS_PER_FRAME; iter++) {
             for (size_t i = 0; i < app.animators.size(); i++) {
-                size_t randomAnim = rand() % app.totalAnimCount;
-                app.animators[i]->applyAnimation(randomAnim, 0.0f);
+                size_t randomIdx = rand() % app.animationNames.size();
+                const std::string& animName = app.animationNames[randomIdx];
+                app.animators[i]->applyAnimationByName(animName.c_str(), 0.0f);
                 totalSwitches++;
             }
         }
@@ -594,32 +621,32 @@ static void performanceTest(App& app) {
 // 2. 验证 destroyAnimationAsset() 只调用一次（即使被 5 个 Animator 共享）
 // 3. 验证清理顺序错误会导致崩溃或内存错误
 //
-// 【gltfio_ext 共享资源清理顺序（关键！）】
-// 步骤 1: 对所有 Animator 调用 unloadExternalAnimation() - 解除引用关系
+// 【新 API 共享资源清理顺序（关键！）】
+// 步骤 1: 对所有 Animator 调用 unloadAnimationsFromSource() - 解除缓存引用
 // 步骤 2: 调用一次 destroyAnimationAsset() - 释放共享数据
 // 步骤 3: 销毁各个 FilamentAsset - 清理网格数据
 //
 // 【错误示例（会崩溃）】
-// 错误 1: 先 destroyAnimationAsset()，后 unloadExternalAnimation()
+// 错误 1: 先 destroyAnimationAsset()，后 unloadAnimationsFromSource()
 //        -> Animator 解绑时访问已释放的内存
 // 错误 2: 对每个 Animator 都调用 destroyAnimationAsset()
 //        -> 重复释放同一块内存，导致 double-free 错误
 static void cleanup(App& app) {
     if (app.engine) {
-        // 【步骤 1：解绑】先从所有 Animator 解绑外部动画
+        // 【步骤 1：解绑】先从所有 Animator 解绑动画源
         // 关键：必须在销毁 AnimationAsset 之前完成
-        // 每个 Animator 都需要解绑，因为都持有对 sharedAnimAsset 的引用
+        // 每个 Animator 都需要解绑，因为都持有对 SHARED_ANIM_SOURCE 的引用
         if (app.sharedAnimAsset) {
-            std::cout << "\nCleaning up: Unloading external animation from all animators..." << std::endl;
+            std::cout << "\nCleaning up: Unloading animation source from all animators..." << std::endl;
             for (auto* animator : app.animators) {
-                if (animator && animator->hasExternalAnimation()) {
-                    animator->unloadExternalAnimation();
+                if (animator) {
+                    animator->unloadAnimationsFromSource(SHARED_ANIM_SOURCE);
                 }
             }
         }
 
         // 【步骤 2：销毁共享资源】销毁 AnimationAsset（只调用一次！）
-        // 关键：虽然 5 个 Animator 都引用了它，但只能销毁一次
+        // 关键：虽然 5 个 Animator 都引用了它（通过相同的源 ID），但只能销毁一次
         // 因为内存只分配了一次，所以也只能释放一次
         if (app.assetLoader && app.sharedAnimAsset) {
             app.assetLoader->destroyAnimationAsset(app.sharedAnimAsset);
@@ -695,7 +722,7 @@ int main(int argc, char* argv[]) {
     std::cout << "=== Multi-Character Animation Sample ===" << std::endl;
     std::cout << "This sample demonstrates:" << std::endl;
     std::cout << "  - Multiple character instances (" << NUM_CHARACTERS << " characters)" << std::endl;
-    std::cout << "  - Shared AnimationAsset (memory efficiency)" << std::endl;
+    std::cout << "  - Shared animation cache (memory efficiency)" << std::endl;
     std::cout << "  - Independent and synchronized playback modes\n" << std::endl;
 
     // Initialize SDL and Filament
@@ -773,9 +800,9 @@ int main(int argc, char* argv[]) {
 
                     case SDLK_n:
                         if (app.playMode == SYNCHRONIZED) {
-                            app.syncAnimIndex = (app.syncAnimIndex + 1) % app.totalAnimCount;
+                            app.syncAnimIndex = (app.syncAnimIndex + 1) % app.animationNames.size();
                             app.syncAnimTime = 0.0f;
-                            std::cout << "[Sync] Switched to animation " << app.syncAnimIndex << std::endl;
+                            std::cout << "[Sync] Switched to: " << app.animationNames[app.syncAnimIndex] << std::endl;
                         }
                         break;
 

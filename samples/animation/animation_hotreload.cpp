@@ -17,25 +17,26 @@
 /*
  * Sample 2: animation_hotreload.cpp
  *
- * 【验证目标】外部动画的运行时热加载/热卸载能力
+ * 【验证目标】基于缓存的动画系统的运行时热加载/热卸载能力
  *
  * 演示场景：
  * 1. 启动时只加载网格（不含动画）
- * 2. 按 R 键在运行时动态加载外部动画
- * 3. 按 U 键在运行时动态卸载外部动画
+ * 2. 按 R 键在运行时动态加载外部动画源
+ * 3. 按 U 键在运行时动态卸载外部动画源
  * 4. 按 T 键运行 100 次加载/卸载循环测试
  *
  * 【核心验证点】
  * - 验证多次加载/卸载循环不会产生内存泄漏
  * - 验证卸载后状态管理的正确性
- * - 验证卸载后动画索引的边界处理
+ * - 验证卸载后动画名称列表的正确更新
  * - 验证运行时加载不会影响已有渲染流程
+ * - 验证缓存系统的资源管理
  *
- * 【gltfio_ext 关键特性】
+ * 【gltfio_ext 关键特性】基于缓存的动画系统
  * - AnimationAsset 可以独立于 FilamentAsset 生命周期
- * - Animator 支持运行时绑定和解绑外部动画
- * - hasExternalAnimation() 用于查询当前绑定状态
- * - 卸载后需要检查 currentAnimation 索引是否仍然有效
+ * - Animator 支持运行时通过源 ID 绑定和解绑动画
+ * - 使用唯一的源 ID 标识每次加载的动画版本
+ * - 卸载后需要检查动画名称列表是否仍然有效
  */
 
 #include "common/AnimationUtils.h"
@@ -71,6 +72,8 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <vector>
+#include <string>
 
 using namespace filament;
 using namespace filament::math;
@@ -82,6 +85,10 @@ static constexpr int WINDOW_HEIGHT = 768;
 // Asset paths from PLAN.md
 static constexpr const char* MESH_GLB = "ecorche_mesh_only.glb";
 static constexpr const char* ANIM_GLB = "ecorche_animation_only.glb";
+
+// 【新 API】使用版本化的源 ID 来支持热重载
+// 每次加载使用不同的源 ID，模拟动画资产的更新
+static constexpr const char* ANIM_SOURCE_PREFIX = "hotreload_anims_v";
 
 struct App {
     // SDL and window
@@ -114,18 +121,19 @@ struct App {
     // Lighting
     Entity keyLight, fillLight;
 
-    // 【动画状态管理】
-    size_t internalAnimCount = 0;    // 内部动画数量（来自网格 GLB，本示例为 0）
-    size_t totalAnimCount = 0;       // 总动画数量（内部 + 外部）
-    int currentAnimation = 0;        // 当前播放的动画索引
-    float animTime = 0.0f;           // 当前动画时间（秒）
-    bool animPlaying = true;         // 是否正在播放
+    // 【新 API】动画状态管理
+    std::vector<std::string> animationNames;  // 当前加载的动画名称列表
+    int currentAnimIndex = 0;                 // 当前播放的动画索引
+    float animTime = 0.0f;                    // 当前动画时间（秒）
+    bool animPlaying = true;                  // 是否正在播放
 
     // 【运行时热加载状态】
     // cachedAnimBytes：缓存的动画文件数据，用于多次加载测试而无需重复读文件
     // loadUnloadCycleCount：加载/卸载循环次数计数器，用于内存泄漏测试
+    // currentSourceId：当前加载的源 ID
     std::vector<uint8_t> cachedAnimBytes;
     int loadUnloadCycleCount = 0;
+    std::string currentSourceId;
 };
 
 static bool initSDL(App& app) {
@@ -305,42 +313,42 @@ static bool loadMesh(App& app) {
     }
 
     // Get internal animation count
-    app.internalAnimCount = app.animator->getAnimationCount();
-    app.totalAnimCount = app.internalAnimCount;
+    size_t internalAnimCount = app.animator->getAnimationCount();
 
     std::cout << "Mesh loaded successfully" << std::endl;
-    std::cout << "Internal animations in mesh: " << app.internalAnimCount << std::endl;
+    std::cout << "Internal animations in mesh: " << internalAnimCount << std::endl;
 
     return true;
 }
 
-// Runtime load external animation (R key handler)
 // 【验证核心功能】运行时动态加载外部动画（R 键处理器）
 //
 // 【验证点】
 // 1. 验证 AnimationAsset 可以在渲染循环运行时动态加载
-// 2. 验证 hasExternalAnimation() 正确查询绑定状态
-// 3. 验证加载后 totalAnimCount 正确更新
+// 2. 验证使用版本化的源 ID 支持热重载
+// 3. 验证加载后动画名称列表正确更新
 // 4. 验证多次加载不会产生内存泄漏
 //
-// 【gltfio_ext 关键 API 使用流程】
-// 步骤 1: hasExternalAnimation() - 检查是否已绑定外部动画，避免重复加载
+// 【新 API 使用流程】
+// 步骤 1: 生成唯一的源 ID（版本化）
 // 步骤 2: loadAnimationAsset() - 从内存缓冲区创建 AnimationAsset 对象
-// 步骤 3: loadExternalAnimation() - 将 AnimationAsset 绑定到 Animator
-// 步骤 4: getAnimationCount() - 获取更新后的总动画数量
+// 步骤 3: loadAnimationsFromSource() - 将 AnimationAsset 加载到缓存
+// 步骤 4: getAnimationsInSource() - 获取动画名称列表
 static bool runtimeLoadAnimation(App& app) {
     std::cout << "\n[R] Loading external animation..." << std::endl;
 
-    // 【gltfio_ext API】hasExternalAnimation() - 查询当前是否已绑定外部动画
-    // 避免重复加载，防止资源泄漏
-    if (app.animator->hasExternalAnimation()) {
-        std::cout << "[ERROR] External animation already loaded!" << std::endl;
+    // 【新 API】检查是否已有动画源加载
+    if (!app.currentSourceId.empty()) {
+        std::cout << "[ERROR] Animation source already loaded: " << app.currentSourceId << std::endl;
+        std::cout << "Please unload first (press U)" << std::endl;
         return false;
     }
 
+    // 【新 API】生成版本化的源 ID
+    // 每次加载使用递增的版本号，模拟动画资产的更新
+    app.currentSourceId = std::string(ANIM_SOURCE_PREFIX) + std::to_string(app.loadUnloadCycleCount);
+
     // 【gltfio_ext API】loadAnimationAsset() - 从内存数据创建 AnimationAsset
-    // 参数：动画 GLB 文件的内存缓冲区指针和大小
-    // 返回：AnimationAsset* 对象，失败返回 nullptr
     app.animAsset = app.assetLoader->loadAnimationAsset(
         app.cachedAnimBytes.data(),
         app.cachedAnimBytes.size()
@@ -348,27 +356,41 @@ static bool runtimeLoadAnimation(App& app) {
 
     if (!app.animAsset) {
         std::cerr << "[ERROR] Failed to load AnimationAsset" << std::endl;
+        app.currentSourceId.clear();
         return false;
     }
 
-    // 【gltfio_ext 核心 API】loadExternalAnimation() - 将外部动画绑定到 Animator
-    // 这是 gltfio_ext 的核心特性：运行时绑定外部动画数据
-    // 绑定后，Animator 的动画数量会增加（内部动画 + 外部动画）
-    if (!app.animator->loadExternalAnimation(app.animAsset)) {
+    // 【新 API】loadAnimationsFromSource() - 将外部动画加载到缓存中
+    // 参数：sourceId - 唯一标识此动画源的字符串（版本化）
+    //       asset - AnimationAsset 指针
+    // 返回：加载的动画数量
+    size_t loadedCount = app.animator->loadAnimationsFromSource(
+        app.currentSourceId.c_str(),
+        app.animAsset
+    );
+
+    if (loadedCount == 0) {
         app.assetLoader->destroyAnimationAsset(app.animAsset);
         app.animAsset = nullptr;
-        std::cerr << "[ERROR] Failed to bind external animation to Animator" << std::endl;
+        app.currentSourceId.clear();
+        std::cerr << "[ERROR] Failed to load animations from source" << std::endl;
         return false;
     }
 
-    // 【状态更新】加载后需要更新动画总数
-    app.totalAnimCount = app.animator->getAnimationCount();
+    // 【新 API】getAnimationsInSource() - 获取源中的动画名称列表
+    app.animationNames = app.animator->getAnimationsInSource(app.currentSourceId.c_str());
+
     app.loadUnloadCycleCount++;
 
     std::cout << "[SUCCESS] External animation loaded!" << std::endl;
-    std::cout << "  Total animations: " << app.totalAnimCount << std::endl;
-    std::cout << "  External animations: " << (app.totalAnimCount - app.internalAnimCount) << std::endl;
+    std::cout << "  Source ID: " << app.currentSourceId << std::endl;
+    std::cout << "  Animations loaded: " << loadedCount << std::endl;
     std::cout << "  Load/unload cycle count: " << app.loadUnloadCycleCount << std::endl;
+
+    std::cout << "  Available animations:" << std::endl;
+    for (size_t i = 0; i < app.animationNames.size(); i++) {
+        std::cout << "    " << (i + 1) << ". " << app.animationNames[i] << std::endl;
+    }
 
     return true;
 }
@@ -377,29 +399,28 @@ static bool runtimeLoadAnimation(App& app) {
 //
 // 【验证点】
 // 1. 验证 AnimationAsset 可以在渲染循环运行时动态卸载
-// 2. 验证卸载后 totalAnimCount 正确更新
+// 2. 验证卸载后动画名称列表正确清空
 // 3. 验证卸载后动画索引边界处理的正确性（关键！）
 // 4. 验证卸载不会导致 Animator 崩溃或状态异常
 //
-// 【gltfio_ext 关键 API 使用流程】
-// 步骤 1: hasExternalAnimation() - 检查是否有外部动画可卸载
-// 步骤 2: unloadExternalAnimation() - 从 Animator 解绑外部动画
+// 【新 API 使用流程】
+// 步骤 1: 检查是否有动画源可卸载
+// 步骤 2: unloadAnimationsFromSource() - 从缓存中卸载指定源的动画
 // 步骤 3: destroyAnimationAsset() - 销毁 AnimationAsset 对象
-// 步骤 4: getAnimationCount() - 获取更新后的动画数量
-// 步骤 5: 【关键】检查 currentAnimation 索引，防止越界访问
+// 步骤 4: 清空动画名称列表和源 ID
+// 步骤 5: 【关键】检查 currentAnimIndex 索引，防止越界访问
 static bool runtimeUnloadAnimation(App& app) {
     std::cout << "\n[U] Unloading external animation..." << std::endl;
 
-    // 【gltfio_ext API】hasExternalAnimation() - 检查是否有外部动画
-    if (!app.animator->hasExternalAnimation()) {
-        std::cout << "[ERROR] No external animation to unload!" << std::endl;
+    // 【新 API】检查是否有动画源可卸载
+    if (app.currentSourceId.empty()) {
+        std::cout << "[ERROR] No animation source to unload!" << std::endl;
         return false;
     }
 
-    // 【gltfio_ext 核心 API】unloadExternalAnimation() - 解绑外部动画
-    // 这会将外部动画从 Animator 中移除，但不会销毁 AnimationAsset 对象
-    // Animator 的动画数量会减少（移除外部动画）
-    app.animator->unloadExternalAnimation();
+    // 【新 API】unloadAnimationsFromSource() - 从缓存中卸载指定源的动画
+    // 这会将该源的所有动画从缓存中移除
+    app.animator->unloadAnimationsFromSource(app.currentSourceId.c_str());
 
     // 【gltfio_ext API】destroyAnimationAsset() - 销毁 AnimationAsset 对象
     // 注意：必须先 unload 再 destroy，顺序不能错
@@ -408,23 +429,18 @@ static bool runtimeUnloadAnimation(App& app) {
         app.animAsset = nullptr;
     }
 
-    // 【状态更新】卸载后需要更新动画总数
-    app.totalAnimCount = app.animator->getAnimationCount();
+    // 【状态更新】清空动画名称列表和源 ID
+    std::cout << "[SUCCESS] External animation unloaded!" << std::endl;
+    std::cout << "  Source ID: " << app.currentSourceId << std::endl;
+
+    app.animationNames.clear();
+    app.currentSourceId.clear();
 
     // 【关键逻辑】卸载后动画索引边界检查
-    // 场景：如果当前播放的是外部动画（索引 >= internalAnimCount），
-    // 卸载后该索引会越界，必须重置为有效值
-    // 示例：内部动画 0 个，外部动画 3 个，当前播放索引 2
-    //      卸载后：总数变为 0，索引 2 越界 -> 重置为 0
-    if (app.currentAnimation >= (int)app.totalAnimCount) {
-        app.currentAnimation = 0;
-        app.animTime = 0.0f;
-        std::cout << "[INFO] Current animation index reset to 0" << std::endl;
-    }
-
-    std::cout << "[SUCCESS] External animation unloaded!" << std::endl;
-    std::cout << "  Total animations: " << app.totalAnimCount << std::endl;
-    std::cout << "  Current animation: " << app.currentAnimation << std::endl;
+    // 卸载后动画列表为空，重置索引和时间
+    app.currentAnimIndex = 0;
+    app.animTime = 0.0f;
+    std::cout << "  Animation state reset" << std::endl;
 
     return true;
 }
@@ -432,25 +448,20 @@ static bool runtimeUnloadAnimation(App& app) {
 // 【验证核心功能】内存泄漏测试（T 键处理器）
 //
 // 【验证目标】
-// 通过 100 次连续的加载/卸载循环，验证 gltfio_ext 的外部动画管理不会产生内存泄漏
+// 通过 100 次连续的加载/卸载循环，验证 gltfio_ext 的缓存动画系统不会产生内存泄漏
 //
 // 【验证方法】
 // 1. 循环 100 次：load -> bind -> use -> unbind -> destroy
-// 2. 每次循环使用临时 AnimationAsset 对象
+// 2. 每次循环使用临时 AnimationAsset 对象和唯一的源 ID
 // 3. 每个循环必须完整清理，不留任何引用
 // 4. 循环结束后，内存使用应恢复到测试前水平
 //
-// 【gltfio_ext API 压力测试】
+// 【新 API 压力测试】
 // 测试 API 序列的健壮性：
 // - loadAnimationAsset() 能否正确管理内存分配
-// - loadExternalAnimation() 能否正确建立引用关系
-// - unloadExternalAnimation() 能否正确清除引用
+// - loadAnimationsFromSource() 能否正确建立缓存条目
+// - unloadAnimationsFromSource() 能否正确清除缓存
 // - destroyAnimationAsset() 能否正确释放内存
-//
-// 【如何验证无泄漏】
-// macOS: 使用 Instruments 的 Leaks 工具监控内存
-// Linux: 使用 Valgrind 检测内存泄漏
-// 预期结果：循环结束后内存使用量应回到测试前水平
 static void runLeakTest(App& app) {
     const int CYCLES = 100;
     std::cout << "\n=== Starting Memory Leak Test ===" << std::endl;
@@ -460,7 +471,10 @@ static void runLeakTest(App& app) {
     auto startTime = std::chrono::steady_clock::now();
 
     for (int i = 0; i < CYCLES; i++) {
-        // 【步骤 1】加载 AnimationAsset（分配内存）
+        // 【步骤 1】生成唯一的源 ID
+        std::string testSourceId = std::string("leak_test_v") + std::to_string(i);
+
+        // 【步骤 2】加载 AnimationAsset（分配内存）
         auto* tempAsset = app.assetLoader->loadAnimationAsset(
             app.cachedAnimBytes.data(),
             app.cachedAnimBytes.size()
@@ -471,23 +485,29 @@ static void runLeakTest(App& app) {
             break;
         }
 
-        // 【步骤 2】绑定到 Animator（建立引用关系）
-        if (!app.animator->loadExternalAnimation(tempAsset)) {
+        // 【步骤 3】加载到缓存（建立缓存条目）
+        size_t loadedCount = app.animator->loadAnimationsFromSource(
+            testSourceId.c_str(),
+            tempAsset
+        );
+
+        if (loadedCount == 0) {
             app.assetLoader->destroyAnimationAsset(tempAsset);
             std::cerr << "Cycle " << i << ": Bind failed!" << std::endl;
             break;
         }
 
-        // 【步骤 3】模拟使用动画（验证绑定后功能正常）
-        if (app.animator->getAnimationCount() > app.internalAnimCount) {
-            app.animator->applyAnimation(app.internalAnimCount, 0.5f);
+        // 【步骤 4】模拟使用动画（验证缓存功能正常）
+        auto animNames = app.animator->getAnimationsInSource(testSourceId.c_str());
+        if (!animNames.empty()) {
+            app.animator->applyAnimationByName(animNames[0].c_str(), 0.5f);
             app.animator->updateBoneMatrices();
         }
 
-        // 【步骤 4】解绑（清除引用关系）
-        app.animator->unloadExternalAnimation();
+        // 【步骤 5】从缓存中卸载（清除缓存条目）
+        app.animator->unloadAnimationsFromSource(testSourceId.c_str());
 
-        // 【步骤 5】销毁 AnimationAsset（释放内存）
+        // 【步骤 6】销毁 AnimationAsset（释放内存）
         // 关键：必须在 unload 之后才能 destroy
         app.assetLoader->destroyAnimationAsset(tempAsset);
 
@@ -509,14 +529,17 @@ static void runLeakTest(App& app) {
 static void updateAnimation(App& app, double deltaTime) {
     if (!app.animator) return;
 
-    if (app.totalAnimCount == 0) return;
+    if (app.animationNames.empty()) return;
 
-    if (app.currentAnimation < 0 || app.currentAnimation >= (int)app.totalAnimCount) {
-        app.currentAnimation = 0;
+    if (app.currentAnimIndex < 0 || app.currentAnimIndex >= (int)app.animationNames.size()) {
+        app.currentAnimIndex = 0;
     }
 
     if (app.animPlaying) {
-        const float duration = app.animator->getAnimationDuration((size_t)app.currentAnimation);
+        // 【新 API】getAnimationDurationByName() - 通过名称获取动画时长
+        const std::string& animName = app.animationNames[app.currentAnimIndex];
+        const float duration = app.animator->getAnimationDurationByName(animName.c_str());
+
         if (duration > 0.0f) {
             app.animTime += (float)deltaTime;
             // Loop animation
@@ -526,16 +549,18 @@ static void updateAnimation(App& app, double deltaTime) {
         }
     }
 
-    app.animator->applyAnimation((size_t)app.currentAnimation, app.animTime);
+    // 【新 API】applyAnimationByName() - 通过名称应用动画
+    const std::string& animName = app.animationNames[app.currentAnimIndex];
+    app.animator->applyAnimationByName(animName.c_str(), app.animTime);
     app.animator->updateBoneMatrices();
 }
 
 static void cleanup(App& app) {
     if (app.engine) {
-        // Unload external animation if still loaded
-        if (app.animator && app.animator->hasExternalAnimation()) {
-            std::cout << "\nCleaning up: Unloading external animation..." << std::endl;
-            app.animator->unloadExternalAnimation();
+        // Unload animation source if still loaded
+        if (app.animator && !app.currentSourceId.empty()) {
+            std::cout << "\nCleaning up: Unloading animation source..." << std::endl;
+            app.animator->unloadAnimationsFromSource(app.currentSourceId.c_str());
         }
 
         // Destroy external animation asset
@@ -586,7 +611,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "=== Animation Hotreload Sample ===" << std::endl;
     std::cout << "This sample demonstrates runtime dynamic loading/unloading" << std::endl;
-    std::cout << "of external animation assets using the gltfio_ext library.\n" << std::endl;
+    std::cout << "of external animation assets using the cache-based API.\n" << std::endl;
 
     // Initialize SDL and Filament
     if (!initSDL(app)) {
@@ -615,8 +640,8 @@ int main(int argc, char* argv[]) {
     std::cout << "Animation file cached (" << app.cachedAnimBytes.size() << " bytes)" << std::endl;
 
     // Initial state: No external animation loaded
-    std::cout << "\nInitial state: " << app.totalAnimCount << " animation(s)" << std::endl;
-    std::cout << "hasExternalAnimation(): " << (app.animator->hasExternalAnimation() ? "true" : "false") << std::endl;
+    std::cout << "\nInitial state: No animations loaded" << std::endl;
+    std::cout << "Current source ID: " << (app.currentSourceId.empty() ? "(none)" : app.currentSourceId) << std::endl;
 
     // Print controls
     std::cout << "\n=== Controls ===" << std::endl;
@@ -677,28 +702,28 @@ int main(int argc, char* argv[]) {
 
                     case SDLK_1:
                     case SDLK_KP_1:
-                        if (app.totalAnimCount > 0) {
-                            app.currentAnimation = 0;
+                        if (app.animationNames.size() > 0) {
+                            app.currentAnimIndex = 0;
                             app.animTime = 0.0f;
-                            std::cout << "Switched to animation 1" << std::endl;
+                            std::cout << "Switched to animation 1: " << app.animationNames[0] << std::endl;
                         }
                         break;
 
                     case SDLK_2:
                     case SDLK_KP_2:
-                        if (app.totalAnimCount > 1) {
-                            app.currentAnimation = 1;
+                        if (app.animationNames.size() > 1) {
+                            app.currentAnimIndex = 1;
                             app.animTime = 0.0f;
-                            std::cout << "Switched to animation 2" << std::endl;
+                            std::cout << "Switched to animation 2: " << app.animationNames[1] << std::endl;
                         }
                         break;
 
                     case SDLK_3:
                     case SDLK_KP_3:
-                        if (app.totalAnimCount > 2) {
-                            app.currentAnimation = 2;
+                        if (app.animationNames.size() > 2) {
+                            app.currentAnimIndex = 2;
                             app.animTime = 0.0f;
-                            std::cout << "Switched to animation 3" << std::endl;
+                            std::cout << "Switched to animation 3: " << app.animationNames[2] << std::endl;
                         }
                         break;
 

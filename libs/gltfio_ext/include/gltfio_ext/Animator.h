@@ -20,6 +20,23 @@
 #include <gltfio_ext/FilamentAsset.h>
 #include <gltfio_ext/FilamentInstance.h>
 
+#include <string>
+#include <vector>
+
+/**
+ * 默认动画缓存大小
+ *
+ * 可在编译时通过 -DGLTFIO_EXT_DEFAULT_ANIMATION_CACHE_SIZE=200 覆盖
+ *
+ * 内存估算：
+ * - 50 个动画：~5 MB
+ * - 100 个动画：~10 MB
+ * - 150 个动画：~15 MB
+ */
+#ifndef GLTFIO_EXT_DEFAULT_ANIMATION_CACHE_SIZE
+#define GLTFIO_EXT_DEFAULT_ANIMATION_CACHE_SIZE 100
+#endif
+
 namespace filament::gltfio_ext {
 
 struct FFilamentAsset;
@@ -96,54 +113,127 @@ public:
     const char* getAnimationName(size_t animationIndex) const;
 
     // ========================================
-    // 外部动画支持 (External Animation Support)
+    // 动画缓存 API (Animation Cache API)
     // ========================================
 
     /**
-     * 加载外部动画资产
-     * Loads an external animation asset
+     * 从动画源加载所有动画
+     * Load all animations from an animation source
      *
-     * Associates an external AnimationAsset with this Animator, enabling it to drive bone animations.
-     * Internally creates an AnimationBinding for bone name mapping.
-     *
-     * 加载 AnimationAsset 中的所有动画。
-     * 外部动画索引从内部动画数量开始，范围为 [N, N+M)，其中：
-     * - N = 加载外部动画前的 getAnimationCount() 返回值（内部动画数量）
-     * - M = animAsset->getAnimationCount()（外部动画数量）
-     *
-     * Loads ALL animations from the AnimationAsset.
-     * External animation indices start after internal animations, ranging from [N, N+M), where:
-     * - N = getAnimationCount() before loading external animations (internal animation count)
-     * - M = animAsset->getAnimationCount() (external animation count)
-     *
-     * @param animAsset External animation asset (Animator does not take ownership; caller must ensure lifetime)
-     * @return true if loaded successfully, false if failed (bone mapping failed or invalid data)
-     *
-     * Notes:
-     * - Loads all animations from the AnimationAsset (not just the first one)
-     * - Repeated calls will replace the previously loaded external animations
-     * - animAsset must remain valid for the duration of Animator usage
-     * - Example: If internal animation count is 3 and animAsset has 2 animations,
-     *   the external animations will be at indices 3 and 4
+     * @param sourceId Animation source identifier (e.g. "chest_basic")
+     * @param asset Animation asset (can be released after conversion)
+     * @return Number of animations successfully loaded
      */
-    bool loadExternalAnimation(AnimationAsset* animAsset);
+    size_t loadAnimationsFromSource(const char* sourceId, AnimationAsset* asset);
 
     /**
-     * 卸载外部动画
-     * Unloads the external animation
+     * 卸载整个源的所有动画
+     * Unload all animations from a source
      *
-     * Releases resources related to the external animation (AnimationBinding, converted data).
-     * Does not affect the animAsset itself (caller is responsible for destruction).
+     * @param sourceId Animation source identifier
      */
-    void unloadExternalAnimation();
+    void unloadAnimationsFromSource(const char* sourceId);
 
     /**
-     * 检查是否已加载外部动画
-     * Checks if an external animation is loaded
-     *
-     * @return true if loaded, false if not loaded
+     * 清空所有外部动画缓存
+     * Clear all external animation cache
      */
-    bool hasExternalAnimation() const;
+    void clearAnimationCache();
+
+    /**
+     * 精确播放：使用 sourceId 和 animName 播放动画
+     * Precise playback: play animation using sourceId and animName
+     *
+     * @param sourceId Animation source identifier
+     * @param animName Animation name
+     * @param time Time in seconds
+     * @return true if successful, false if animation not found
+     *
+     * Note: Marked as const for backward compatibility with applyAnimation(size_t, float).
+     *       Internally updates LRU cache statistics (using mutable members).
+     */
+    bool applyAnimation(const char* sourceId, const char* animName, float time) const;
+
+    /**
+     * 便捷播放：仅使用 animName 播放动画
+     * Convenient playback: play animation using only animName
+     *
+     * If multiple sources contain the same animation name, plays the most recently accessed one.
+     *
+     * @param animName Animation name
+     * @param time Time in seconds
+     * @return true if successful, false if animation not found
+     *
+     * Note: Marked as const for backward compatibility with applyAnimation(size_t, float).
+     *       Internally updates LRU cache statistics (using mutable members).
+     */
+    bool applyAnimationByName(const char* animName, float time) const;
+
+    /**
+     * 检查动画是否存在
+     * Check if animation exists
+     */
+    bool hasAnimation(const char* sourceId, const char* animName) const;
+    bool hasAnimationByName(const char* animName) const;
+    bool hasSource(const char* sourceId) const;
+
+    /**
+     * 获取动画时长
+     * Get animation duration
+     */
+    float getAnimationDuration(const char* sourceId, const char* animName) const;
+    float getAnimationDurationByName(const char* animName) const;
+
+    /**
+     * 获取已加载的源列表
+     * Get list of loaded sources
+     */
+    std::vector<std::string> getLoadedSources() const;
+
+    /**
+     * 获取指定源中的动画列表
+     * Get list of animations in a source
+     */
+    std::vector<std::string> getAnimationsInSource(const char* sourceId) const;
+
+    /**
+     * 设置最大缓存数量
+     * Set maximum cache size
+     *
+     * If new size is smaller than current cache size, immediately evicts LRU animations.
+     */
+    void setAnimationCacheSize(size_t maxSize);
+
+    /**
+     * 获取最大缓存数量
+     * Get maximum cache size
+     */
+    size_t getAnimationCacheSize() const;
+
+    /**
+     * 缓存统计信息
+     * Cache statistics
+     */
+    struct CacheStats {
+        size_t cachedCount;      // Current cache count
+        size_t maxSize;          // Maximum capacity
+        size_t sourceCount;      // Number of loaded sources
+        uint64_t hitCount;       // Cache hit count
+        uint64_t missCount;      // Cache miss count
+        float hitRate;           // Hit rate (percentage)
+    };
+
+    /**
+     * 获取缓存统计信息
+     * Get cache statistics
+     */
+    CacheStats getAnimationCacheStats() const;
+
+    /**
+     * 重置缓存统计信息
+     * Reset cache statistics
+     */
+    void resetCacheStats();
 
     // For internal use only.
     void addInstance(FFilamentInstance* instance);
