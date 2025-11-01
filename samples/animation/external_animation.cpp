@@ -108,7 +108,8 @@ struct App {
     // 【gltfio_ext 独特特性】外部动画资产
     // AnimationAsset 是 gltfio_ext 特有的类型，表示独立的动画数据
     // 可以在运行时加载/卸载，不需要重新加载整个模型
-    gltfio_ext::AnimationAsset* animAsset = nullptr;
+    // 使用 unique_ptr 自动管理内存
+    std::unique_ptr<gltfio_ext::AnimationAsset> animAsset;
 
     // 光照
     Entity keyLight, fillLight;
@@ -342,7 +343,7 @@ static bool loadExternalAnimation(App& app) {
     // 参数：sourceId - 唯一标识此动画源的字符串
     //       asset - AnimationAsset 指针
     // 返回：加载的动画数量
-    size_t loadedCount = app.animator->loadAnimationsFromSource(ANIM_SOURCE_ID, app.animAsset);
+    size_t loadedCount = app.animator->loadAnimationsFromSource(ANIM_SOURCE_ID, app.animAsset.get());
     if (loadedCount == 0) {
         std::cerr << "Failed to load animations from source" << std::endl;
         return false;
@@ -411,11 +412,8 @@ static void cleanup(App& app) {
             app.animator->unloadAnimationsFromSource(ANIM_SOURCE_ID);
         }
 
-        // 【gltfio_ext 独特 API】销毁外部动画资产
-        // 使用专门的 destroyAnimationAsset() 而不是 destroyAsset()
-        if (app.assetLoader && app.animAsset) {
-            app.assetLoader->destroyAnimationAsset(app.animAsset);
-        }
+        // 【gltfio_ext 独特 API】外部动画资产自动销毁
+        // animAsset 使用 unique_ptr 自动管理内存，无需手动销毁
 
         // 销毁网格资产
         if (app.assetLoader && app.meshAsset) {

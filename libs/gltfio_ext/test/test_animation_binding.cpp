@@ -145,11 +145,10 @@ TEST_F(AnimationBindingTest, BuildMappingSuccess) {
 
     // 创建资产
     FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
 
     if (!meshAsset || !animAsset) {
         if (meshAsset) mLoader->destroyAsset(meshAsset);
-        if (animAsset) mLoader->destroyAnimationAsset(animAsset);
         FAIL() << "Failed to load assets from GLB files.\n"
                << "The GLB files may be corrupted or in an unsupported format.\n"
                << "Please verify the test files are valid glTF 2.0 files.";
@@ -166,7 +165,6 @@ TEST_F(AnimationBindingTest, BuildMappingSuccess) {
     }
 
     if (namedEntityCount == 0) {
-        mLoader->destroyAnimationAsset(animAsset);
         mLoader->destroyAsset(meshAsset);
         FAIL() << "No named entities in mesh, cannot test bone mapping.\n"
                << "AssetConfiguration.names was not configured properly.\n"
@@ -174,7 +172,7 @@ TEST_F(AnimationBindingTest, BuildMappingSuccess) {
     }
 
     // 创建 AnimationBinding
-    AnimationBinding binding(animAsset, meshAsset, mEngine);
+    AnimationBinding binding(animAsset.get(), meshAsset, mEngine);
 
     // 构建映射
     bool success = binding.buildMapping();
@@ -186,7 +184,6 @@ TEST_F(AnimationBindingTest, BuildMappingSuccess) {
         << "Entity map and Instance map should have same size";
 
     // 清理
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -208,18 +205,17 @@ TEST_F(AnimationBindingTest, TransformInstanceValid) {
 
     // 创建资产
     FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
 
     if (!meshAsset || !animAsset) {
         if (meshAsset) mLoader->destroyAsset(meshAsset);
-        if (animAsset) mLoader->destroyAnimationAsset(animAsset);
         FAIL() << "Failed to load assets from GLB files.\n"
                << "The GLB files may be corrupted or in an unsupported format.\n"
                << "Please verify the test files are valid glTF 2.0 files.";
     }
 
     // 创建 AnimationBinding
-    AnimationBinding binding(animAsset, meshAsset, mEngine);
+    AnimationBinding binding(animAsset.get(), meshAsset, mEngine);
     bool success = binding.buildMapping();
 
     ASSERT_TRUE(success);
@@ -239,7 +235,6 @@ TEST_F(AnimationBindingTest, TransformInstanceValid) {
     EXPECT_TRUE(binding.validateMapping()) << "Mapping validation should pass";
 
     // 清理
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -256,13 +251,13 @@ TEST_F(AnimationBindingTest, GetMatchRate) {
 
     // 创建资产
     FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
 
     ASSERT_NE(meshAsset, nullptr);
     ASSERT_NE(animAsset, nullptr);
 
     // 创建 AnimationBinding
-    AnimationBinding binding(animAsset, meshAsset, mEngine);
+    AnimationBinding binding(animAsset.get(), meshAsset, mEngine);
 
     // 映射前匹配率应为 0
     EXPECT_FLOAT_EQ(binding.getMatchRate(), 0.0f);
@@ -277,7 +272,6 @@ TEST_F(AnimationBindingTest, GetMatchRate) {
     EXPECT_LE(matchRate, 1.0f) << "Match rate should be <= 100%";
 
     // 清理
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -294,13 +288,13 @@ TEST_F(AnimationBindingTest, GetUnmatchedBones) {
 
     // 创建资产
     FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
 
     ASSERT_NE(meshAsset, nullptr);
     ASSERT_NE(animAsset, nullptr);
 
     // 创建 AnimationBinding
-    AnimationBinding binding(animAsset, meshAsset, mEngine);
+    AnimationBinding binding(animAsset.get(), meshAsset, mEngine);
     bool success = binding.buildMapping();
 
     ASSERT_TRUE(success);
@@ -325,7 +319,6 @@ TEST_F(AnimationBindingTest, GetUnmatchedBones) {
     }
 
     // 清理
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -354,13 +347,13 @@ TEST_F(AnimationBindingTest, MappingConsistency) {
 
     // 创建资产
     FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
 
     ASSERT_NE(meshAsset, nullptr);
     ASSERT_NE(animAsset, nullptr);
 
     // 创建 AnimationBinding 并构建映射
-    AnimationBinding binding(animAsset, meshAsset, mEngine);
+    AnimationBinding binding(animAsset.get(), meshAsset, mEngine);
     bool success = binding.buildMapping();
 
     ASSERT_TRUE(success);
@@ -386,7 +379,6 @@ TEST_F(AnimationBindingTest, MappingConsistency) {
     }
 
     // 清理
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 

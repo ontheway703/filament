@@ -99,7 +99,8 @@ scene->addEntities(meshAsset->getEntities(), meshAsset->getEntityCount());
 
 ```cpp
 // 加载纯动画 GLB（可能包含多个动画）
-AnimationAsset* animAsset = assetLoader->loadAnimationAsset(animData, animDataSize);
+// 返回 unique_ptr，自动管理内存
+auto animAsset = assetLoader->loadAnimationAsset(animData, animDataSize);
 
 // 查看包含的动画
 size_t animCount = animAsset->getAnimationCount();
@@ -115,6 +116,8 @@ if (walkAnim) {
     utils::slog.i << "Found 'walk' animation with "
                   << walkAnim->channels.size() << " channels" << utils::io::endl;
 }
+
+// animAsset 自动销毁，无需手动释放
 ```
 
 ### 3. 使用 Animator 加载和播放外部动画
@@ -124,63 +127,39 @@ if (walkAnim) {
 FilamentInstance* instance = meshAsset->getInstance();
 Animator* animator = instance->getAnimator();
 
-// 记录内部动画数量（嵌入在网格 GLB 中的动画）
-size_t internalAnimCount = animator->getAnimationCount();
-
-// 加载外部动画（所有动画一次性加载）
-bool success = animator->loadExternalAnimation(animAsset);
-if (!success) {
-    utils::slog.e << "Failed to load external animation (bone mismatch?)" << utils::io::endl;
+// 加载外部动画到缓存
+const char* sourceId = "character_anims";
+size_t loadedCount = animator->loadAnimationsFromSource(sourceId, animAsset.get());
+if (loadedCount == 0) {
+    utils::slog.e << "Failed to load animations from source" << utils::io::endl;
     return;
 }
 
-// 验证加载状态
-assert(animator->hasExternalAnimation());
+// 获取该源中的动画列表
+auto animNames = animator->getAnimationsInSource(sourceId);
+utils::slog.i << "Loaded " << animNames.size() << " animations" << utils::io::endl;
 
-// 外部动画索引从内部动画数量开始
-// 索引范围：[internalAnimCount, internalAnimCount + animAsset->getAnimationCount())
-size_t totalAnimCount = animator->getAnimationCount();
-utils::slog.i << "Total animations: " << totalAnimCount
-              << " (internal: " << internalAnimCount
-              << ", external: " << (totalAnimCount - internalAnimCount) << ")"
-              << utils::io::endl;
-
-// 播放第一个外部动画
-size_t firstExternalAnimIndex = internalAnimCount;
-float animDuration = animator->getAnimationDuration(firstExternalAnimIndex);
-const char* animName = animator->getAnimationName(firstExternalAnimIndex);
-
-utils::slog.i << "Playing external animation: " << animName
-              << " (duration: " << animDuration << "s)" << utils::io::endl;
-
-// 在渲染循环中更新动画
+// 在渲染循环中播放动画
 float currentTime = 0.0f;
 while (running) {
     currentTime += deltaTime;
 
-    // 应用动画（更新骨骼的局部变换）
-    animator->applyAnimation(firstExternalAnimIndex, currentTime);
+    // 按名称播放动画（推荐方式）
+    animator->applyAnimationByName("walk", currentTime);
 
-    // 更新骨骼矩阵（将局部变换传播到世界空间并设置到 RenderableManager）
+    // 或精确指定源ID和动画名
+    // animator->applyAnimation(sourceId, "walk", currentTime);
+
+    // 更新骨骼矩阵
     animator->updateBoneMatrices();
 
     // 渲染帧...
 }
 
-// 切换到另一个外部动画
-if (totalAnimCount > internalAnimCount + 1) {
-    size_t secondExternalAnimIndex = internalAnimCount + 1;
-    animator->applyAnimation(secondExternalAnimIndex, 0.0f);
-    animator->updateBoneMatrices();
-}
+// 卸载外部动画
+animator->unloadAnimationsFromSource(sourceId);
 
-// 卸载外部动画（释放资源）
-animator->unloadExternalAnimation();
-assert(!animator->hasExternalAnimation());
-assert(animator->getAnimationCount() == internalAnimCount);  // 恢复到内部动画数量
-
-// 销毁动画资产（必须在卸载后）
-assetLoader->destroyAnimationAsset(animAsset);
+// animAsset 自动销毁（无需手动调用）
 ```
 
 ### 4. 生命周期管理（正确的销毁顺序）
@@ -189,16 +168,16 @@ assetLoader->destroyAnimationAsset(animAsset);
 // ⚠️ 重要：正确的销毁顺序
 
 // 1. 卸载 Animator 的外部动画引用
-animator->unloadExternalAnimation();
+animator->unloadAnimationsFromSource("character_anims");
 
-// 2. 销毁 AnimationAsset
-assetLoader->destroyAnimationAsset(animAsset);
+// 2. AnimationAsset 自动销毁（unique_ptr 离开作用域）
+// 无需手动调用销毁函数
 
 // 3. 销毁 FilamentAsset（会自动销毁 Animator）
 assetLoader->destroyAsset(meshAsset);
 
-// ❌ 错误顺序：先销毁 AnimationAsset，后卸载 Animator
-// 这样做是安全的（有保护机制），但会输出警告日志
+// ❌ 错误顺序：忘记先 unloadAnimationsFromSource
+// animAsset 销毁后，Animator 缓存仍持有引用 → 可能崩溃
 ```
 
 ## 常见问题与错误处理
@@ -269,7 +248,7 @@ if (animator->hasExternalAnimation()) {
 
 // 方案 2：正确的销毁顺序
 animator->unloadExternalAnimation();                      // 1. 先卸载
-assetLoader->destroyAnimationAsset(animAsset);            // 2. 再销毁资产
+// animAsset 自动销毁（智能指针）                          // 2. animAsset 自动销毁
 assetLoader->destroyAsset(meshAsset);                     // 3. 最后销毁网格
 ```
 
@@ -303,17 +282,17 @@ animator->applyAnimation(5, time);  // 崩溃！
 
 ```cpp
 // 加载动画资产
-AnimationAsset* animAsset = assetLoader->loadAnimationAsset(data, size);
+auto animAsset = assetLoader->loadAnimationAsset(data, size);
 if (!animAsset) {
     utils::slog.e << "Failed to load animation asset (invalid GLB?)" << utils::io::endl;
     return;
 }
 
 // 加载外部动画
-bool success = animator->loadExternalAnimation(animAsset);
+bool success = animator->loadExternalAnimation(animAsset.get());
 if (!success) {
     utils::slog.e << "Failed to load external animation (bone mismatch?)" << utils::io::endl;
-    assetLoader->destroyAnimationAsset(animAsset);
+    // animAsset 自动销毁，无需手动释放
     return;
 }
 ```
@@ -383,7 +362,7 @@ public:
 class AssetLoader {
 public:
     // 加载所有动画（不再只加载第一个）
-    AnimationAsset* loadAnimationAsset(const uint8_t* data, uint32_t size);
+    std::unique_ptr<AnimationAsset> loadAnimationAsset(const uint8_t* data, uint32_t size);
 
     // 加载完整资产（网格 + 材质）
     FilamentAsset* createAsset(const uint8_t* data, uint32_t size);

@@ -139,7 +139,7 @@ protected:
         auto data = readBinaryFile(path);
         ASSERT_FALSE(data.empty()) << "Failed to read reference animation file";
 
-        AnimationAsset* refAsset = mLoader->loadAnimationAsset(data.data(), data.size());
+        auto refAsset = mLoader->loadAnimationAsset(data.data(), data.size());
         ASSERT_NE(refAsset, nullptr) << "Failed to load reference animation asset";
 
         // 提取所有动画名称
@@ -151,7 +151,7 @@ protected:
             mReferenceAnimNames.push_back(refAsset->getAnimation(i).name);
         }
 
-        mLoader->destroyAnimationAsset(refAsset);
+        // refAsset 自动销毁
 
         ASSERT_GT(mReferenceAnimNames.size(), 0) << "No animations in reference asset";
     }
@@ -205,15 +205,14 @@ protected:
      *
      * 注意：为了测试多个源，我们需要多次加载同一个文件
      */
-    AnimationAsset* loadTestAnimationAsset(const std::string& /*namePrefix*/) {
+    std::unique_ptr<AnimationAsset> loadTestAnimationAsset(const std::string& /*namePrefix*/) {
         const char* path = "ecorche_animation_only.glb";
         auto data = readBinaryFile(path);
         if (data.empty()) {
             return nullptr;
         }
 
-        AnimationAsset* asset = mLoader->loadAnimationAsset(data.data(), data.size());
-        return asset;
+        return mLoader->loadAnimationAsset(data.data(), data.size());
     }
 
     Engine* mEngine = nullptr;
@@ -236,7 +235,7 @@ TEST_F(AnimationCacheTest, LoadSingleSource) {
     auto animAsset = loadTestAnimationAsset("test");
     ASSERT_NE(animAsset, nullptr);
 
-    size_t count = animator->loadAnimationsFromSource("test_source", animAsset);
+    size_t count = animator->loadAnimationsFromSource("test_source", animAsset.get());
 
     EXPECT_GT(count, 0);  // 应该加载至少 1 个动画
     EXPECT_TRUE(animator->hasSource("test_source"));
@@ -245,7 +244,6 @@ TEST_F(AnimationCacheTest, LoadSingleSource) {
     EXPECT_EQ(stats.cachedCount, count);
     EXPECT_EQ(stats.sourceCount, 1);
 
-    mLoader->destroyAnimationAsset(animAsset);
 }
 
 TEST_F(AnimationCacheTest, LoadMultipleSources) {
@@ -254,8 +252,8 @@ TEST_F(AnimationCacheTest, LoadMultipleSources) {
     ASSERT_NE(asset1, nullptr);
     ASSERT_NE(asset2, nullptr);
 
-    animator->loadAnimationsFromSource("source1", asset1);
-    animator->loadAnimationsFromSource("source2", asset2);
+    animator->loadAnimationsFromSource("source1", asset1.get());
+    animator->loadAnimationsFromSource("source2", asset2.get());
 
     EXPECT_TRUE(animator->hasSource("source1"));
     EXPECT_TRUE(animator->hasSource("source2"));
@@ -264,15 +262,13 @@ TEST_F(AnimationCacheTest, LoadMultipleSources) {
     EXPECT_EQ(stats.cachedCount, 6);  // 3 + 3
     EXPECT_EQ(stats.sourceCount, 2);
 
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 TEST_F(AnimationCacheTest, UnloadSource) {
     auto animAsset = loadTestAnimationAsset("test");
     ASSERT_NE(animAsset, nullptr);
 
-    animator->loadAnimationsFromSource("test_source", animAsset);
+    animator->loadAnimationsFromSource("test_source", animAsset.get());
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 3);
 
     animator->unloadAnimationsFromSource("test_source");
@@ -280,7 +276,6 @@ TEST_F(AnimationCacheTest, UnloadSource) {
     EXPECT_FALSE(animator->hasSource("test_source"));
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 0);
 
-    mLoader->destroyAnimationAsset(animAsset);
 }
 
 TEST_F(AnimationCacheTest, ClearCache) {
@@ -289,8 +284,8 @@ TEST_F(AnimationCacheTest, ClearCache) {
     ASSERT_NE(asset1, nullptr);
     ASSERT_NE(asset2, nullptr);
 
-    animator->loadAnimationsFromSource("source1", asset1);
-    animator->loadAnimationsFromSource("source2", asset2);
+    animator->loadAnimationsFromSource("source1", asset1.get());
+    animator->loadAnimationsFromSource("source2", asset2.get());
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 6);
 
     animator->clearAnimationCache();
@@ -298,8 +293,6 @@ TEST_F(AnimationCacheTest, ClearCache) {
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 0);
     EXPECT_EQ(animator->getAnimationCacheStats().sourceCount, 0);
 
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 TEST_F(AnimationCacheTest, ReplaceSource) {
@@ -309,21 +302,19 @@ TEST_F(AnimationCacheTest, ReplaceSource) {
     ASSERT_NE(asset2, nullptr);
 
     // 加载第一次
-    size_t count1 = animator->loadAnimationsFromSource("test_source", asset1);
+    size_t count1 = animator->loadAnimationsFromSource("test_source", asset1.get());
     ASSERT_GT(count1, 0);
 
     // 替换（相同 sourceId）
     // 注意：由于两次加载同一个 GLB 文件，动画名称相同，无法验证名称变化
     // 只能验证统计信息和数量
-    size_t count2 = animator->loadAnimationsFromSource("test_source", asset2);
+    size_t count2 = animator->loadAnimationsFromSource("test_source", asset2.get());
     EXPECT_EQ(count2, count1);  // 数量应该相同
 
     auto stats = animator->getAnimationCacheStats();
     EXPECT_EQ(stats.cachedCount, count1);  // 旧的被替换
     EXPECT_EQ(stats.sourceCount, 1);
 
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 TEST_F(AnimationCacheTest, GetLoadedSources) {
@@ -332,23 +323,21 @@ TEST_F(AnimationCacheTest, GetLoadedSources) {
     ASSERT_NE(asset1, nullptr);
     ASSERT_NE(asset2, nullptr);
 
-    animator->loadAnimationsFromSource("source1", asset1);
-    animator->loadAnimationsFromSource("source2", asset2);
+    animator->loadAnimationsFromSource("source1", asset1.get());
+    animator->loadAnimationsFromSource("source2", asset2.get());
 
     auto sources = animator->getLoadedSources();
     EXPECT_EQ(sources.size(), 2);
     EXPECT_TRUE(std::find(sources.begin(), sources.end(), "source1") != sources.end());
     EXPECT_TRUE(std::find(sources.begin(), sources.end(), "source2") != sources.end());
 
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 TEST_F(AnimationCacheTest, GetAnimationsInSource) {
     auto animAsset = loadTestAnimationAsset("test");
     ASSERT_NE(animAsset, nullptr);
 
-    animator->loadAnimationsFromSource("test_source", animAsset);
+    animator->loadAnimationsFromSource("test_source", animAsset.get());
 
     auto animNames = animator->getAnimationsInSource("test_source");
     EXPECT_EQ(animNames.size(), getAnimCount());
@@ -358,7 +347,6 @@ TEST_F(AnimationCacheTest, GetAnimationsInSource) {
         EXPECT_EQ(animNames[i], getAnimName(i));
     }
 
-    mLoader->destroyAnimationAsset(animAsset);
 }
 
 TEST_F(AnimationCacheTest, QueryNonExistentSource) {
@@ -377,7 +365,7 @@ TEST_F(AnimationCacheTest, QueryNonExistentSource) {
 TEST_F(AnimationCacheTest, ApplyAnimationPrecise) {
     auto animAsset = loadTestAnimationAsset("test");
     ASSERT_NE(animAsset, nullptr);
-    animator->loadAnimationsFromSource("test_source", animAsset);
+    animator->loadAnimationsFromSource("test_source", animAsset.get());
 
     // 精确播放
     bool success = animator->applyAnimation("test_source", getAnimName(0), 0.5f);
@@ -388,14 +376,13 @@ TEST_F(AnimationCacheTest, ApplyAnimationPrecise) {
     EXPECT_EQ(stats.hitCount, 1);
     EXPECT_EQ(stats.missCount, 0);
 
-    mLoader->destroyAnimationAsset(animAsset);
 }
 
 TEST_F(AnimationCacheTest, ApplyAnimationByName) {
     auto animAsset = loadTestAnimationAsset("test");
     ASSERT_NE(animAsset, nullptr);
     ASSERT_GE(getAnimCount(), 2) << "Test requires at least 2 animations";
-    animator->loadAnimationsFromSource("test_source", animAsset);
+    animator->loadAnimationsFromSource("test_source", animAsset.get());
 
     // 便捷播放
     bool success = animator->applyAnimationByName(getAnimName(1), 0.5f);
@@ -404,7 +391,6 @@ TEST_F(AnimationCacheTest, ApplyAnimationByName) {
     auto stats = animator->getAnimationCacheStats();
     EXPECT_EQ(stats.hitCount, 1);
 
-    mLoader->destroyAnimationAsset(animAsset);
 }
 
 TEST_F(AnimationCacheTest, ApplyNonExistentAnimation) {
@@ -424,8 +410,8 @@ TEST_F(AnimationCacheTest, ApplyAnimationByNameWithMultipleSources) {
     ASSERT_NE(asset2, nullptr);
 
     // 两个源都有相同的动画名称
-    animator->loadAnimationsFromSource("source1", asset1);
-    animator->loadAnimationsFromSource("source2", asset2);
+    animator->loadAnimationsFromSource("source1", asset1.get());
+    animator->loadAnimationsFromSource("source2", asset2.get());
 
     // 先播放 source1 的第一个动画
     animator->applyAnimation("source1", getAnimName(0), 0.0f);
@@ -434,14 +420,12 @@ TEST_F(AnimationCacheTest, ApplyAnimationByNameWithMultipleSources) {
     bool success = animator->applyAnimationByName(getAnimName(0), 0.5f);
     EXPECT_TRUE(success);
 
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 TEST_F(AnimationCacheTest, GetAnimationDuration) {
     auto animAsset = loadTestAnimationAsset("test");
     ASSERT_NE(animAsset, nullptr);
-    animator->loadAnimationsFromSource("test_source", animAsset);
+    animator->loadAnimationsFromSource("test_source", animAsset.get());
 
     float duration = animator->getAnimationDuration("test_source", getAnimName(0));
     EXPECT_GT(duration, 0.0f);  // 应该有有效时长
@@ -449,7 +433,6 @@ TEST_F(AnimationCacheTest, GetAnimationDuration) {
     float durationByName = animator->getAnimationDurationByName(getAnimName(0));
     EXPECT_EQ(duration, durationByName);
 
-    mLoader->destroyAnimationAsset(animAsset);
 }
 
 // ========================================
@@ -465,18 +448,16 @@ TEST_F(AnimationCacheTest, LRUEvictionWhenFull) {
     ASSERT_NE(asset1, nullptr);
     ASSERT_NE(asset2, nullptr);
 
-    animator->loadAnimationsFromSource("source1", asset1);
+    animator->loadAnimationsFromSource("source1", asset1.get());
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 3);
 
     // 加载第二个源（6 > 5，应该淘汰 2 个最早的）
-    animator->loadAnimationsFromSource("source2", asset2);
+    animator->loadAnimationsFromSource("source2", asset2.get());
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 5);
 
     // source1 的部分动画应该被淘汰
     EXPECT_TRUE(animator->hasSource("source2"));  // source2 完整保留
 
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 TEST_F(AnimationCacheTest, AccessOrderUpdatesOnPlayback) {
@@ -484,7 +465,7 @@ TEST_F(AnimationCacheTest, AccessOrderUpdatesOnPlayback) {
 
     auto asset1 = loadTestAnimationAsset("source1");
     ASSERT_NE(asset1, nullptr);
-    size_t count1 = animator->loadAnimationsFromSource("source1", asset1);
+    size_t count1 = animator->loadAnimationsFromSource("source1", asset1.get());
     ASSERT_GT(count1, 0);
 
     // 获取第一个动画名称并播放
@@ -495,13 +476,11 @@ TEST_F(AnimationCacheTest, AccessOrderUpdatesOnPlayback) {
     // 加载新源
     auto asset2 = loadTestAnimationAsset("source2");
     ASSERT_NE(asset2, nullptr);
-    animator->loadAnimationsFromSource("source2", asset2);
+    animator->loadAnimationsFromSource("source2", asset2.get());
 
     // 第一个动画应该还在（因为最近访问）
     EXPECT_TRUE(animator->hasAnimation("source1", anims1[0].c_str()));
 
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 TEST_F(AnimationCacheTest, LeastRecentlyAccessedEvictedFirst) {
@@ -510,7 +489,7 @@ TEST_F(AnimationCacheTest, LeastRecentlyAccessedEvictedFirst) {
 
     auto asset = loadTestAnimationAsset("test");
     ASSERT_NE(asset, nullptr);
-    animator->loadAnimationsFromSource("test", asset);
+    animator->loadAnimationsFromSource("test", asset.get());
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, getAnimCount());
 
     // 访问顺序：anim2 > anim1 > anim0（从旧到新）
@@ -525,7 +504,6 @@ TEST_F(AnimationCacheTest, LeastRecentlyAccessedEvictedFirst) {
     EXPECT_TRUE(animator->hasAnimation("test", getAnimName(1)));
     EXPECT_TRUE(animator->hasAnimation("test", getAnimName(2)));
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 TEST_F(AnimationCacheTest, EvictionWithSetCacheSize) {
@@ -534,8 +512,8 @@ TEST_F(AnimationCacheTest, EvictionWithSetCacheSize) {
     ASSERT_NE(asset1, nullptr);
     ASSERT_NE(asset2, nullptr);
 
-    animator->loadAnimationsFromSource("source1", asset1);
-    animator->loadAnimationsFromSource("source2", asset2);
+    animator->loadAnimationsFromSource("source1", asset1.get());
+    animator->loadAnimationsFromSource("source2", asset2.get());
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 6);
 
     // 缩小缓存到 3
@@ -557,8 +535,6 @@ TEST_F(AnimationCacheTest, EvictionWithSetCacheSize) {
     EXPECT_EQ(stats.cachedCount, 2);
     EXPECT_EQ(stats.maxSize, 2) << "maxSize should reflect new cache size";
 
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 TEST_F(AnimationCacheTest, QueryDoesNotUpdateAccessOrder) {
@@ -567,7 +543,7 @@ TEST_F(AnimationCacheTest, QueryDoesNotUpdateAccessOrder) {
 
     auto asset = loadTestAnimationAsset("test");
     ASSERT_NE(asset, nullptr);
-    animator->loadAnimationsFromSource("test", asset);
+    animator->loadAnimationsFromSource("test", asset.get());
 
     // 查询不应该更新访问顺序
     animator->hasAnimation("test", getAnimName(0));
@@ -583,7 +559,6 @@ TEST_F(AnimationCacheTest, QueryDoesNotUpdateAccessOrder) {
     EXPECT_TRUE(animator->hasAnimation("test", getAnimName(1)));
     EXPECT_TRUE(animator->hasAnimation("test", getAnimName(2)));
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 // ========================================
@@ -597,13 +572,12 @@ TEST_F(AnimationCacheTest, RejectOversizedSource) {
     // 尝试加载多个动画的源（应该被拒绝）
     auto asset = loadTestAnimationAsset("oversized");
     ASSERT_NE(asset, nullptr);
-    size_t count = animator->loadAnimationsFromSource("oversized", asset);
+    size_t count = animator->loadAnimationsFromSource("oversized", asset.get());
 
     EXPECT_EQ(count, 0);  // 拒绝加载
     EXPECT_FALSE(animator->hasSource("oversized"));
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 0);
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 TEST_F(AnimationCacheTest, EmptyCacheOperations) {
@@ -637,7 +611,7 @@ TEST_F(AnimationCacheTest, DuplicateAnimationNameHandling) {
         << "Test requires at least 2 animations in source GLB";
 
     // 创建两个虚拟源，共享骨骼结构但包含不同的动画
-    auto asset1 = new AnimationAsset();
+    auto asset1 = std::make_unique<AnimationAsset>();
     asset1->nodes = sourceAsset->nodes;  // 共享节点结构
 
     // 拷贝第一个动画并重命名（拷贝是安全的）
@@ -645,7 +619,7 @@ TEST_F(AnimationCacheTest, DuplicateAnimationNameHandling) {
     anim1.name = "common";  // 重命名为相同名称
     asset1->animations.push_back(std::move(anim1));
 
-    auto asset2 = new AnimationAsset();
+    auto asset2 = std::make_unique<AnimationAsset>();
     asset2->nodes = sourceAsset->nodes;  // 共享节点结构
 
     // 拷贝第二个动画并重命名（拷贝是安全的）
@@ -654,8 +628,8 @@ TEST_F(AnimationCacheTest, DuplicateAnimationNameHandling) {
     asset2->animations.push_back(std::move(anim2));
 
     // 加载到缓存（骨骼匹配应该成功）
-    size_t count1 = animator->loadAnimationsFromSource("source1", asset1);
-    size_t count2 = animator->loadAnimationsFromSource("source2", asset2);
+    size_t count1 = animator->loadAnimationsFromSource("source1", asset1.get());
+    size_t count2 = animator->loadAnimationsFromSource("source2", asset2.get());
 
     // 验证骨骼匹配成功（不再跳过）
     ASSERT_GT(count1, 0) << "Failed to load source1 (bone matching failed)";
@@ -669,10 +643,7 @@ TEST_F(AnimationCacheTest, DuplicateAnimationNameHandling) {
     animator->applyAnimation("source1", "common", 0.0f);  // 访问 source1
     EXPECT_TRUE(animator->applyAnimationByName("common", 0.5f));  // 应该使用 source1
 
-    // 清理
-    mLoader->destroyAnimationAsset(sourceAsset);
-    delete asset1;
-    delete asset2;
+    // asset1 和 asset2 自动销毁
 }
 
 TEST_F(AnimationCacheTest, RapidLoadUnloadCycles) {
@@ -681,7 +652,7 @@ TEST_F(AnimationCacheTest, RapidLoadUnloadCycles) {
 
     // 快速加载/卸载 10 次
     for (int i = 0; i < 10; i++) {
-        animator->loadAnimationsFromSource("test", asset);
+        animator->loadAnimationsFromSource("test", asset.get());
         EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 3);
 
         animator->unloadAnimationsFromSource("test");
@@ -692,7 +663,6 @@ TEST_F(AnimationCacheTest, RapidLoadUnloadCycles) {
     EXPECT_FALSE(animator->hasSource("test"));
     EXPECT_EQ(animator->getAnimationCacheStats().sourceCount, 0);
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 // ========================================
@@ -702,7 +672,7 @@ TEST_F(AnimationCacheTest, RapidLoadUnloadCycles) {
 TEST_F(AnimationCacheTest, ChannelPointersValidAfterMove) {
     auto asset = loadTestAnimationAsset("test");
     ASSERT_NE(asset, nullptr);
-    animator->loadAnimationsFromSource("test", asset);
+    animator->loadAnimationsFromSource("test", asset.get());
 
     // 播放动画多次（验证 Channel::sourceData 指针有效）
     size_t testCount = std::min<size_t>(3, getAnimCount());
@@ -715,7 +685,6 @@ TEST_F(AnimationCacheTest, ChannelPointersValidAfterMove) {
     // 不应该崩溃（如果指针悬空会在此崩溃）
     EXPECT_EQ(animator->getAnimationCacheStats().hitCount, 5 * testCount);
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 TEST_F(AnimationCacheTest, NoMemoryLeaksAfterEviction) {
@@ -729,9 +698,9 @@ TEST_F(AnimationCacheTest, NoMemoryLeaksAfterEviction) {
     ASSERT_NE(asset2, nullptr);
     ASSERT_NE(asset3, nullptr);
 
-    animator->loadAnimationsFromSource("source1", asset1);
-    animator->loadAnimationsFromSource("source2", asset2);  // 淘汰 source1
-    animator->loadAnimationsFromSource("source3", asset3);  // 淘汰 source2
+    animator->loadAnimationsFromSource("source1", asset1.get());
+    animator->loadAnimationsFromSource("source2", asset2.get());  // 淘汰 source1
+    animator->loadAnimationsFromSource("source3", asset3.get());  // 淘汰 source2
 
     // 验证缓存状态
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 3);
@@ -744,9 +713,6 @@ TEST_F(AnimationCacheTest, NoMemoryLeaksAfterEviction) {
     // NOTE: 内存泄漏需要通过 Valgrind 或 AddressSanitizer 检测
     // 此测试确保代码可以正常执行
 
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
-    mLoader->destroyAnimationAsset(asset3);
 }
 
 // ========================================
@@ -760,8 +726,8 @@ TEST_F(AnimationCacheTest, CacheStatsAccuracy) {
     ASSERT_NE(asset1, nullptr);
     ASSERT_NE(asset2, nullptr);
 
-    size_t count1 = animator->loadAnimationsFromSource("source1", asset1);
-    size_t count2 = animator->loadAnimationsFromSource("source2", asset2);
+    size_t count1 = animator->loadAnimationsFromSource("source1", asset1.get());
+    size_t count2 = animator->loadAnimationsFromSource("source2", asset2.get());
 
     auto stats = animator->getAnimationCacheStats();
     EXPECT_EQ(stats.cachedCount, count1 + count2);
@@ -781,14 +747,12 @@ TEST_F(AnimationCacheTest, CacheStatsAccuracy) {
     EXPECT_EQ(stats.missCount, 1);
     EXPECT_FLOAT_EQ(stats.hitRate, 2.0f / 3.0f * 100.0f);
 
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 TEST_F(AnimationCacheTest, ResetCacheStats) {
     auto asset = loadTestAnimationAsset("test");
     ASSERT_NE(asset, nullptr);
-    size_t count = animator->loadAnimationsFromSource("test", asset);
+    size_t count = animator->loadAnimationsFromSource("test", asset.get());
     ASSERT_GT(count, 0);
 
     // 产生一些统计数据
@@ -811,7 +775,6 @@ TEST_F(AnimationCacheTest, ResetCacheStats) {
     EXPECT_EQ(stats2.cachedCount, count);
     EXPECT_EQ(stats2.sourceCount, 1);
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 // ========================================
@@ -827,7 +790,7 @@ TEST_F(AnimationCacheTest, LoadWithEmptySourceId) {
     ASSERT_NE(asset, nullptr);
 
     // 尝试使用空 sourceId 加载
-    size_t count = animator->loadAnimationsFromSource("", asset);
+    size_t count = animator->loadAnimationsFromSource("", asset.get());
 
     // 应该被拒绝
     EXPECT_EQ(count, 0) << "Empty sourceId should be rejected";
@@ -841,7 +804,6 @@ TEST_F(AnimationCacheTest, LoadWithEmptySourceId) {
     auto sources = animator->getLoadedSources();
     EXPECT_TRUE(sources.empty()) << "No sources should be loaded";
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 /**
@@ -880,19 +842,18 @@ TEST_F(AnimationCacheTest, LoadEmptyAnimationAsset) {
 
     if (actualCount == 0) {
         // 如果资产为空（未来可能），验证行为
-        size_t count = animator->loadAnimationsFromSource("empty_source", asset);
+        size_t count = animator->loadAnimationsFromSource("empty_source", asset.get());
         EXPECT_EQ(count, 0);
         EXPECT_FALSE(animator->hasSource("empty_source"));
     } else {
         // 当前资产非空，跳过此测试
         // 但至少验证加载成功的逻辑正常
-        size_t count = animator->loadAnimationsFromSource("test_source", asset);
+        size_t count = animator->loadAnimationsFromSource("test_source", asset.get());
         EXPECT_EQ(count, actualCount);
         EXPECT_TRUE(animator->hasSource("test_source"));
         animator->unloadAnimationsFromSource("test_source");
     }
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 /**
@@ -940,7 +901,7 @@ TEST_F(AnimationCacheTest, BoneMappingFailure) {
     ASSERT_NE(ecorcheAnim, nullptr);
 
     size_t beforeCount = mismatchAnimator->getAnimationCacheStats().cachedCount;
-    size_t loadedCount = mismatchAnimator->loadAnimationsFromSource("mismatch_test", ecorcheAnim);
+    size_t loadedCount = mismatchAnimator->loadAnimationsFromSource("mismatch_test", ecorcheAnim.get());
 
     // 骨骼匹配率可能很低，但 buildMapping 可能部分成功
     // 验证：即使失败，缓存状态也应该稳定（不污染）
@@ -957,7 +918,6 @@ TEST_F(AnimationCacheTest, BoneMappingFailure) {
         EXPECT_TRUE(mismatchAnimator->hasSource("mismatch_test"));
     }
 
-    mLoader->destroyAnimationAsset(ecorcheAnim);
     mLoader->destroyAsset(mismatchMesh);
 }
 
@@ -975,7 +935,7 @@ TEST_F(AnimationCacheTest, HasAnimationByNameAPI) {
     EXPECT_FALSE(animator->hasAnimationByName(animName));
 
     // 加载动画
-    size_t count = animator->loadAnimationsFromSource("source1", asset);
+    size_t count = animator->loadAnimationsFromSource("source1", asset.get());
     ASSERT_GT(count, 0);
 
     // 加载后：存在
@@ -992,8 +952,8 @@ TEST_F(AnimationCacheTest, HasAnimationByNameAPI) {
     auto asset2 = loadTestAnimationAsset("test2");
     ASSERT_NE(asset2, nullptr);
 
-    animator->loadAnimationsFromSource("source_a", asset);
-    animator->loadAnimationsFromSource("source_b", asset2);
+    animator->loadAnimationsFromSource("source_a", asset.get());
+    animator->loadAnimationsFromSource("source_b", asset2.get());
 
     // 任意源中存在即返回 true
     EXPECT_TRUE(animator->hasAnimationByName(animName));
@@ -1006,8 +966,6 @@ TEST_F(AnimationCacheTest, HasAnimationByNameAPI) {
     animator->unloadAnimationsFromSource("source_b");
     EXPECT_FALSE(animator->hasAnimationByName(animName));
 
-    mLoader->destroyAnimationAsset(asset);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 /**
@@ -1018,7 +976,7 @@ TEST_F(AnimationCacheTest, SetCacheSizeToZero) {
     ASSERT_NE(asset, nullptr);
 
     // 加载 3 个动画
-    size_t count = animator->loadAnimationsFromSource("test", asset);
+    size_t count = animator->loadAnimationsFromSource("test", asset.get());
     ASSERT_GT(count, 0);
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, count);
 
@@ -1044,15 +1002,13 @@ TEST_F(AnimationCacheTest, SetCacheSizeToZero) {
     auto asset2 = loadTestAnimationAsset("test2");
     ASSERT_NE(asset2, nullptr);
 
-    size_t newCount = animator->loadAnimationsFromSource("new_source", asset2);
+    size_t newCount = animator->loadAnimationsFromSource("new_source", asset2.get());
     EXPECT_EQ(newCount, 0) << "Should reject loading when max size is 0";
 
     // 恢复缓存大小
     animator->setAnimationCacheSize(100);
     EXPECT_EQ(animator->getAnimationCacheStats().maxSize, 100);
 
-    mLoader->destroyAnimationAsset(asset);
-    mLoader->destroyAnimationAsset(asset2);
 }
 
 /**
@@ -1063,7 +1019,7 @@ TEST_F(AnimationCacheTest, PlayAtExactDuration) {
     ASSERT_NE(asset, nullptr);
     ASSERT_GT(getAnimCount(), 0);
 
-    animator->loadAnimationsFromSource("test", asset);
+    animator->loadAnimationsFromSource("test", asset.get());
 
     const char* animName = getAnimName(0);
     float duration = animator->getAnimationDuration("test", animName);
@@ -1096,7 +1052,6 @@ TEST_F(AnimationCacheTest, PlayAtExactDuration) {
     auto stats4 = animator->getAnimationCacheStats();
     EXPECT_GT(stats4.hitCount, stats3.hitCount);
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 int main(int argc, char** argv) {

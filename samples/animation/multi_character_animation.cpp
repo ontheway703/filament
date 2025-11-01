@@ -35,7 +35,7 @@
  * - AnimationAsset 可以被多个 Animator 共享（通过相同的源 ID）
  * - 每个 Animator 调用 loadAnimationsFromSource() 时传入相同的源 ID
  * - 播放时每个 Animator 独立调用 applyAnimationByName()，但读取的是共享缓存
- * - 清理时必须先对所有 Animator 调用 unloadAnimationsFromSource()，最后才能 destroyAnimationAsset()
+ * - 清理时必须先对所有 Animator 调用 unloadAnimationsFromSource()，然后 AnimationAsset 自动销毁
  *
  * 【内存对比】
  * - 传统方式（不共享）：5 × (82MB mesh + 679KB anim) = 413MB
@@ -144,7 +144,8 @@ struct App {
     // 【gltfio_ext 核心特性】共享的外部动画资产
     // 这是本示例的核心：1 个 AnimationAsset 被 5 个 Animator 共享（通过相同的源 ID）
     // 内存只分配一次（679KB），但可以被多个角色使用
-    gltfio_ext::AnimationAsset* sharedAnimAsset = nullptr;
+    // 使用 unique_ptr 自动管理内存
+    std::unique_ptr<gltfio_ext::AnimationAsset> sharedAnimAsset;
 
     // Lighting
     Entity keyLight, fillLight;
@@ -428,7 +429,7 @@ static bool loadSharedAnimation(App& app) {
         // Animator 内部会检查缓存，如果源 ID 已存在则直接使用，否则创建新缓存条目
         size_t loadedCount = app.animators[i]->loadAnimationsFromSource(
             SHARED_ANIM_SOURCE,
-            app.sharedAnimAsset
+            app.sharedAnimAsset.get()
         );
 
         if (loadedCount == 0) {
@@ -618,19 +619,17 @@ static void performanceTest(App& app) {
 //
 // 【关键验证点】
 // 1. 验证共享的 AnimationAsset 必须在所有 Animator 解绑后才能销毁
-// 2. 验证 destroyAnimationAsset() 只调用一次（即使被 5 个 Animator 共享）
+// 2. 验证 AnimationAsset 使用 unique_ptr 自动销毁（无需手动调用）
 // 3. 验证清理顺序错误会导致崩溃或内存错误
 //
 // 【新 API 共享资源清理顺序（关键！）】
 // 步骤 1: 对所有 Animator 调用 unloadAnimationsFromSource() - 解除缓存引用
-// 步骤 2: 调用一次 destroyAnimationAsset() - 释放共享数据
+// 步骤 2: AnimationAsset 自动销毁（离开作用域时）
 // 步骤 3: 销毁各个 FilamentAsset - 清理网格数据
 //
 // 【错误示例（会崩溃）】
-// 错误 1: 先 destroyAnimationAsset()，后 unloadAnimationsFromSource()
-//        -> Animator 解绑时访问已释放的内存
-// 错误 2: 对每个 Animator 都调用 destroyAnimationAsset()
-//        -> 重复释放同一块内存，导致 double-free 错误
+// 错误：忘记调用 unloadAnimationsFromSource()，直接让 AnimationAsset 销毁
+//      -> Animator 缓存中仍引用已释放的内存，后续使用会崩溃
 static void cleanup(App& app) {
     if (app.engine) {
         // 【步骤 1：解绑】先从所有 Animator 解绑动画源
@@ -645,13 +644,8 @@ static void cleanup(App& app) {
             }
         }
 
-        // 【步骤 2：销毁共享资源】销毁 AnimationAsset（只调用一次！）
-        // 关键：虽然 5 个 Animator 都引用了它（通过相同的源 ID），但只能销毁一次
-        // 因为内存只分配了一次，所以也只能释放一次
-        if (app.assetLoader && app.sharedAnimAsset) {
-            app.assetLoader->destroyAnimationAsset(app.sharedAnimAsset);
-            app.sharedAnimAsset = nullptr;
-        }
+        // 【步骤 2：共享资源自动销毁】AnimationAsset 使用 unique_ptr 自动管理
+        // sharedAnimAsset 会在离开作用域时自动销毁，无需手动调用 destroyAnimationAsset()
 
         // 【步骤 3：销毁各自的资源】销毁每个 FilamentAsset
         // 每个角色有独立的 FilamentAsset，需要分别销毁

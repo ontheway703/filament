@@ -124,10 +124,10 @@ protected:
 TEST_F(AssetLoaderTest, LoadEmptyData) {
     uint8_t emptyData[] = {0};
 
-    AnimationAsset* asset1 = mLoader->loadAnimationAsset(nullptr, 0);
+    auto asset1 = mLoader->loadAnimationAsset(nullptr, 0);
     EXPECT_EQ(asset1, nullptr);
 
-    AnimationAsset* asset2 = mLoader->loadAnimationAsset(emptyData, 0);
+    auto asset2 = mLoader->loadAnimationAsset(emptyData, 0);
     EXPECT_EQ(asset2, nullptr);
 }
 
@@ -143,7 +143,7 @@ TEST_F(AssetLoaderTest, LoadInvalidGLB) {
     // 随机数据，不是合法的 GLB 文件
     uint8_t invalidData[] = {0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0};
 
-    AnimationAsset* asset = mLoader->loadAnimationAsset(invalidData, sizeof(invalidData));
+    auto asset = mLoader->loadAnimationAsset(invalidData, sizeof(invalidData));
     EXPECT_EQ(asset, nullptr);
 }
 
@@ -176,7 +176,7 @@ TEST_F(AssetLoaderTest, LoadValidAnimatedGLB) {
     }
 
     // 加载动画资产
-    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    auto asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
 
     // 验证资产加载成功
     ASSERT_NE(asset, nullptr);
@@ -198,7 +198,6 @@ TEST_F(AssetLoaderTest, LoadValidAnimatedGLB) {
     EXPECT_TRUE(asset->validate());
 
     // 清理
-    mLoader->destroyAnimationAsset(asset);
 }
 
 // ================================================================================================
@@ -229,7 +228,7 @@ TEST_F(AssetLoaderTest, NodeTreeExtraction) {
                << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
-    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    auto asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
     ASSERT_NE(asset, nullptr);
 
     size_t nodeCount = asset->nodes.size();
@@ -271,7 +270,6 @@ TEST_F(AssetLoaderTest, NodeTreeExtraction) {
         }
     }
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 /**
@@ -295,7 +293,7 @@ TEST_F(AssetLoaderTest, NodeNameLookup) {
                << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
-    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    auto asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
     ASSERT_NE(asset, nullptr);
 
     size_t nodeCount = asset->nodes.size();
@@ -312,7 +310,6 @@ TEST_F(AssetLoaderTest, NodeNameLookup) {
     int notFoundIndex = asset->findNodeByName("NonExistentNode12345");
     EXPECT_EQ(notFoundIndex, -1);
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 // ================================================================================================
@@ -343,7 +340,7 @@ TEST_F(AssetLoaderTest, AnimationChannelExtraction) {
                << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
-    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    auto asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
     ASSERT_NE(asset, nullptr);
     ASSERT_GT(asset->getAnimationCount(), 0);
 
@@ -370,7 +367,6 @@ TEST_F(AssetLoaderTest, AnimationChannelExtraction) {
         // （AnimationPathType 是枚举类，值应该在合理范围内）
     }
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 /**
@@ -398,7 +394,7 @@ TEST_F(AssetLoaderTest, AnimationSamplerExtraction) {
                << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
-    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    auto asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
     ASSERT_NE(asset, nullptr);
     ASSERT_GT(asset->getAnimationCount(), 0);
 
@@ -425,7 +421,6 @@ TEST_F(AssetLoaderTest, AnimationSamplerExtraction) {
         // （LINEAR/STEP/CUBICSPLINE）
     }
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 // ================================================================================================
@@ -455,13 +450,10 @@ TEST_F(AssetLoaderTest, AssetDestruction) {
 
     // 创建并销毁多个资产
     for (int i = 0; i < 5; ++i) {
-        AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+        auto asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
         ASSERT_NE(asset, nullptr);
-        mLoader->destroyAnimationAsset(asset);
+        // asset 自动销毁
     }
-
-    // 测试销毁 nullptr（应该安全）
-    mLoader->destroyAnimationAsset(nullptr);
 
     // 如果有内存泄漏，valgrind 或 ASan 会检测到
 }
@@ -488,12 +480,12 @@ TEST_F(AssetLoaderTest, MultipleLoadsOfSameFile) {
     }
 
     // 加载两次
-    AnimationAsset* asset1 = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
-    AnimationAsset* asset2 = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    auto asset1 = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    auto asset2 = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
 
     ASSERT_NE(asset1, nullptr);
     ASSERT_NE(asset2, nullptr);
-    EXPECT_NE(asset1, asset2);  // 应该是不同的对象
+    EXPECT_NE(asset1.get(), asset2.get());  // 应该是不同的对象
 
     // 两个资产应该有相同的数据
     EXPECT_EQ(asset1->nodes.size(), asset2->nodes.size());
@@ -505,9 +497,7 @@ TEST_F(AssetLoaderTest, MultipleLoadsOfSameFile) {
         EXPECT_EQ(anim1.samplers.size(), anim2.samplers.size());
     }
 
-    // 清理
-    mLoader->destroyAnimationAsset(asset1);
-    mLoader->destroyAnimationAsset(asset2);
+    // asset1 和 asset2 自动销毁
 }
 
 /**
@@ -538,7 +528,7 @@ TEST_F(AssetLoaderTest, LoadAnimationOnlyGLB) {
     }
 
     // 加载动画资产
-    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    auto asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
 
     // 验证资产加载成功
     ASSERT_NE(asset, nullptr) << "Failed to load animation-only GLB";
@@ -560,7 +550,6 @@ TEST_F(AssetLoaderTest, LoadAnimationOnlyGLB) {
     EXPECT_TRUE(asset->validate()) << "Animation-only asset validation failed";
 
     // 清理
-    mLoader->destroyAnimationAsset(asset);
 }
 
 /**
@@ -588,7 +577,7 @@ TEST_F(AssetLoaderTest, NoSkinData) {
                << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
-    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    auto asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
     ASSERT_NE(asset, nullptr);
 
     // 验证蒙皮数据为空
@@ -602,7 +591,6 @@ TEST_F(AssetLoaderTest, NoSkinData) {
             << "Node " << i << " should not reference a skin";
     }
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 /**
@@ -632,7 +620,7 @@ TEST_F(AssetLoaderTest, SkinDataExtraction) {
                << "  3. Run: cd out/cmake-debug/libs/gltfio_ext && ./test_asset_loader";
     }
 
-    AnimationAsset* asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
+    auto asset = mLoader->loadAnimationAsset(glbData.data(), glbData.size());
     ASSERT_NE(asset, nullptr);
 
     // 1. 验证 joints 数组存在且非空
@@ -678,7 +666,6 @@ TEST_F(AssetLoaderTest, SkinDataExtraction) {
     }
     EXPECT_TRUE(foundSkinnedNode) << "Skinned model should have nodes referencing the skin";
 
-    mLoader->destroyAnimationAsset(asset);
 }
 
 // ================================================================================================

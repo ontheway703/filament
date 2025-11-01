@@ -318,10 +318,10 @@ TEST_F(AnimatorTest, SafePlayAfterAssetDestroy) {
     ASSERT_NE(animator, nullptr);
 
     // Load animations from source
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset.get());
     ASSERT_GT(count, 0);
 
     // Verify we can play
@@ -330,7 +330,6 @@ TEST_F(AnimatorTest, SafePlayAfterAssetDestroy) {
     EXPECT_NO_THROW(animator->applyAnimation("character_anims", anims[0].c_str(), 1.0f));
 
     // Wrong order: destroy AnimationAsset first (without unloading)
-    mLoader->destroyAnimationAsset(animAsset);
 
     // Try to play: should safely return (not crash) and log error
     EXPECT_NO_THROW(animator->applyAnimation("character_anims", anims[0].c_str(), 1.0f));
@@ -367,10 +366,10 @@ TEST_F(AnimatorTest, MultipleLoadUnloadCycles) {
     // Cycle 10 times
     for (int i = 0; i < 10; i++) {
         // Load animations from source
-        AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+        auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
         ASSERT_NE(animAsset, nullptr);
 
-        size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+        size_t count = animator->loadAnimationsFromSource("character_anims", animAsset.get());
         ASSERT_GT(count, 0) << "Load failed at iteration " << i;
 
         // Verify state
@@ -384,7 +383,6 @@ TEST_F(AnimatorTest, MultipleLoadUnloadCycles) {
 
         // Properly unload
         animator->unloadAnimationsFromSource("character_anims");
-        mLoader->destroyAnimationAsset(animAsset);
 
         // Verify state is cleaned
         EXPECT_FALSE(animator->hasSource("character_anims"));
@@ -417,10 +415,10 @@ TEST_F(AnimatorTest, CorrectDestructionOrder) {
     ASSERT_NE(animator, nullptr);
 
     // Load animations from source
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset.get());
     ASSERT_GT(count, 0);
 
     // Verify loaded
@@ -432,7 +430,6 @@ TEST_F(AnimatorTest, CorrectDestructionOrder) {
     EXPECT_FALSE(animator->hasSource("character_anims"));
 
     // 2. Destroy AnimationAsset
-    mLoader->destroyAnimationAsset(animAsset);
 
     // 3. Destroy FilamentAsset
     mLoader->destroyAsset(meshAsset);
@@ -473,10 +470,10 @@ TEST_F(AnimatorTest, CompleteWorkflowIntegration) {
         GTEST_SKIP() << "Test asset not found: ecorche_animation_only.glb";
     }
 
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    size_t loadedCount = animator->loadAnimationsFromSource("external_anims", animAsset);
+    size_t loadedCount = animator->loadAnimationsFromSource("external_anims", animAsset.get());
     ASSERT_GT(loadedCount, 0) << "Failed to load animations from source";
 
     // Verify loaded state
@@ -521,7 +518,6 @@ TEST_F(AnimatorTest, CompleteWorkflowIntegration) {
     EXPECT_FALSE(animator->hasSource("external_anims"));
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -551,10 +547,10 @@ TEST_F(AnimatorTest, MeshResidentVerification) {
     size_t initialRenderableCount = meshAsset->getRenderableEntityCount();
 
     // Load animations from source 1
-    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset1, nullptr);
 
-    size_t count1 = animator->loadAnimationsFromSource("source1", animAsset1);
+    size_t count1 = animator->loadAnimationsFromSource("source1", animAsset1.get());
     ASSERT_GT(count1, 0);
 
     // Verify mesh pointer unchanged
@@ -573,12 +569,12 @@ TEST_F(AnimatorTest, MeshResidentVerification) {
 
     // Unload and load different animations (replace)
     animator->unloadAnimationsFromSource("source1");
-    mLoader->destroyAnimationAsset(animAsset1);
+    // animAsset1 自动销毁
 
-    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset2, nullptr);
 
-    size_t count2 = animator->loadAnimationsFromSource("source2", animAsset2);
+    size_t count2 = animator->loadAnimationsFromSource("source2", animAsset2.get());
     ASSERT_GT(count2, 0);
 
     // Verify mesh pointer still unchanged after switching
@@ -596,7 +592,7 @@ TEST_F(AnimatorTest, MeshResidentVerification) {
     EXPECT_EQ(meshPtr1, meshAsset) << "Mesh pointer should remain stable throughout entire workflow";
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset2);
+    // animAsset2 自动销毁
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -634,12 +630,12 @@ TEST_F(AnimatorTest, MultipleAnimatorsSync) {
     EXPECT_NE(animator1, animator2) << "Two instances should have different Animator objects";
 
     // Load animation asset (shared by both instances)
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
     // Load animations for both Animators
-    size_t count1 = animator1->loadAnimationsFromSource("shared_anims", animAsset);
-    size_t count2 = animator2->loadAnimationsFromSource("shared_anims", animAsset);
+    size_t count1 = animator1->loadAnimationsFromSource("shared_anims", animAsset.get());
+    size_t count2 = animator2->loadAnimationsFromSource("shared_anims", animAsset.get());
 
     ASSERT_GT(count1, 0) << "Animator 1 failed to load animations";
     ASSERT_GT(count2, 0) << "Animator 2 failed to load animations";
@@ -693,7 +689,6 @@ TEST_F(AnimatorTest, MultipleAnimatorsSync) {
     });
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);  // Automatically cleans up all instances
 }
 
@@ -724,10 +719,10 @@ TEST_F(AnimatorTest, FastAnimationSwitching) {
 
     for (int cycle = 0; cycle < CYCLES; cycle++) {
         // Load animations from source
-        AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+        auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
         ASSERT_NE(animAsset, nullptr) << "Failed to load animation at cycle " << cycle;
 
-        size_t count = animator->loadAnimationsFromSource("fast_switch", animAsset);
+        size_t count = animator->loadAnimationsFromSource("fast_switch", animAsset.get());
         ASSERT_GT(count, 0) << "Failed to load animations at cycle " << cycle;
 
         // Quickly play multiple animations (not calling updateBoneMatrices)
@@ -745,7 +740,6 @@ TEST_F(AnimatorTest, FastAnimationSwitching) {
         EXPECT_FALSE(animator->hasSource("fast_switch")) << "Failed to unload at cycle " << cycle;
 
         // Destroy asset
-        mLoader->destroyAnimationAsset(animAsset);
     }
 
     auto endTime = std::chrono::high_resolution_clock::now();
@@ -862,10 +856,10 @@ TEST_F(AnimatorTest, BoneTransformCorrectness) {
     ASSERT_NE(meshAnimator, nullptr);
 
     // Load animations from source
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    size_t loadedCount = meshAnimator->loadAnimationsFromSource("external_source", animAsset);
+    size_t loadedCount = meshAnimator->loadAnimationsFromSource("external_source", animAsset.get());
     ASSERT_GT(loadedCount, 0) << "Failed to load animations from source";
 
     // ============================================================
@@ -927,7 +921,6 @@ TEST_F(AnimatorTest, BoneTransformCorrectness) {
     // 4. Real matrix comparison requires real rendering backend (Metal/Vulkan/OpenGL)
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
     mLoader->destroyAsset(fullAsset);
 }
@@ -956,10 +949,10 @@ TEST_F(AnimatorTest, LoadAnimationsFromSourceBasic) {
     ASSERT_NE(animator, nullptr);
 
     // Load animations from source
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset.get());
     EXPECT_GT(count, 0) << "Should load at least one animation";
 
     // Verify source exists
@@ -970,7 +963,6 @@ TEST_F(AnimatorTest, LoadAnimationsFromSourceBasic) {
     EXPECT_EQ(anims.size(), count);
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -994,15 +986,15 @@ TEST_F(AnimatorTest, LoadMultipleSources) {
     ASSERT_NE(animator, nullptr);
 
     // Load from source 1
-    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset1, nullptr);
-    size_t count1 = animator->loadAnimationsFromSource("character_anims", animAsset1);
+    size_t count1 = animator->loadAnimationsFromSource("character_anims", animAsset1.get());
     EXPECT_GT(count1, 0);
 
     // Load from source 2
-    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset2, nullptr);
-    size_t count2 = animator->loadAnimationsFromSource("weapon_anims", animAsset2);
+    size_t count2 = animator->loadAnimationsFromSource("weapon_anims", animAsset2.get());
     EXPECT_GT(count2, 0);
 
     // Verify both sources exist
@@ -1014,8 +1006,7 @@ TEST_F(AnimatorTest, LoadMultipleSources) {
     EXPECT_EQ(sources.size(), 2);
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset1);
-    mLoader->destroyAnimationAsset(animAsset2);
+    // animAsset1 和 animAsset2 自动销毁
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -1039,13 +1030,13 @@ TEST_F(AnimatorTest, UnloadSource) {
     ASSERT_NE(animator, nullptr);
 
     // Load from two sources
-    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
-    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset1, nullptr);
     ASSERT_NE(animAsset2, nullptr);
 
-    animator->loadAnimationsFromSource("source1", animAsset1);
-    animator->loadAnimationsFromSource("source2", animAsset2);
+    animator->loadAnimationsFromSource("source1", animAsset1.get());
+    animator->loadAnimationsFromSource("source2", animAsset2.get());
 
     EXPECT_TRUE(animator->hasSource("source1"));
     EXPECT_TRUE(animator->hasSource("source2"));
@@ -1061,8 +1052,7 @@ TEST_F(AnimatorTest, UnloadSource) {
     EXPECT_EQ(sources[0], "source2");
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset1);
-    mLoader->destroyAnimationAsset(animAsset2);
+    // animAsset1 和 animAsset2 自动销毁
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -1086,13 +1076,13 @@ TEST_F(AnimatorTest, ClearAllCache) {
     ASSERT_NE(animator, nullptr);
 
     // Load from multiple sources
-    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
-    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset1, nullptr);
     ASSERT_NE(animAsset2, nullptr);
 
-    animator->loadAnimationsFromSource("source1", animAsset1);
-    animator->loadAnimationsFromSource("source2", animAsset2);
+    animator->loadAnimationsFromSource("source1", animAsset1.get());
+    animator->loadAnimationsFromSource("source2", animAsset2.get());
 
     EXPECT_TRUE(animator->hasSource("source1"));
     EXPECT_TRUE(animator->hasSource("source2"));
@@ -1108,8 +1098,7 @@ TEST_F(AnimatorTest, ClearAllCache) {
     EXPECT_EQ(sources.size(), 0);
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset1);
-    mLoader->destroyAnimationAsset(animAsset2);
+    // animAsset1 和 animAsset2 自动销毁
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -1133,10 +1122,10 @@ TEST_F(AnimatorTest, ApplyAnimationBySourceAndName) {
     ASSERT_NE(animator, nullptr);
 
     // Load animations
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset.get());
     ASSERT_GT(count, 0);
 
     // Get animation names
@@ -1155,7 +1144,6 @@ TEST_F(AnimatorTest, ApplyAnimationBySourceAndName) {
     EXPECT_FALSE(failResult) << "Should fail for non-existent animation";
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -1179,10 +1167,10 @@ TEST_F(AnimatorTest, ApplyAnimationByNameOnly) {
     ASSERT_NE(animator, nullptr);
 
     // Load animations
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset.get());
     ASSERT_GT(count, 0);
 
     // Get animation names
@@ -1201,7 +1189,6 @@ TEST_F(AnimatorTest, ApplyAnimationByNameOnly) {
     EXPECT_FALSE(failResult) << "Should fail for non-existent animation";
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -1225,13 +1212,13 @@ TEST_F(AnimatorTest, MultipleSourcesSameAnimName) {
     ASSERT_NE(animator, nullptr);
 
     // Load same animations from two different sources
-    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
-    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset1, nullptr);
     ASSERT_NE(animAsset2, nullptr);
 
-    animator->loadAnimationsFromSource("source1", animAsset1);
-    animator->loadAnimationsFromSource("source2", animAsset2);
+    animator->loadAnimationsFromSource("source1", animAsset1.get());
+    animator->loadAnimationsFromSource("source2", animAsset2.get());
 
     // Get animation name (same in both sources)
     std::vector<std::string> anims1 = animator->getAnimationsInSource("source1");
@@ -1255,8 +1242,7 @@ TEST_F(AnimatorTest, MultipleSourcesSameAnimName) {
     EXPECT_TRUE(success);
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset1);
-    mLoader->destroyAnimationAsset(animAsset2);
+    // animAsset1 和 animAsset2 自动销毁
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -1282,10 +1268,10 @@ TEST_F(AnimatorTest, CacheLRUEviction) {
     // First load animations with large cache size
     animator->setAnimationCacheSize(100);
 
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset);
+    size_t count = animator->loadAnimationsFromSource("character_anims", animAsset.get());
     ASSERT_GT(count, 2) << "Need at least 3 animations for LRU eviction test";
 
     // Verify all animations loaded
@@ -1315,7 +1301,6 @@ TEST_F(AnimatorTest, CacheLRUEviction) {
     EXPECT_TRUE(animator->applyAnimationByName(anims[2].c_str(), 0.0f));
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -1342,10 +1327,10 @@ TEST_F(AnimatorTest, CacheSizeManagement) {
     animator->setAnimationCacheSize(5);
 
     // Load animations
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    animator->loadAnimationsFromSource("character_anims", animAsset);
+    animator->loadAnimationsFromSource("character_anims", animAsset.get());
 
     // Get cache stats
     auto stats = animator->getAnimationCacheStats();
@@ -1357,7 +1342,6 @@ TEST_F(AnimatorTest, CacheSizeManagement) {
     EXPECT_EQ(stats.maxSize, 10);
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -1391,10 +1375,10 @@ TEST_F(AnimatorTest, CacheStatistics) {
     EXPECT_EQ(stats.missCount, 0);
 
     // Load animations
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    size_t loadedCount = animator->loadAnimationsFromSource("character_anims", animAsset);
+    size_t loadedCount = animator->loadAnimationsFromSource("character_anims", animAsset.get());
     ASSERT_GT(loadedCount, 0);
 
     // After loading, all animations should be in cache (eager loading)
@@ -1418,7 +1402,6 @@ TEST_F(AnimatorTest, CacheStatistics) {
     EXPECT_GT(stats.hitCount, prevHits);
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -1442,10 +1425,10 @@ TEST_F(AnimatorTest, QueryAnimationDuration) {
     ASSERT_NE(animator, nullptr);
 
     // Load animations
-    AnimationAsset* animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset, nullptr);
 
-    animator->loadAnimationsFromSource("character_anims", animAsset);
+    animator->loadAnimationsFromSource("character_anims", animAsset.get());
 
     // Get animation names
     std::vector<std::string> anims = animator->getAnimationsInSource("character_anims");
@@ -1469,7 +1452,6 @@ TEST_F(AnimatorTest, QueryAnimationDuration) {
     EXPECT_EQ(invalidDuration, 0.0f);
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset);
     mLoader->destroyAsset(meshAsset);
 }
 
@@ -1497,15 +1479,15 @@ TEST_F(AnimatorTest, QuerySourcesAndAnimations) {
     EXPECT_EQ(sources.size(), 0);
 
     // Load from source 1
-    AnimationAsset* animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset1 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset1, nullptr);
-    size_t count1 = animator->loadAnimationsFromSource("character_anims", animAsset1);
+    size_t count1 = animator->loadAnimationsFromSource("character_anims", animAsset1.get());
     EXPECT_GT(count1, 0);
 
     // Load from source 2
-    AnimationAsset* animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    auto animAsset2 = mLoader->loadAnimationAsset(animData.data(), animData.size());
     ASSERT_NE(animAsset2, nullptr);
-    size_t count2 = animator->loadAnimationsFromSource("weapon_anims", animAsset2);
+    size_t count2 = animator->loadAnimationsFromSource("weapon_anims", animAsset2.get());
     EXPECT_GT(count2, 0);
 
     // Query loaded sources
@@ -1534,8 +1516,7 @@ TEST_F(AnimatorTest, QuerySourcesAndAnimations) {
     EXPECT_EQ(invalidAnims.size(), 0);
 
     // Cleanup
-    mLoader->destroyAnimationAsset(animAsset1);
-    mLoader->destroyAnimationAsset(animAsset2);
+    // animAsset1 和 animAsset2 自动销毁
     mLoader->destroyAsset(meshAsset);
 }
 

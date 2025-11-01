@@ -116,7 +116,8 @@ struct App {
 
     // 【gltfio_ext 核心特性】外部动画资产
     // animAsset 可以在运行时动态加载/卸载，独立于 meshAsset 生命周期
-    gltfio_ext::AnimationAsset* animAsset = nullptr;
+    // 使用 unique_ptr 自动管理内存
+    std::unique_ptr<gltfio_ext::AnimationAsset> animAsset;
 
     // Lighting
     Entity keyLight, fillLight;
@@ -366,12 +367,11 @@ static bool runtimeLoadAnimation(App& app) {
     // 返回：加载的动画数量
     size_t loadedCount = app.animator->loadAnimationsFromSource(
         app.currentSourceId.c_str(),
-        app.animAsset
+        app.animAsset.get()
     );
 
     if (loadedCount == 0) {
-        app.assetLoader->destroyAnimationAsset(app.animAsset);
-        app.animAsset = nullptr;
+        app.animAsset.reset();  // 重置 unique_ptr
         app.currentSourceId.clear();
         std::cerr << "[ERROR] Failed to load animations from source" << std::endl;
         return false;
@@ -406,7 +406,7 @@ static bool runtimeLoadAnimation(App& app) {
 // 【新 API 使用流程】
 // 步骤 1: 检查是否有动画源可卸载
 // 步骤 2: unloadAnimationsFromSource() - 从缓存中卸载指定源的动画
-// 步骤 3: destroyAnimationAsset() - 销毁 AnimationAsset 对象
+// 步骤 3: AnimationAsset 自动销毁（unique_ptr 重置）
 // 步骤 4: 清空动画名称列表和源 ID
 // 步骤 5: 【关键】检查 currentAnimIndex 索引，防止越界访问
 static bool runtimeUnloadAnimation(App& app) {
@@ -422,12 +422,9 @@ static bool runtimeUnloadAnimation(App& app) {
     // 这会将该源的所有动画从缓存中移除
     app.animator->unloadAnimationsFromSource(app.currentSourceId.c_str());
 
-    // 【gltfio_ext API】destroyAnimationAsset() - 销毁 AnimationAsset 对象
-    // 注意：必须先 unload 再 destroy，顺序不能错
-    if (app.animAsset) {
-        app.assetLoader->destroyAnimationAsset(app.animAsset);
-        app.animAsset = nullptr;
-    }
+    // 【gltfio_ext API】AnimationAsset 自动销毁
+    // unique_ptr 会在重置时自动释放内存
+    app.animAsset.reset();
 
     // 【状态更新】清空动画名称列表和源 ID
     std::cout << "[SUCCESS] External animation unloaded!" << std::endl;
@@ -458,10 +455,10 @@ static bool runtimeUnloadAnimation(App& app) {
 //
 // 【新 API 压力测试】
 // 测试 API 序列的健壮性：
-// - loadAnimationAsset() 能否正确管理内存分配
+// - loadAnimationAsset() 能否正确管理内存分配（返回 unique_ptr）
 // - loadAnimationsFromSource() 能否正确建立缓存条目
 // - unloadAnimationsFromSource() 能否正确清除缓存
-// - destroyAnimationAsset() 能否正确释放内存
+// - unique_ptr 能否正确自动释放内存
 static void runLeakTest(App& app) {
     const int CYCLES = 100;
     std::cout << "\n=== Starting Memory Leak Test ===" << std::endl;
@@ -475,7 +472,7 @@ static void runLeakTest(App& app) {
         std::string testSourceId = std::string("leak_test_v") + std::to_string(i);
 
         // 【步骤 2】加载 AnimationAsset（分配内存）
-        auto* tempAsset = app.assetLoader->loadAnimationAsset(
+        auto tempAsset = app.assetLoader->loadAnimationAsset(
             app.cachedAnimBytes.data(),
             app.cachedAnimBytes.size()
         );
@@ -488,11 +485,10 @@ static void runLeakTest(App& app) {
         // 【步骤 3】加载到缓存（建立缓存条目）
         size_t loadedCount = app.animator->loadAnimationsFromSource(
             testSourceId.c_str(),
-            tempAsset
+            tempAsset.get()
         );
 
         if (loadedCount == 0) {
-            app.assetLoader->destroyAnimationAsset(tempAsset);
             std::cerr << "Cycle " << i << ": Bind failed!" << std::endl;
             break;
         }
@@ -507,9 +503,8 @@ static void runLeakTest(App& app) {
         // 【步骤 5】从缓存中卸载（清除缓存条目）
         app.animator->unloadAnimationsFromSource(testSourceId.c_str());
 
-        // 【步骤 6】销毁 AnimationAsset（释放内存）
-        // 关键：必须在 unload 之后才能 destroy
-        app.assetLoader->destroyAnimationAsset(tempAsset);
+        // 【步骤 6】AnimationAsset 自动销毁（unique_ptr 离开作用域）
+        // tempAsset 在循环结束时自动释放内存
 
         // Progress report every 10 cycles
         if ((i + 1) % 10 == 0) {
@@ -563,10 +558,8 @@ static void cleanup(App& app) {
             app.animator->unloadAnimationsFromSource(app.currentSourceId.c_str());
         }
 
-        // Destroy external animation asset
-        if (app.assetLoader && app.animAsset) {
-            app.assetLoader->destroyAnimationAsset(app.animAsset);
-        }
+        // External animation asset auto-destroyed (unique_ptr)
+        // animAsset will be automatically destroyed when it goes out of scope
 
         // Destroy mesh asset
         if (app.assetLoader && app.meshAsset) {

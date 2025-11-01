@@ -2163,7 +2163,7 @@ static bool extractSkinData(const cgltf_skin* srcSkin,
  * 加载动画资产（只包含动画数据，不包含 mesh 几何体）
  * Loads animation asset (animation data only, no mesh geometry)
  */
-AnimationAsset* AssetLoader::loadAnimationAsset(const uint8_t* bytes, uint32_t nbytes) {
+std::unique_ptr<AnimationAsset> AssetLoader::loadAnimationAsset(const uint8_t* bytes, uint32_t nbytes) {
     // 1. 解析 GLB 文件
     cgltf_options options = {};
     cgltf_data* srcData = nullptr;
@@ -2278,19 +2278,7 @@ AnimationAsset* AssetLoader::loadAnimationAsset(const uint8_t* bytes, uint32_t n
                << "duration=" << anim.getDuration() << "s" << io::endl;
     }
 
-    return asset;
-}
-
-void AssetLoader::destroyAnimationAsset(AnimationAsset* asset) {
-    if (!asset) {
-        return;  // 安全处理 nullptr
-    }
-
-    // 诊断日志：帮助调试生命周期问题
-    slog.i << "Destroying AnimationAsset with " << asset->getAnimationCount()
-           << " animation(s)" << io::endl;
-
-    delete asset;  // AnimationAsset 的析构函数会自动清理内部容器
+    return std::unique_ptr<AnimationAsset>(asset);
 }
 
 } // namespace filament::gltfio

@@ -264,32 +264,12 @@ public:
      *
      * @param bytes Pointer to GLB file data (GLB 文件数据指针)
      * @param nbytes Size of GLB data in bytes (数据大小，字节数)
-     * @return AnimationAsset* on success, nullptr on failure (成功返回 AnimationAsset 指针，失败返回 nullptr)
+     * @return std::unique_ptr<AnimationAsset> on success, nullptr on failure
+     *         (成功返回 unique_ptr，失败返回 nullptr。使用智能指针自动管理内存，无需手动销毁)
      *
-     * @note Caller is responsible for destroying the asset using destroyAnimationAsset()
-     *       调用者需要使用 destroyAnimationAsset() 销毁返回的资产
-     *
-     * @see destroyAnimationAsset()
      * @see AnimationAsset
      */
-    AnimationAsset* loadAnimationAsset(const uint8_t* bytes, uint32_t nbytes);
-
-    /**
-     * Destroys an AnimationAsset created by loadAnimationAsset().
-     *
-     * This frees all memory associated with the animation asset, including:
-     * - Node data
-     * - Animation channels
-     * - Samplers
-     * - Inverse bind matrices
-     *
-     * 销毁由 loadAnimationAsset() 创建的动画资产
-     *
-     * 释放所有相关内存，包括节点数据、动画通道、采样器、逆绑定矩阵等。
-     *
-     * @param asset The animation asset to destroy (can be nullptr) (要销毁的动画资产，可以为 nullptr)
-     */
-    void destroyAnimationAsset(AnimationAsset* asset);
+    std::unique_ptr<AnimationAsset> loadAnimationAsset(const uint8_t* bytes, uint32_t nbytes);
 
     /**
      * Gets a weak reference to an array of cached materials, used internally to create material
