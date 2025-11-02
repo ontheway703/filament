@@ -299,12 +299,8 @@ TEST_F(AnimatorTest, CorrectDestructionOrder) {
  *
  * Verifies that resetToBindPose() successfully resets transforms to bind pose
  * when source data is available.
- *
- * NOTE: Disabled due to NOOP backend CircularBuffer limitation.
- * The ecorche model has 327 bones which exceeds NOOP backend capacity.
- * This test works correctly in real rendering backends (tested in samples).
  */
-TEST_F(AnimatorTest, DISABLED_ResetToBindPoseBasic) {
+TEST_F(AnimatorTest, ResetToBindPoseBasic) {
     // Load mesh asset (with source data)
     auto meshData = readBinaryFile("ecorche_full.glb");
     if (meshData.empty()) {
@@ -377,10 +373,8 @@ TEST_F(AnimatorTest, ResetToBindPoseAfterReleaseSourceData) {
  *
  * Verifies that calling resetToBindPose() multiple times does not crash
  * or corrupt state.
- *
- * NOTE: Disabled due to NOOP backend CircularBuffer limitation (same as ResetToBindPoseBasic).
  */
-TEST_F(AnimatorTest, DISABLED_ResetToBindPoseIdempotent) {
+TEST_F(AnimatorTest, ResetToBindPoseIdempotent) {
     auto meshData = readBinaryFile("ecorche_full.glb");
     if (meshData.empty()) {
         GTEST_SKIP() << "Test asset not found: ecorche_full.glb";
@@ -409,10 +403,8 @@ TEST_F(AnimatorTest, DISABLED_ResetToBindPoseIdempotent) {
  *
  * Verifies that resetToBindPose() properly resets state allowing
  * animations to be applied again cleanly.
- *
- * NOTE: Disabled due to NOOP backend CircularBuffer limitation (same as ResetToBindPoseBasic).
  */
-TEST_F(AnimatorTest, DISABLED_AnimationResetAnimationWorkflow) {
+TEST_F(AnimatorTest, AnimationResetAnimationWorkflow) {
     auto meshData = readBinaryFile("ecorche_full.glb");
     auto animData = readBinaryFile("ecorche_animation_only.glb");
 
@@ -455,10 +447,8 @@ TEST_F(AnimatorTest, DISABLED_AnimationResetAnimationWorkflow) {
  *
  * Verifies that resetToBindPose() works correctly with the asset's
  * broadcast animator (used for all instances).
- *
- * NOTE: Disabled due to NOOP backend CircularBuffer limitation (same as ResetToBindPoseBasic).
  */
-TEST_F(AnimatorTest, DISABLED_ResetToBindPoseBroadcast) {
+TEST_F(AnimatorTest, ResetToBindPoseBroadcast) {
     auto meshData = readBinaryFile("ecorche_full.glb");
     if (meshData.empty()) {
         GTEST_SKIP() << "Test asset not found: ecorche_full.glb";
@@ -486,10 +476,8 @@ TEST_F(AnimatorTest, DISABLED_ResetToBindPoseBroadcast) {
  *
  * Verifies that resetToBindPose() works correctly after cross-fade blending,
  * properly resetting the internal cross-fade state.
- *
- * NOTE: Disabled due to NOOP backend CircularBuffer limitation (same as ResetToBindPoseBasic).
  */
-TEST_F(AnimatorTest, DISABLED_ResetToBindPoseAfterCrossFade) {
+TEST_F(AnimatorTest, ResetToBindPoseAfterCrossFade) {
     auto meshData = readBinaryFile("ecorche_full.glb");
     auto animData = readBinaryFile("ecorche_animation_only.glb");
 
