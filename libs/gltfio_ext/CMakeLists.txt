@@ -290,6 +290,16 @@ if (TNT_DEV AND NOT WEBGL AND NOT ANDROID AND NOT IOS)
     endif()
     set_target_properties(${ANIMATION_BINDING_TEST_TARGET} PROPERTIES FOLDER Tests)
 
+    # Bone matrices test (updateBoneMatrices / resetBoneMatrices with large buffer)
+    set(BONE_MATRICES_TEST_TARGET test_bone_matrices)
+    add_executable(${BONE_MATRICES_TEST_TARGET} test/test_bone_matrices.cpp)
+    add_dependencies(${BONE_MATRICES_TEST_TARGET} test_gltfio_ext_files)
+    target_link_libraries(${BONE_MATRICES_TEST_TARGET} PRIVATE ${TARGET} gtest uberarchive_ext)
+    if (NOT MSVC)
+        target_compile_options(${BONE_MATRICES_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
+    endif()
+    set_target_properties(${BONE_MATRICES_TEST_TARGET} PROPERTIES FOLDER Tests)
+
     # Animator tests (external animation support) - Split into 4 files by functionality
     # NOTE: Replaced single test_animator.cpp with 4 specialized test files
 

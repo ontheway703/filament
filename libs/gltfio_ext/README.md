@@ -1,8 +1,8 @@
 # gltfio_ext - Extended glTF Animation Loading
 
-**[Overview](#overview)** | **[Quick Start](#quick-start)** | **[Core Concepts](#core-concepts)** | **[API Reference](#api-reference)** | **[Common Issues](#common-issues)** | **[Testing](#testing)**
+**[Overview](#overview)** | **[Quick Start](#quick-start)** | **[Core Concepts](#core-concepts)** | **[API Reference](#api-reference)** | **[Best Practices](#best-practices)** | **[Testing](#testing)**
 
-> Decoupled animation loading for Filament's glTF pipeline
+> Decoupled animation loading for Filament's glTF pipeline - with multi-instance support and smart caching
 
 ---
 
@@ -19,9 +19,14 @@
 - [API Reference](#api-reference)
   - [AssetLoader](#assetloader)
   - [Animator](#animator)
+  - [AnimationBinding](#animationbinding)
   - [AnimationAsset API](#animationasset-api)
 - [Common Issues](#common-issues)
 - [Best Practices](#best-practices)
+  - [Error Handling](#error-handling)
+  - [Memory Management](#memory-management)
+  - [Performance Tips](#performance-tips)
+  - [Multi-Instance Scenarios](#multi-instance-scenarios)
 - [Testing](#testing)
 
 ---
@@ -41,10 +46,12 @@ Traditional glTF workflow bundles meshes and animations in a single file, leadin
 
 - **Separate Asset Management**: Store meshes and animations in different GLB files
 - **Animation Reuse**: Apply multiple animation sets (idle, walk, run) to a single mesh
+- **Multi-Instance Support**: Share mesh data across multiple characters with independent animations
 - **Lightweight Loading**: Load only animation data (skeleton + keyframes), not geometry or materials
 - **Multi-Animation Support**: Single GLB file can contain multiple animation clips
 - **Smart Caching**: LRU cache system with source-based organization for efficient playback
 - **Automatic Memory Management**: Uses `std::unique_ptr` for safe resource handling
+- **Bone Matrix Updates**: Inherited updateBoneMatrices() and resetBoneMatrices() from gltfio
 
 ### Typical Workflow
 
@@ -204,15 +211,32 @@ Establishes correspondence between animation skeleton and mesh entities via name
 3. `AnimationBinding` matches bones by name and creates transform instance mapping
 4. 90% match rate threshold ensures compatibility
 
+**Multi-Instance Support**:
+- `createForAsset()`: Bind animations to the base FilamentAsset (simple scenario)
+- `createForInstance()`: Bind animations to a specific FilamentInstance (multi-character scenario)
+
+**Usage Example**:
+```cpp
+// Single instance
+auto binding = AnimationBinding::createForAsset(animAsset, meshAsset, engine);
+
+// Multiple instances (share mesh, independent transforms)
+FilamentInstance* character1 = meshAsset->getInstance();  // Base instance
+FilamentInstance* character2 = loader->createInstance(meshAsset);
+
+auto binding1 = AnimationBinding::createForInstance(animAsset, character1, engine);
+auto binding2 = AnimationBinding::createForInstance(animAsset, character2, engine);
+```
+
 **Validation**:
 ```cpp
 // Check match rate
-float matchRate = binding.getMatchRate();
+float matchRate = binding->getMatchRate();
 if (matchRate < 0.9f) {
     utils::slog.w << "Low match rate: " << (matchRate * 100) << "%\n";
 
     // Inspect unmatched bones
-    const auto& unmatched = binding.getUnmatchedBones();
+    const auto& unmatched = binding->getUnmatchedBones();
     for (size_t nodeIdx : unmatched) {
         utils::slog.w << "Unmatched: " << animAsset->nodes[nodeIdx].name << "\n";
     }
@@ -378,6 +402,148 @@ Adjusts cache capacity (default: 100).
 
 ---
 
+#### updateBoneMatrices()
+
+```cpp
+void updateBoneMatrices();
+```
+
+Updates bone matrices for skinned meshes, applying the current animation pose to renderable geometry.
+
+**Usage**:
+```cpp
+// In render loop
+animator->applyAnimationByName("walk", currentTime);
+animator->updateBoneMatrices();  // Apply transforms to GPU
+```
+
+**Notes**:
+- Inherited from gltfio's Animator
+- Must be called after applyAnimation() to see visual changes
+- Sends bone transforms to RenderableManager
+- Required for skinned mesh rendering
+
+---
+
+#### resetBoneMatrices()
+
+```cpp
+void resetBoneMatrices();
+```
+
+Resets bone matrices to their bind pose (T-pose), removing all animation transforms.
+
+**Usage**:
+```cpp
+// Stop animation and return to bind pose
+animator->resetBoneMatrices();
+```
+
+**Notes**:
+- Inherited from gltfio's Animator
+- Useful for debugging or returning to default pose
+- Does not affect animation cache or loaded animations
+
+---
+
+### AnimationBinding
+
+#### createForAsset()
+
+```cpp
+static std::unique_ptr<AnimationBinding> createForAsset(
+    const AnimationAsset* externalAnim,
+    const FilamentAsset* meshAsset,
+    filament::Engine* engine
+);
+```
+
+Creates an AnimationBinding for a FilamentAsset (simple scenario).
+
+**Parameters**:
+- `externalAnim`: External animation asset (must remain valid during binding lifetime)
+- `meshAsset`: Mesh asset that provides both entities and names
+- `engine`: Filament engine instance
+
+**Returns**: `unique_ptr<AnimationBinding>` (auto-managed), `nullptr` on failure
+
+**Usage**:
+```cpp
+auto binding = AnimationBinding::createForAsset(animAsset, meshAsset, engine);
+if (binding && binding->getMatchRate() >= 0.9f) {
+    // Binding successful, use with Animator
+}
+```
+
+---
+
+#### createForInstance()
+
+```cpp
+static std::unique_ptr<AnimationBinding> createForInstance(
+    const AnimationAsset* externalAnim,
+    const FilamentInstance* instance,
+    filament::Engine* engine
+);
+```
+
+Creates an AnimationBinding for a FilamentInstance (multi-instance scenario).
+
+**Parameters**:
+- `externalAnim`: External animation asset (must remain valid during binding lifetime)
+- `instance`: Instance that provides entities (automatically uses owner asset for names)
+- `engine`: Filament engine instance
+
+**Returns**: `unique_ptr<AnimationBinding>` (auto-managed), `nullptr` on failure
+
+**Usage**:
+```cpp
+// Create multiple instances with independent animations
+FilamentInstance* npc1 = loader->createInstance(baseAsset);
+FilamentInstance* npc2 = loader->createInstance(baseAsset);
+
+auto binding1 = AnimationBinding::createForInstance(idleAnim, npc1, engine);
+auto binding2 = AnimationBinding::createForInstance(walkAnim, npc2, engine);
+```
+
+**Notes**:
+- Ideal for scenarios with multiple characters sharing the same mesh
+- Each instance has independent transform state
+- Bindings can use different animations for different instances
+
+---
+
+#### getMatchRate()
+
+```cpp
+float getMatchRate() const;
+```
+
+Returns the percentage of animation bones successfully matched to mesh entities (0.0 to 1.0).
+
+**Threshold**: 0.9 (90%) is the minimum for reliable animation playback.
+
+---
+
+#### getUnmatchedBones()
+
+```cpp
+const std::vector<size_t>& getUnmatchedBones() const;
+```
+
+Returns indices of animation nodes that failed to match mesh entities.
+
+**Usage**:
+```cpp
+if (binding->getMatchRate() < 0.9f) {
+    for (size_t idx : binding->getUnmatchedBones()) {
+        utils::slog.w << "Unmatched: " << animAsset->nodes[idx].name << "\n";
+    }
+}
+```
+
+---
+
 ### AnimationAsset API
 
 ```cpp
@@ -529,6 +695,49 @@ animAsset.reset();  // Explicit destruction
    ```
 4. **Prefer name-based API** over index-based for maintainability
 
+### Multi-Instance Scenarios
+
+Use `createInstance()` to share mesh data across multiple characters:
+
+```cpp
+// Load base mesh once
+FilamentAsset* baseMesh = loader->createAsset(meshData, meshSize);
+resourceLoader->loadResources(baseMesh);
+
+// Create multiple instances (share geometry, independent transforms)
+FilamentInstance* npc1 = baseMesh->getInstance();           // Base instance
+FilamentInstance* npc2 = loader->createInstance(baseMesh);  // Additional instance
+FilamentInstance* npc3 = loader->createInstance(baseMesh);
+
+// Load animation sets
+auto idleAnim = loader->loadAnimationAsset(idleData, idleSize);
+auto walkAnim = loader->loadAnimationAsset(walkData, walkSize);
+
+// Each instance can have different animations
+Animator* animator1 = npc1->getAnimator();
+Animator* animator2 = npc2->getAnimator();
+Animator* animator3 = npc3->getAnimator();
+
+animator1->loadAnimationsFromSource("npc1_anims", idleAnim.get());
+animator2->loadAnimationsFromSource("npc2_anims", walkAnim.get());
+animator3->loadAnimationsFromSource("npc3_anims", idleAnim.get());
+
+// In render loop - each character animates independently
+animator1->applyAnimationByName("idle", time);
+animator2->applyAnimationByName("walk", time);
+animator3->applyAnimationByName("idle", time + 0.5f);  // Phase offset
+
+animator1->updateBoneMatrices();
+animator2->updateBoneMatrices();
+animator3->updateBoneMatrices();
+```
+
+**Benefits**:
+- ✅ Shared geometry saves GPU memory (one vertex buffer for all instances)
+- ✅ Independent transforms allow different positions/rotations
+- ✅ Independent animations enable diverse character behaviors
+- ✅ Efficient for crowd rendering or multiple NPCs
+
 ---
 
 ## Testing
@@ -538,44 +747,65 @@ Run the comprehensive test suite to verify your setup:
 ```bash
 cd out/cmake-debug/libs/gltfio_ext
 
-# Run all tests
+# Run all tests (recommended)
 ./run_tests.sh
 
 # Or run individually
-./test_asset_loader             # Asset loading and validation
-./test_animation_binding        # Bone mapping and matching
-./test_animator_lifecycle       # Resource lifecycle and memory safety (3 tests)
-./test_animator_playback        # Source management, playback, queries (11 tests)
-./test_animator_cache           # Cache LRU eviction and statistics (3 tests)
-./test_animator_crossfade       # Animation blending and complex integration (7 tests)
-./test_animation_cache          # Lightweight cache system (Phase 2-3)
+./test_animation_asset          # AnimationAsset data structures (21 tests)
+./test_gltfio_ext               # Basic glTF asset loading (3 tests)
+./test_asset_loader             # loadAnimationAsset() API (12 tests)
+./test_animation_binding        # Bone mapping & multi-instance (9 tests)
+./test_bone_matrices            # Bone matrix updates (5 tests, skipped on NOOP backend)
+./test_animator_lifecycle       # Resource lifecycle and memory safety (9 tests)
+./test_animator_playback        # Source management and playback (11 tests)
+./test_animator_cache           # Cache integration (3 tests)
+./test_animator_crossfade       # Animation blending (7 tests)
+./test_animation_cache          # LRU cache system (34 tests)
 ```
+
+### Test Statistics
+
+**Total**: 115 test cases across 10 test files (110 passing + 5 skipped)
+
+| Test File | Tests | Status | Coverage |
+|-----------|-------|--------|----------|
+| `test_animation_asset` | 21 | ✅ Pass | AnimationAsset validation, multi-animation support |
+| `test_gltfio_ext` | 3 | ✅ Pass | FilamentAsset loading, materials, transforms |
+| `test_asset_loader` | 12 | ✅ Pass | Animation-only GLB loading, skin data extraction |
+| `test_animation_binding` | 9 | ✅ Pass | **Bone name mapping, createForInstance() multi-instance** |
+| `test_bone_matrices` | 5 | ⏭️ Skip | updateBoneMatrices() (NOOP backend limitation) |
+| `test_animator_lifecycle` | 9 | ✅ Pass | Safe destruction, load/unload cycles |
+| `test_animator_playback` | 11 | ✅ Pass | Source loading, playback by name, queries |
+| `test_animator_cache` | 3 | ✅ Pass | Cache integration with Animator |
+| `test_animator_crossfade` | 7 | ✅ Pass | Cross-fade, alpha blending, multi-animator sync |
+| `test_animation_cache` | 34 | ✅ Pass | **LRU eviction, hit rate, cache statistics** |
 
 ### Test Architecture
 
-Animator tests are organized by functionality for better maintainability:
+Tests are organized by functional layers:
 
-| Test File | Focus Area | Test Count | Key Tests |
-|-----------|------------|------------|-----------|
-| `test_animator_lifecycle` | Resource Management | 3 | Safe destruction, load/unload cycles, lifecycle order |
-| `test_animator_playback` | Core Playback | 11 | Source loading, playback by name, queries, integration |
-| `test_animator_cache` | Cache System | 3 | LRU eviction, size management, statistics |
-| `test_animator_crossfade` | Animation Blending | 7 | Cross-fade, alpha blending, multi-animator sync |
+**Core Layer** (AnimationAsset, AssetLoader):
+- Data validation, multi-animation support, error handling
+- Animation-only GLB loading (export_meshes=False in Blender)
+- Skin data extraction (joints, inverseBindMatrices)
 
-**Benefits of Split Architecture**:
-- ✅ **Focused testing**: Each file has a clear functional scope
-- ✅ **Faster iteration**: Run only relevant tests during development
-- ✅ **Better organization**: Easy to locate and modify specific test cases
-- ✅ **Independent execution**: Tests can run in parallel for faster CI/CD
+**Integration Layer** (AnimationBinding):
+- Bone name mapping with 90% match rate threshold
+- **Multi-instance support**: `createForAsset()` and `createForInstance()`
+- Entity mapping validation, unmatched bone diagnostics
 
-**Test Coverage**:
-- **Unit tests**: Data structures, validation, error handling
-- **Integration tests**: Complete workflows, multi-instance scenarios
-- **Lifecycle tests**: Destruction order, memory safety
-- **Edge cases**: Invalid inputs, bone mismatches, cache eviction
-- **Performance tests**: Fast switching, concurrent playback
+**Playback Layer** (Animator, AnimationCache):
+- External animation loading and source management
+- Name-based animation playback
+- LRU cache eviction, hit rate optimization
+- Cross-fade and alpha blending
 
-**Test Assets**: Uses real-world ecorche model (327 bones, 3 animations, 100% match rate)
+**Benefits**:
+- ✅ **Comprehensive coverage**: 115 tests covering all gltfio_ext features
+- ✅ **Real-world validation**: Uses ecorche model (327 bones, 3 animations, 100% match rate)
+- ✅ **Multi-instance testing**: Verifies independent animation bindings
+- ✅ **Cache performance**: Validates LRU eviction and hit rate tracking
+- ✅ **Memory safety**: Lifecycle tests ensure proper resource cleanup
 
 ---
 

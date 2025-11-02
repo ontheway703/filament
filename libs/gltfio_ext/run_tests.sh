@@ -16,6 +16,7 @@ NC='\033[0m' # No Color
 TOTAL_TESTS=0
 PASSED_TESTS=0
 FAILED_TESTS=0
+SKIPPED_TESTS=0
 
 # 获取脚本所在目录的根目录
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -24,14 +25,20 @@ PROJECT_ROOT="$SCRIPT_DIR/../.."
 # 测试目录
 TEST_DIR="$PROJECT_ROOT/out/cmake-debug/libs/gltfio_ext"
 
-# 测试列表
+# 测试列表（按逻辑分组）
 TESTS=(
+    # 核心单元测试
+    "test_animation_asset"
+    "test_gltfio_ext"
     "test_asset_loader"
     "test_animation_binding"
+    "test_bone_matrices"
+    # Animator 功能测试
     "test_animator_lifecycle"
     "test_animator_playback"
     "test_animator_cache"
     "test_animator_crossfade"
+    # 缓存系统测试
     "test_animation_cache"
 )
 
@@ -61,19 +68,41 @@ for test_name in "${TESTS[@]}"; do
         continue
     fi
 
+    # 清空临时文件
+    > /tmp/gltfio_test_output.txt
+
     # 运行测试并捕获输出
     if ./"$test_name" 2>&1 | tee /tmp/gltfio_test_output.txt; then
         # 提取测试结果
         TEST_RESULT=$(grep -E "\[==========\].*ran\." /tmp/gltfio_test_output.txt || echo "")
-        PASSED=$(grep -E "\[  PASSED  \]" /tmp/gltfio_test_output.txt || echo "")
+        PASSED=$(grep -E "\[  PASSED  \] [0-9]+ tests?" /tmp/gltfio_test_output.txt || echo "")
+        SKIPPED=$(grep -E "\[  SKIPPED \] [0-9]+ tests?" /tmp/gltfio_test_output.txt || echo "")
 
+        # 提取通过的测试数量
         if [ -n "$PASSED" ]; then
-            # 提取通过的测试数量
-            COUNT=$(echo "$PASSED" | grep -oE "[0-9]+ test" | grep -oE "[0-9]+")
-            PASSED_TESTS=$((PASSED_TESTS + COUNT))
-            TOTAL_TESTS=$((TOTAL_TESTS + COUNT))
+            PASSED_COUNT=$(echo "$PASSED" | grep -oE "[0-9]+ tests?" | grep -oE "[0-9]+" || echo "0")
+            if [ -n "$PASSED_COUNT" ] && [ "$PASSED_COUNT" -gt 0 ]; then
+                PASSED_TESTS=$((PASSED_TESTS + PASSED_COUNT))
+                TOTAL_TESTS=$((TOTAL_TESTS + PASSED_COUNT))
+            fi
+        fi
 
-            echo -e "${GREEN}✓ $test_name: $COUNT 个测试通过${NC}"
+        # 提取跳过的测试数量
+        if [ -n "$SKIPPED" ]; then
+            SKIPPED_COUNT=$(echo "$SKIPPED" | grep -oE "[0-9]+ tests?" | grep -oE "[0-9]+" || echo "0")
+            if [ -n "$SKIPPED_COUNT" ] && [ "$SKIPPED_COUNT" -gt 0 ]; then
+                SKIPPED_TESTS=$((SKIPPED_TESTS + SKIPPED_COUNT))
+                TOTAL_TESTS=$((TOTAL_TESTS + SKIPPED_COUNT))
+            fi
+        fi
+
+        # 输出结果摘要
+        if [ -n "$PASSED_COUNT" ] && [ "$PASSED_COUNT" -gt 0 ] && [ -n "$SKIPPED_COUNT" ] && [ "$SKIPPED_COUNT" -gt 0 ]; then
+            echo -e "${GREEN}✓ $test_name: $PASSED_COUNT 个通过${NC}, ${YELLOW}$SKIPPED_COUNT 个跳过${NC}"
+        elif [ -n "$PASSED_COUNT" ] && [ "$PASSED_COUNT" -gt 0 ]; then
+            echo -e "${GREEN}✓ $test_name: $PASSED_COUNT 个测试通过${NC}"
+        elif [ -n "$SKIPPED_COUNT" ] && [ "$SKIPPED_COUNT" -gt 0 ]; then
+            echo -e "${YELLOW}⊘ $test_name: $SKIPPED_COUNT 个测试跳过${NC}"
         else
             echo -e "${GREEN}✓ $test_name: 通过${NC}"
         fi
@@ -96,15 +125,17 @@ echo -e "${BLUE}测试总结${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo -e "总测试数: ${TOTAL_TESTS}"
 echo -e "${GREEN}通过: ${PASSED_TESTS}${NC}"
+echo -e "${YELLOW}跳过: ${SKIPPED_TESTS}${NC}"
+echo -e "${RED}失败: ${FAILED_TESTS}${NC}"
+echo ""
 
 if [ $FAILED_TESTS -gt 0 ]; then
-    echo -e "${RED}失败: ${FAILED_TESTS}${NC}"
-    echo ""
     echo -e "${RED}部分测试失败！${NC}"
     exit 1
+elif [ $SKIPPED_TESTS -gt 0 ]; then
+    echo -e "${GREEN}所有可执行测试通过！${NC} ${YELLOW}($SKIPPED_TESTS 个测试因环境限制跳过)${NC}"
+    exit 0
 else
-    echo -e "${RED}失败: 0${NC}"
-    echo ""
     echo -e "${GREEN}所有测试通过！ ✓${NC}"
     exit 0
 fi

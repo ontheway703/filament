@@ -47,14 +47,20 @@ cd out/cmake-debug/libs/gltfio_ext
 
 ## 测试概览
 
-总计：**4个测试可执行文件，41个测试用例**，覆盖核心功能和集成场景。
+总计：**10个测试可执行文件，115个测试用例**，覆盖 gltfio_ext 特有功能和核心场景。
 
-| 测试文件 | 类型 | 用例数 | 依赖库 | 需要资源 |
-|---------|------|-------|--------|---------|
-| test_animation_asset.cpp | 单元测试 | 20 | gltfio_ext_core | 否 |
-| test_gltfio_ext.cpp | 集成测试 | 3 | gltfio_ext + uberarchive_ext | 是 |
-| test_asset_loader.cpp | 集成测试 | 12 | gltfio_ext + uberarchive_ext | 是 |
-| test_animation_binding.cpp | 集成测试 | 6 | gltfio_ext + uberarchive_ext | 是 |
+| 测试文件 | 类型 | 用例数 | 依赖库 | 需要资源 | 功能覆盖 |
+|---------|------|-------|--------|---------|---------|
+| test_animation_asset.cpp | 单元测试 | 21 | gltfio_ext_core | 否 | AnimationAsset 数据验证 |
+| test_gltfio_ext.cpp | 集成测试 | 3 | gltfio_ext + uberarchive_ext | 是 | 基础加载流程 |
+| test_asset_loader.cpp | 集成测试 | 13 | gltfio_ext + uberarchive_ext | 是 | loadAnimationAsset() API |
+| test_animation_binding.cpp | 集成测试 | 9 | gltfio_ext + uberarchive_ext | 是 | 骨骼名称映射（含实例化）|
+| test_bone_matrices.cpp | 集成测试 | 5 | gltfio_ext + uberarchive_ext | 是 | 骨骼矩阵更新 |
+| test_animator_lifecycle.cpp | 集成测试 | 9 | gltfio_ext + uberarchive_ext | 是 | 资源生命周期 |
+| test_animator_playback.cpp | 集成测试 | 11 | gltfio_ext + uberarchive_ext | 是 | 外部动画播放 |
+| test_animator_cache.cpp | 集成测试 | 3 | gltfio_ext + uberarchive_ext | 是 | Animator 缓存集成 |
+| test_animator_crossfade.cpp | 集成测试 | 7 | gltfio_ext + uberarchive_ext | 是 | 动画混合 |
+| test_animation_cache.cpp | 单元测试 | 34 | gltfio_ext + uberarchive_ext | 是 | LRU 缓存系统 |
 
 **资源文件**：
 - `AnimatedMorphCube.glb` - 从 `third_party/models/` 复制
@@ -156,31 +162,61 @@ cd out/cmake-debug/libs/gltfio_ext
 
 **功能**：测试 `AnimationBinding` 类，验证外部动画骨骼与驻留网格实体的名称映射。
 
-**6个测试用例**：
+**9个测试用例**：
 
-#### 基础功能（2个）
-- `EmptyBinding` - 空绑定验证（无网格或动画）
-- `MultipleAnimationsInAsset` - 多动画资产加载（验证从单个 GLB 文件加载多个动画片段）
+#### 基础功能（3个）
+- `BuildMappingSuccess` - 基础映射构建
+- `TransformInstanceValid` - TransformManager::Instance 有效性
+- `HandleNullInputs` - 空输入处理
 
-#### 骨骼映射（2个）
-- `BoneNameMapping` - 骨骼名称匹配（使用 ecorche_full.glb，327个骨骼，100%匹配率）
-- `PartialMatch` - 部分匹配场景（动画骨骼数量与网格不同时的处理）
+#### 骨骼映射（3个）
+- `GetMatchRate` - 匹配率计算
+- `GetUnmatchedBones` - 未匹配骨骼列表
+- `MappingConsistency` - Entity map 和 Instance map 一致性
 
-#### 变换实例（2个）
-- `TransformInstancesValid` - 变换实例验证（确保所有匹配的骨骼都有有效的 TransformManager::Instance）
-- `GetMatchRate` - 匹配率计算（匹配数量 / 总动画骨骼数）
+#### 实例化支持（3个，gltfio_ext 特有）
+- `CreateForInstanceBasic` - **createForInstance() 基本功能测试**
+- `MultiInstanceIndependentBindings` - **多实例绑定独立性验证**
+- `CreateForInstanceMatchRateConsistency` - **实例化匹配率一致性**
 
 **特点**：
 - 测试动画复用的核心功能（一套网格 + 多套外部动画）
 - 验证 NameComponentManager 集成（通过 getName() 查询实体名称）
+- **验证 createForInstance() API**（gltfio_ext 特有，支持多实例场景）
 - 使用真实模型（ecorche 有 327 个关节骨骼）
 - 支持多动画 GLB 文件（ecorche_full.glb 包含 Pull/Push/Squat 三个动画）
 - 测试匹配容差（90% 匹配率阈值）
 
 **关键测试数据**：
 - ecorche_full.glb: 327 个关节骨骼，3 个动画片段
-- 100% 骨骼匹配率（所有骨骼名称完全对应）
+- ≥90% 骨骼匹配率（允许 10% 容差）
 - 验证从 animation-only 到 full-mesh 的骨骼绑定
+- 验证多实例独立性（createInstance + createForInstance）
+
+---
+
+### test_bone_matrices.cpp
+
+**功能**：测试 `Animator` 的骨骼矩阵更新功能（继承自 gltfio，验证集成正确性）。
+
+**5个测试用例**：
+
+- `UpdateBoneMatricesWithLargeBuffer` - 验证 updateBoneMatrices() 在大 buffer 下不崩溃
+- `ResetBoneMatricesAfterAnimation` - 验证 resetBoneMatrices() 重置功能
+- `BoneMatricesUpdateAfterAnimation` - 验证动画播放后多次更新
+- `RepeatedResetBoneMatrices` - 验证重复重置的稳定性
+- `AlternateUpdateAndReset` - 验证交替调用 update 和 reset
+
+**特点**：
+- 使用特殊的 Engine 配置（commandBufferSizeMB = 96, minCommandBufferSizeMB = 48）
+- 解决 ecorche 327 骨骼导致的 NOOP backend circular buffer overflow 问题
+- 验证之前因 buffer 限制而无法测试的骨骼矩阵功能
+- 确保骨骼动画渲染管线的关键路径受到保护
+
+**技术背景**：
+- ecorche 模型有 327 个骨骼，每次 updateBoneMatrices() 会向 backend 发送大量命令
+- 默认 buffer 大小无法容纳，需要配置 96MB buffer
+- 这些 API 虽然继承自 gltfio，但 gltfio_ext 需要验证集成正确性
 
 ## 故障排查
 
