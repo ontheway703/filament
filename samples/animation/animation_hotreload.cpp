@@ -70,6 +70,7 @@
 #include <utils/NameComponentManager.h>
 
 #include <iostream>
+#include <iomanip>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -135,6 +136,11 @@ struct App {
     std::vector<uint8_t> cachedAnimBytes;
     int loadUnloadCycleCount = 0;
     std::string currentSourceId;
+
+    // 【UI增强】缓存可视化状态
+    bool showCacheInfo = true;          // 是否显示缓存信息
+    float lastStatsUpdateTime = 0.0f;   // 上次更新统计的时间
+    float statsUpdateInterval = 1.0f;   // 统计更新间隔（秒）
 };
 
 static bool initSDL(App& app) {
@@ -313,11 +319,7 @@ static bool loadMesh(App& app) {
         return false;
     }
 
-    // Get internal animation count
-    size_t internalAnimCount = app.animator->getAnimationCount();
-
     std::cout << "Mesh loaded successfully" << std::endl;
-    std::cout << "Internal animations in mesh: " << internalAnimCount << std::endl;
 
     return true;
 }
@@ -381,6 +383,9 @@ static bool runtimeLoadAnimation(App& app) {
     app.animationNames = app.animator->getAnimationsInSource(app.currentSourceId.c_str());
 
     app.loadUnloadCycleCount++;
+
+    // 重置缓存统计，以便获得新会话的准确数据
+    app.animator->resetCacheStats();
 
     std::cout << "[SUCCESS] External animation loaded!" << std::endl;
     std::cout << "  Source ID: " << app.currentSourceId << std::endl;
@@ -465,6 +470,21 @@ static void runLeakTest(App& app) {
     std::cout << "Cycles: " << CYCLES << std::endl;
     std::cout << "This will load/unload animation " << CYCLES << " times." << std::endl;
 
+    // 检查必要的组件
+    if (!app.animator) {
+        std::cerr << "[ERROR] Animator not available!" << std::endl;
+        return;
+    }
+
+    if (!app.assetLoader) {
+        std::cerr << "[ERROR] AssetLoader not available!" << std::endl;
+        return;
+    }
+
+    // 重置缓存统计，以便获得准确的测试结果
+    app.animator->resetCacheStats();
+    std::cout << "Cache statistics reset for test." << std::endl;
+
     auto startTime = std::chrono::steady_clock::now();
 
     for (int i = 0; i < CYCLES; i++) {
@@ -496,8 +516,15 @@ static void runLeakTest(App& app) {
         // 【步骤 4】模拟使用动画（验证缓存功能正常）
         auto animNames = app.animator->getAnimationsInSource(testSourceId.c_str());
         if (!animNames.empty()) {
-            app.animator->applyAnimationByName(animNames[0].c_str(), 0.5f);
-            app.animator->updateBoneMatrices();
+            bool applied = app.animator->applyAnimationByName(animNames[0].c_str(), 0.5f);
+            if (applied) {
+                app.animator->updateBoneMatrices();
+            } else {
+                std::cerr << "Cycle " << i << ": Apply animation failed!" << std::endl;
+                // 继续测试，不中断
+            }
+        } else {
+            std::cerr << "Cycle " << i << ": No animations found in source!" << std::endl;
         }
 
         // 【步骤 5】从缓存中卸载（清除缓存条目）
@@ -519,6 +546,50 @@ static void runLeakTest(App& app) {
     std::cout << "Total time: " << duration.count() << " ms" << std::endl;
     std::cout << "Average per cycle: " << (duration.count() / (double)CYCLES) << " ms" << std::endl;
     std::cout << "\nUse Instruments (macOS) or Valgrind (Linux) to verify no memory leaks." << std::endl;
+}
+
+/**
+ * 显示缓存状态信息
+ */
+static void printCacheInfo(App& app) {
+    if (!app.animator || !app.showCacheInfo) return;
+
+    // 获取缓存统计
+    auto stats = app.animator->getAnimationCacheStats();
+
+    // 获取已加载的源列表
+    auto sources = app.animator->getLoadedSources();
+
+    std::cout << "\n========== Animation Cache Status ==========" << std::endl;
+    std::cout << "Loaded Sources: " << stats.sourceCount << std::endl;
+    for (const auto& source : sources) {
+        std::cout << "  - " << source << std::endl;
+        auto anims = app.animator->getAnimationsInSource(source.c_str());
+        std::cout << "    Animations (" << anims.size() << "): ";
+        for (size_t i = 0; i < anims.size(); ++i) {
+            std::cout << anims[i];
+            if (i < anims.size() - 1) std::cout << ", ";
+        }
+        std::cout << std::endl;
+    }
+
+    std::cout << "\nCache Statistics:" << std::endl;
+    std::cout << "  Cached Animations: " << stats.cachedCount << " / " << stats.maxSize << std::endl;
+    std::cout << "  Cache Hit Count:   " << stats.hitCount << std::endl;
+    std::cout << "  Cache Miss Count:  " << stats.missCount << std::endl;
+    std::cout << "  Hit Rate:          " << std::fixed << std::setprecision(1)
+              << stats.hitRate << "%" << std::endl;
+
+    if (stats.cachedCount > 0) {
+        std::cout << "\nCache Usage: [";
+        int filled = (int)((stats.cachedCount * 20) / stats.maxSize);
+        for (int i = 0; i < 20; ++i) {
+            std::cout << (i < filled ? "=" : " ");
+        }
+        std::cout << "] " << (int)((stats.cachedCount * 100) / stats.maxSize) << "%" << std::endl;
+    }
+
+    std::cout << "============================================\n" << std::endl;
 }
 
 static void updateAnimation(App& app, double deltaTime) {
@@ -638,12 +709,22 @@ int main(int argc, char* argv[]) {
 
     // Print controls
     std::cout << "\n=== Controls ===" << std::endl;
-    std::cout << "  R: Load external animation (Runtime Load)" << std::endl;
-    std::cout << "  U: Unload external animation (Runtime Unload)" << std::endl;
-    std::cout << "  1/2/3: Switch animation (when available)" << std::endl;
-    std::cout << "  T: Run memory leak test (100 cycles)" << std::endl;
-    std::cout << "  Space: Play/Pause animation" << std::endl;
-    std::cout << "  ESC/Q: Quit" << std::endl;
+    std::cout << "Animation Management:" << std::endl;
+    std::cout << "  R       : Load external animation (Runtime Load)" << std::endl;
+    std::cout << "  U       : Unload external animation (Runtime Unload)" << std::endl;
+    std::cout << "  1/2/3   : Switch animation (when available)" << std::endl;
+    std::cout << "  Space   : Play/Pause animation" << std::endl;
+    std::cout << "\nCache Management:" << std::endl;
+    std::cout << "  S       : Show cache status and statistics" << std::endl;
+    std::cout << "  C       : Clear animation cache" << std::endl;
+    std::cout << "  +/=     : Increase cache size (+10)" << std::endl;
+    std::cout << "  -       : Decrease cache size (-10)" << std::endl;
+    std::cout << "  I       : Toggle cache info display" << std::endl;
+    std::cout << "\nTesting:" << std::endl;
+    std::cout << "  T       : Reset to T-Pose" << std::endl;
+    std::cout << "  L       : Run memory leak test (100 load/unload cycles)" << std::endl;
+    std::cout << "\nGeneral:" << std::endl;
+    std::cout << "  ESC/Q   : Quit" << std::endl;
     std::cout << "\nPress keys to interact...\n" << std::endl;
 
     // Main loop
@@ -688,9 +769,84 @@ int main(int argc, char* argv[]) {
                         runtimeUnloadAnimation(app);
                         break;
 
-                    // Memory Leak Test (T key)
+                    // Reset to T-Pose (T key)
                     case SDLK_t:
-                        runLeakTest(app);
+                        if (app.animator) {
+                            std::cout << "\nResetting to T-Pose..." << std::endl;
+                            app.animator->resetBoneMatrices();
+                            app.animPlaying = false;
+                            std::cout << "Reset complete. Animation paused." << std::endl;
+                            std::cout << "Press Space to resume playback." << std::endl;
+                        }
+                        break;
+
+                    // Memory Leak Test (L key)
+                    case SDLK_l:
+                        if (!app.animator) {
+                            std::cout << "\n[ERROR] Animator not initialized!" << std::endl;
+                        } else if (app.cachedAnimBytes.empty()) {
+                            std::cout << "\n[ERROR] No animation data cached! Cannot run leak test." << std::endl;
+                            std::cout << "The test needs animation data from the initial model load." << std::endl;
+                        } else {
+                            runLeakTest(app);
+                        }
+                        break;
+
+                    // Show Cache Info (S key)
+                    case SDLK_s:
+                        printCacheInfo(app);
+                        break;
+
+                    // Clear Cache (C key)
+                    case SDLK_c:
+                        if (app.animator) {
+                            std::cout << "\nClearing animation cache..." << std::endl;
+                            app.animator->clearAnimationCache();
+                            app.animator->resetCacheStats();  // 重置统计数据
+                            app.animationNames.clear();
+                            app.currentAnimIndex = 0;
+                            app.currentSourceId.clear();
+                            std::cout << "Cache cleared! Statistics reset." << std::endl;
+                            printCacheInfo(app);
+                        }
+                        break;
+
+                    // Increase Cache Size (+ key)
+                    case SDLK_EQUALS:  // '+' key (Shift + '=')
+                    case SDLK_KP_PLUS:
+                        if (app.animator) {
+                            size_t currentSize = app.animator->getAnimationCacheSize();
+                            size_t newSize = currentSize + 10;
+                            app.animator->setAnimationCacheSize(newSize);
+                            std::cout << "\nCache size increased: " << currentSize << " → " << newSize << std::endl;
+                            printCacheInfo(app);
+                        }
+                        break;
+
+                    // Decrease Cache Size (- key)
+                    case SDLK_MINUS:
+                    case SDLK_KP_MINUS:
+                        if (app.animator) {
+                            size_t currentSize = app.animator->getAnimationCacheSize();
+                            if (currentSize > 10) {
+                                size_t newSize = currentSize - 10;
+                                app.animator->setAnimationCacheSize(newSize);
+                                std::cout << "\nCache size decreased: " << currentSize << " → " << newSize
+                                          << " (LRU eviction triggered if needed)" << std::endl;
+                                printCacheInfo(app);
+                            } else {
+                                std::cout << "\nCache size too small! Minimum is 10." << std::endl;
+                            }
+                        }
+                        break;
+
+                    // Toggle Info Display (I key)
+                    case SDLK_i:
+                        app.showCacheInfo = !app.showCacheInfo;
+                        std::cout << "\nCache info display: " << (app.showCacheInfo ? "ON" : "OFF") << std::endl;
+                        if (app.showCacheInfo) {
+                            printCacheInfo(app);
+                        }
                         break;
 
                     case SDLK_1:

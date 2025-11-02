@@ -17,30 +17,32 @@
 /*
  * Sample 3: multi_character_animation.cpp
  *
- * 【验证目标】多实例共享缓存动画的内存效率与并发安全性
+ * 【验证目标】多实例共享网格和动画的内存效率与并发安全性
  *
  * 演示场景：
- * 1. 创建 5 个角色实例（5 个 FilamentAsset，每个 82MB 网格数据）
- * 2. 加载 1 个共享动画资产（1 个 AnimationAsset，679KB 动画数据）
- * 3. 将共享动画绑定到所有 5 个 Animator（使用相同的源 ID）
- * 4. 支持两种播放模式：独立播放和同步播放
+ * 1. 创建 1 个 FilamentAsset（82MB 网格数据，只加载一次）
+ * 2. 使用 createInstance() 创建 5 个 FilamentInstance（共享网格数据）
+ * 3. 加载 1 个共享动画资产（1 个 AnimationAsset，679KB 动画数据）
+ * 4. 将共享动画绑定到所有 5 个 Animator（使用相同的源 ID）
+ * 5. 支持两种播放模式：独立播放和同步播放
  *
  * 【核心验证点】
- * - 【内存效率】验证动画数据只存储一份，节约内存（传统方式需要 679KB × 5 = 3.4MB）
- * - 【独立状态】验证每个 Animator 维护独立的播放状态（时间、索引）
+ * - 【网格共享】验证 5 个实例共享同一份网格数据（82MB 只加载一次）
+ * - 【动画共享】验证动画数据只存储一份（679KB 只加载一次）
+ * - 【独立状态】验证每个 Instance 有独立的变换和动画播放状态
  * - 【并发安全】验证多个 Animator 并发访问同一缓存的安全性
- * - 【资源管理】验证共享资源的正确清理顺序（先解绑所有 Animator，再销毁一次 AnimationAsset）
+ * - 【资源管理】验证共享资源的正确清理顺序
  *
- * 【gltfio_ext 关键特性】基于缓存的动画共享系统
+ * 【gltfio_ext 关键特性】基于缓存的动画共享系统 + FilamentInstance
+ * - 使用 AssetLoader::createInstance() 创建多个实例共享网格
  * - AnimationAsset 可以被多个 Animator 共享（通过相同的源 ID）
  * - 每个 Animator 调用 loadAnimationsFromSource() 时传入相同的源 ID
  * - 播放时每个 Animator 独立调用 applyAnimationByName()，但读取的是共享缓存
- * - 清理时必须先对所有 Animator 调用 unloadAnimationsFromSource()，然后 AnimationAsset 自动销毁
  *
  * 【内存对比】
- * - 传统方式（不共享）：5 × (82MB mesh + 679KB anim) = 413MB
- * - gltfio_ext 方式（共享）：5 × 82MB mesh + 1 × 679KB anim = 410.7MB
- * - 节省：~3.4MB 动画数据（在更多角色或更大动画时节省更明显）
+ * - 错误方式（重复加载 Asset）：5 × (82MB mesh + 679KB anim) = 413MB
+ * - 正确方式（Instance + 动画共享）：1 × 82MB mesh + 1 × 679KB anim = 82.7MB
+ * - 节省：~330MB！（5 倍网格数据的节省）
  */
 
 #include "common/AnimationUtils.h"
@@ -134,11 +136,13 @@ struct App {
     gltfio_ext::TextureProvider* stbProvider = nullptr;
     gltfio_ext::TextureProvider* ktx2Provider = nullptr;
 
-    // 【多角色资产】
-    // meshAssets: 存储 5 个 FilamentAsset，每个代表一个角色的网格和骨骼数据
-    // animators: 存储 5 个 Animator，每个从对应的 FilamentAsset 获取
-    // 关键：每个角色有独立的 FilamentAsset 和 Animator，但共享同一个动画缓存源
-    std::vector<gltfio_ext::FilamentAsset*> meshAssets;
+    // 【多实例资产】正确的实现方式
+    // baseAsset: 1 个 FilamentAsset（82MB 网格数据，只加载一次）
+    // instances: 5 个 FilamentInstance（共享同一网格，但有独立的变换和动画状态）
+    // animators: 5 个 Animator，每个从对应的 FilamentInstance 获取
+    // 关键：网格数据只加载一次，通过 Instance 机制实现多角色共享
+    gltfio_ext::FilamentAsset* baseAsset = nullptr;
+    std::vector<gltfio_ext::FilamentInstance*> instances;
     std::vector<gltfio_ext::Animator*> animators;
 
     // 【gltfio_ext 核心特性】共享的外部动画资产
@@ -307,76 +311,82 @@ static bool loadMultipleCharacters(App& app) {
     app.resourceLoader->addTextureProvider("image/jpeg", app.stbProvider);
     app.resourceLoader->addTextureProvider("image/ktx2", app.ktx2Provider);
 
-    // Create multiple character instances
+    // Create base FilamentAsset (只创建一次)
+    std::cout << "Creating base FilamentAsset..." << std::endl;
+    app.baseAsset = app.assetLoader->createAsset(meshBytes.data(), meshBytes.size());
+    if (!app.baseAsset) {
+        std::cerr << "Failed to create base FilamentAsset" << std::endl;
+        return false;
+    }
+
+    // 【关键修复】先创建所有实例，再加载资源
+    // 这样 loadResources() 会为所有已存在的实例创建 Animator
     auto& tcm = app.engine->getTransformManager();
 
+    std::cout << "Creating " << NUM_CHARACTERS << " instances..." << std::endl;
     for (int i = 0; i < NUM_CHARACTERS; i++) {
-        std::cout << "Creating character " << (i + 1) << "/" << NUM_CHARACTERS << "..." << std::endl;
+        std::cout << "Creating instance " << (i + 1) << "/" << NUM_CHARACTERS << "..." << std::endl;
 
-        // Create mesh asset (each character gets its own FilamentAsset)
-        gltfio_ext::FilamentAsset* meshAsset = app.assetLoader->createAsset(
-            meshBytes.data(),
-            meshBytes.size()
-        );
-
-        if (!meshAsset) {
-            std::cerr << "Failed to create mesh asset for character " << i << std::endl;
+        // 【关键 API】createInstance() - 创建共享网格的实例
+        // 这不会重新加载网格数据，只创建新的 Entity 和变换组件
+        gltfio_ext::FilamentInstance* instance = app.assetLoader->createInstance(app.baseAsset);
+        if (!instance) {
+            std::cerr << "Failed to create instance " << i << std::endl;
             return false;
         }
 
-        // Load resources
-        if (!app.resourceLoader->loadResources(meshAsset)) {
-            if (!app.resourceLoader->asyncBeginLoad(meshAsset)) {
-                std::cerr << "Failed to load resources for character " << i << std::endl;
-                return false;
-            }
-
-            while (app.resourceLoader->asyncGetLoadProgress() < 1.0f) {
-                if (!UTILS_HAS_THREADING) {
-                    app.engine->execute();
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            }
-        }
-
-        meshAsset->releaseSourceData();
-
-        // Add to scene
-        app.scene->addEntities(meshAsset->getEntities(), meshAsset->getEntityCount());
+        // Add instance entities to scene
+        app.scene->addEntities(instance->getEntities(), instance->getEntityCount());
 
         // Position character in a line (centered)
         float offsetX = (i - NUM_CHARACTERS / 2.0f) * CHARACTER_SPACING;
 
-        auto rootEntity = meshAsset->getRoot();
-        auto instance = tcm.getInstance(rootEntity);
-        if (instance) {
+        auto rootEntity = instance->getRoot();
+        auto tcmInstance = tcm.getInstance(rootEntity);
+        if (tcmInstance) {
             mat4f transform = mat4f::translation(float3(offsetX, 0, 0));
-            tcm.setTransform(instance, transform);
+            tcm.setTransform(tcmInstance, transform);
         }
 
         std::cout << "  Position: (" << offsetX << ", 0, 0)" << std::endl;
 
-        // Get Animator
-        gltfio_ext::Animator* animator = nullptr;
-        if (auto* filamentInstance = meshAsset->getInstance()) {
-            animator = filamentInstance->getAnimator();
-        }
+        // Store instance (will get animator after resources are loaded)
+        app.instances.push_back(instance);
+    }
 
-        if (!animator) {
-            std::cerr << "Failed to get Animator for character " << i << std::endl;
+    // Load resources for base asset (this will create Animators for ALL instances)
+    std::cout << "Loading resources for all instances..." << std::endl;
+    if (!app.resourceLoader->loadResources(app.baseAsset)) {
+        if (!app.resourceLoader->asyncBeginLoad(app.baseAsset)) {
+            std::cerr << "Failed to load resources for base asset" << std::endl;
             return false;
         }
 
-        // Store assets and animators
-        app.meshAssets.push_back(meshAsset);
-        app.animators.push_back(animator);
+        while (app.resourceLoader->asyncGetLoadProgress() < 1.0f) {
+            if (!UTILS_HAS_THREADING) {
+                app.engine->execute();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
     }
 
-    // Get internal animation count from first animator
-    size_t internalAnimCount = app.animators[0]->getAnimationCount();
+    // Now get Animators from all instances (they were created during loadResources)
+    std::cout << "Getting Animators from instances..." << std::endl;
+    for (size_t i = 0; i < app.instances.size(); i++) {
+        gltfio_ext::Animator* animator = app.instances[i]->getAnimator();
+        if (!animator) {
+            std::cerr << "Failed to get Animator for instance " << i << std::endl;
+            return false;
+        }
+        app.animators.push_back(animator);
+        std::cout << "  Instance " << i << " animator: " << animator << std::endl;
+    }
 
-    std::cout << "Successfully created " << NUM_CHARACTERS << " characters" << std::endl;
-    std::cout << "Internal animations per character: " << internalAnimCount << std::endl;
+    // 所有实例创建完成后，释放源数据以节省内存
+    app.baseAsset->releaseSourceData();
+    std::cout << "Base FilamentAsset created (82MB mesh data loaded once)" << std::endl;
+    std::cout << "Successfully created " << NUM_CHARACTERS << " instances" << std::endl;
+    std::cout << "Memory efficiency: 1 × 82MB mesh + " << NUM_CHARACTERS << " × instance data" << std::endl;
 
     return true;
 }
@@ -647,15 +657,24 @@ static void cleanup(App& app) {
         // 【步骤 2：共享资源自动销毁】AnimationAsset 使用 unique_ptr 自动管理
         // sharedAnimAsset 会在离开作用域时自动销毁，无需手动调用 destroyAnimationAsset()
 
-        // 【步骤 3：销毁各自的资源】销毁每个 FilamentAsset
-        // 每个角色有独立的 FilamentAsset，需要分别销毁
-        for (auto* meshAsset : app.meshAssets) {
-            if (meshAsset) {
-                app.scene->removeEntities(meshAsset->getEntities(), meshAsset->getEntityCount());
-                app.assetLoader->destroyAsset(meshAsset);
+        // 【步骤 3：销毁实例】先移除并清理所有 FilamentInstance
+        // 注意：Instance 必须在 BaseAsset 之前销毁
+        std::cout << "Cleaning up: Removing instances..." << std::endl;
+        for (auto* instance : app.instances) {
+            if (instance) {
+                app.scene->removeEntities(instance->getEntities(), instance->getEntityCount());
+                // Note: Instance 的销毁由 AssetLoader 管理，不需要手动调用 destroy
             }
         }
-        app.meshAssets.clear();
+        app.instances.clear();
+
+        // 【步骤 4：销毁基础资产】最后销毁共享的 FilamentAsset
+        // 这会释放 82MB 的网格数据
+        if (app.baseAsset) {
+            std::cout << "Cleaning up: Destroying base asset..." << std::endl;
+            app.assetLoader->destroyAsset(app.baseAsset);
+            app.baseAsset = nullptr;
+        }
 
         // 【关键修复】ResourceLoader 必须在 AssetLoader 之前删除
         // 原因：ResourceLoader 可能持有对 TextureProvider 的引用

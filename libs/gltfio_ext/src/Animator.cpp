@@ -429,12 +429,6 @@ Animator::Animator(FFilamentAsset const* asset, FFilamentInstance* instance) {
     mImpl->mInternalAnimCount = mImpl->animations.size();
 }
 
-void Animator::applyCrossFade(size_t previousAnimIndex, float previousAnimTime, float alpha) {
-    mImpl->stashCrossFade();
-    applyAnimation(previousAnimIndex, previousAnimTime);
-    mImpl->applyCrossFade(alpha);
-}
-
 void Animator::addInstance(FFilamentInstance* instance) {
     const cgltf_data* srcAsset = mImpl->asset->mSourceAsset->hierarchy;
     const cgltf_animation* srcAnims = srcAsset->animations;
@@ -447,65 +441,6 @@ void Animator::addInstance(FFilamentInstance* instance) {
 
 Animator::~Animator() {
     delete mImpl;
-}
-
-size_t Animator::getAnimationCount() const {
-    return mImpl->animations.size();
-}
-
-void Animator::applyAnimation(size_t animationIndex, float time) const {
-    if (animationIndex >= mImpl->animations.size()) {
-        slog.e << "Invalid animation index: " << animationIndex << io::endl;
-        return;
-    }
-
-    const Animation* anim = &mImpl->animations[animationIndex];
-    time = time == anim->duration ? time : fmod(time, anim->duration);
-
-    TransformManager& transformManager = *mImpl->transformManager;
-    transformManager.openLocalTransformTransaction();
-
-    for (const auto& channel : anim->channels) {
-        const Sampler* sampler = channel.sourceData;
-        if (sampler->times.size() < 2) {
-            continue;
-        }
-
-        const TimeValues& times = sampler->times;
-
-        // Find the first keyframe after the given time, or the keyframe that matches it exactly.
-        TimeValues::const_iterator iter = times.lower_bound(time);
-
-        // Compute the interpolant (between 0 and 1) and determine the keyframe pair.
-        float t = 0.0f;
-        size_t nextIndex;
-        size_t prevIndex;
-        if (iter == times.end()) {
-            nextIndex = times.size() - 1;
-            prevIndex = nextIndex;
-        } else if (iter == times.begin()) {
-            nextIndex = 0;
-            prevIndex = 0;
-        } else {
-            TimeValues::const_iterator prev = iter; --prev;
-            nextIndex = iter->second;
-            prevIndex = prev->second;
-            const float nextTime = iter->first;
-            const float prevTime = prev->first;
-            float deltaTime = nextTime - prevTime;
-            assert(deltaTime >= 0);
-            if (deltaTime > 0) {
-                t = (time - prevTime) / deltaTime;
-            }
-        }
-
-        if (sampler->interpolation == Sampler::STEP) {
-            t = 0.0f;
-        }
-
-        mImpl->applyAnimation(channel, t, prevIndex, nextIndex);
-    }
-    transformManager.commitLocalTransformTransaction();
 }
 
 void Animator::resetBoneMatrices() {
@@ -521,6 +456,24 @@ void Animator::resetBoneMatrices() {
     }
 }
 
+bool Animator::applyCrossFade(const char* prevSourceId, const char* prevAnimName, float prevTime, float alpha) {
+    mImpl->stashCrossFade();
+    if (!applyAnimation(prevSourceId, prevAnimName, prevTime)) {
+        return false;
+    }
+    mImpl->applyCrossFade(alpha);
+    return true;
+}
+
+bool Animator::applyCrossFadeByName(const char* prevAnimName, float prevTime, float alpha) {
+    mImpl->stashCrossFade();
+    if (!applyAnimationByName(prevAnimName, prevTime)) {
+        return false;
+    }
+    mImpl->applyCrossFade(alpha);
+    return true;
+}
+
 void Animator::updateBoneMatrices() {
     // If this is a single-instance animator, then update only this instance.
     if (mImpl->instance) {
@@ -532,22 +485,6 @@ void Animator::updateBoneMatrices() {
     for (FFilamentInstance* instance : mImpl->asset->mInstances) {
         mImpl->updateBoneMatrices(instance);
     }
-}
-
-float Animator::getAnimationDuration(size_t animationIndex) const {
-    if (animationIndex >= mImpl->animations.size()) {
-        slog.e << "Invalid animation index: " << animationIndex << io::endl;
-        return 0.0f;
-    }
-    return mImpl->animations[animationIndex].duration;
-}
-
-const char* Animator::getAnimationName(size_t animationIndex) const {
-    if (animationIndex >= mImpl->animations.size()) {
-        slog.e << "Invalid animation index: " << animationIndex << io::endl;
-        return "";
-    }
-    return mImpl->animations[animationIndex].name.c_str();
 }
 
 // ========================================
@@ -1441,11 +1378,13 @@ size_t AnimatorImpl::loadAnimationsFromSource(const std::string& sourceId, Anima
     // ========================================
     // 4. 构建 AnimationBinding（骨架映射）
     // ========================================
-    auto binding = std::make_unique<AnimationBinding>(
-        asset,
-        this->asset,
-        this->asset->mEngine
-    );
+    // Use factory methods: createForInstance() or createForAsset()
+    // - If this Animator belongs to a FilamentInstance, use createForInstance()
+    //   (instance provides entities, owner asset provides names)
+    // - Otherwise use createForAsset() (asset provides both entities and names)
+    auto binding = this->instance
+        ? AnimationBinding::createForInstance(asset, this->instance, this->asset->mEngine)
+        : AnimationBinding::createForAsset(asset, this->asset, this->asset->mEngine);
 
     if (!binding->buildMapping()) {
         slog.e << "Failed to build mapping for source '" << sourceId
@@ -1461,6 +1400,20 @@ size_t AnimatorImpl::loadAnimationsFromSource(const std::string& sourceId, Anima
     // 5. 转换并缓存所有动画
     // ========================================
     const auto& nodeToEntityMap = binding->getNodeToEntityMap();
+
+    // DEBUG: Log animator and entity mapping info
+    slog.i << "DEBUG [Animator " << (void*)this << "]: "
+           << "instance=" << (void*)this->instance
+           << ", asset=" << (void*)this->asset << io::endl;
+
+    // Log first few entity mappings to verify they're different per animator
+    int logCount = 0;
+    for (const auto& pair : nodeToEntityMap) {
+        slog.i << "DEBUG [Animator " << (void*)this << "]: "
+               << "Node " << pair.first << " → Entity " << pair.second.getId() << io::endl;
+        if (++logCount >= 5) break;
+    }
+
     size_t loadedCount = 0;
 
     for (size_t i = 0; i < animCount; i++) {
@@ -1641,7 +1594,14 @@ bool AnimatorImpl::applyAnimationByName(const std::string& animName, float time)
             TransformManager& tm = *this->transformManager;
             tm.openLocalTransformTransaction();
 
+            // DEBUG: Log first few channel operations
+            int debugChannelCount = 0;
             for (const auto& channel : anim.channels) {
+                if (debugChannelCount < 3) {
+                    slog.i << "DEBUG [Animator " << (void*)this << ", anim=" << animName << "]: "
+                           << "Applying to Entity " << channel.targetEntity.getId() << io::endl;
+                    debugChannelCount++;
+                }
                 const Sampler* sampler = channel.sourceData;
                 if (sampler->times.size() < 2) {
                     continue;

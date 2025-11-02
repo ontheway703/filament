@@ -108,8 +108,11 @@ endfunction()
 # Sample 1: External Animation - Basic workflow
 add_animation_sample(external_animation)
 
-# Sample 2: animation_hotreload - Runtime management
+# Sample 2: Animation Hot Reload - Runtime management
 add_animation_sample(animation_hotreload)
 
-# Sample 3: multi_character_animation - Multi-instance sharing
+# Sample 3: Multi-Character Animation - Multi-instance sharing
 add_animation_sample(multi_character_animation)
+
+# Sample 4: Animation Blending - Cross-fade transitions
+add_animation_sample(animation_blending)

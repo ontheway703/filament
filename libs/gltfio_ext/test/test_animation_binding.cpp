@@ -171,16 +171,16 @@ TEST_F(AnimationBindingTest, BuildMappingSuccess) {
                << "NameComponentManager is required for AnimationBinding to work.";
     }
 
-    // 创建 AnimationBinding
-    AnimationBinding binding(animAsset.get(), meshAsset, mEngine);
+    // 创建 AnimationBinding（使用工厂方法）
+    auto binding = AnimationBinding::createForAsset(animAsset.get(), meshAsset, mEngine);
 
     // 构建映射
-    bool success = binding.buildMapping();
+    bool success = binding->buildMapping();
 
     // 验证结果
     EXPECT_TRUE(success) << "Bone mapping should succeed";
-    EXPECT_GT(binding.getNodeToEntityMap().size(), 0) << "Should have mapped nodes";
-    EXPECT_EQ(binding.getNodeToEntityMap().size(), binding.getNodeToInstanceMap().size())
+    EXPECT_GT(binding->getNodeToEntityMap().size(), 0) << "Should have mapped nodes";
+    EXPECT_EQ(binding->getNodeToEntityMap().size(), binding->getNodeToInstanceMap().size())
         << "Entity map and Instance map should have same size";
 
     // 清理
@@ -214,14 +214,14 @@ TEST_F(AnimationBindingTest, TransformInstanceValid) {
                << "Please verify the test files are valid glTF 2.0 files.";
     }
 
-    // 创建 AnimationBinding
-    AnimationBinding binding(animAsset.get(), meshAsset, mEngine);
-    bool success = binding.buildMapping();
+    // 创建 AnimationBinding（使用工厂方法）
+    auto binding = AnimationBinding::createForAsset(animAsset.get(), meshAsset, mEngine);
+    bool success = binding->buildMapping();
 
     ASSERT_TRUE(success);
 
     // 验证所有 TransformManager::Instance 有效
-    auto& entityMap = binding.getNodeToEntityMap();
+    auto& entityMap = binding->getNodeToEntityMap();
     auto& tm = mEngine->getTransformManager();
 
     EXPECT_GT(entityMap.size(), 0) << "Should have transform instances";
@@ -232,7 +232,7 @@ TEST_F(AnimationBindingTest, TransformInstanceValid) {
     }
 
     // 验证映射有效性
-    EXPECT_TRUE(binding.validateMapping()) << "Mapping validation should pass";
+    EXPECT_TRUE(binding->validateMapping()) << "Mapping validation should pass";
 
     // 清理
     mLoader->destroyAsset(meshAsset);
@@ -256,18 +256,18 @@ TEST_F(AnimationBindingTest, GetMatchRate) {
     ASSERT_NE(meshAsset, nullptr);
     ASSERT_NE(animAsset, nullptr);
 
-    // 创建 AnimationBinding
-    AnimationBinding binding(animAsset.get(), meshAsset, mEngine);
+    // 创建 AnimationBinding（使用工厂方法）
+    auto binding = AnimationBinding::createForAsset(animAsset.get(), meshAsset, mEngine);
 
     // 映射前匹配率应为 0
-    EXPECT_FLOAT_EQ(binding.getMatchRate(), 0.0f);
+    EXPECT_FLOAT_EQ(binding->getMatchRate(), 0.0f);
 
     // 构建映射
-    bool success = binding.buildMapping();
+    bool success = binding->buildMapping();
     ASSERT_TRUE(success);
 
     // 映射后匹配率应大于阈值 (90%)
-    float matchRate = binding.getMatchRate();
+    float matchRate = binding->getMatchRate();
     EXPECT_GE(matchRate, 0.9f) << "Match rate should be >= 90%";
     EXPECT_LE(matchRate, 1.0f) << "Match rate should be <= 100%";
 
@@ -293,17 +293,17 @@ TEST_F(AnimationBindingTest, GetUnmatchedBones) {
     ASSERT_NE(meshAsset, nullptr);
     ASSERT_NE(animAsset, nullptr);
 
-    // 创建 AnimationBinding
-    AnimationBinding binding(animAsset.get(), meshAsset, mEngine);
-    bool success = binding.buildMapping();
+    // 创建 AnimationBinding（使用工厂方法）
+    auto binding = AnimationBinding::createForAsset(animAsset.get(), meshAsset, mEngine);
+    bool success = binding->buildMapping();
 
     ASSERT_TRUE(success);
 
     // 获取未匹配骨骼列表
-    const auto& unmatchedBones = binding.getUnmatchedBones();
+    const auto& unmatchedBones = binding->getUnmatchedBones();
 
     // 如果匹配率为 100%，则未匹配列表应为空
-    if (binding.getMatchRate() >= 1.0f) {
+    if (binding->getMatchRate() >= 1.0f) {
         EXPECT_EQ(unmatchedBones.size(), 0) << "Should have no unmatched bones";
     } else {
         // 否则应该有一些未匹配的骨骼
@@ -311,7 +311,7 @@ TEST_F(AnimationBindingTest, GetUnmatchedBones) {
 
         // 验证未匹配骨骼数量与匹配率一致
         size_t totalNodes = animAsset->nodes.size();
-        size_t matchedNodes = binding.getNodeToEntityMap().size();
+        size_t matchedNodes = binding->getNodeToEntityMap().size();
         size_t expectedUnmatched = totalNodes - matchedNodes;
 
         EXPECT_EQ(unmatchedBones.size(), expectedUnmatched)
@@ -326,12 +326,12 @@ TEST_F(AnimationBindingTest, GetUnmatchedBones) {
  * Test 5: 验证空输入处理
  */
 TEST_F(AnimationBindingTest, HandleNullInputs) {
-    // 测试空指针输入
-    AnimationBinding binding1(nullptr, nullptr, mEngine);
-    EXPECT_FALSE(binding1.buildMapping()) << "Should fail with null animation asset";
+    // 测试空指针输入（使用工厂方法）
+    auto binding1 = AnimationBinding::createForAsset(nullptr, nullptr, mEngine);
+    EXPECT_FALSE(binding1->buildMapping()) << "Should fail with null animation asset";
 
-    AnimationBinding binding2(nullptr, nullptr, nullptr);
-    EXPECT_FALSE(binding2.buildMapping()) << "Should fail with null engine";
+    auto binding2 = AnimationBinding::createForAsset(nullptr, nullptr, nullptr);
+    EXPECT_FALSE(binding2->buildMapping()) << "Should fail with null engine";
 }
 
 /**
@@ -352,15 +352,15 @@ TEST_F(AnimationBindingTest, MappingConsistency) {
     ASSERT_NE(meshAsset, nullptr);
     ASSERT_NE(animAsset, nullptr);
 
-    // 创建 AnimationBinding 并构建映射
-    AnimationBinding binding(animAsset.get(), meshAsset, mEngine);
-    bool success = binding.buildMapping();
+    // 创建 AnimationBinding 并构建映射（使用工厂方法）
+    auto binding = AnimationBinding::createForAsset(animAsset.get(), meshAsset, mEngine);
+    bool success = binding->buildMapping();
 
     ASSERT_TRUE(success);
 
     // 验证 entity map 和 instance map 的一致性
-    const auto& entityMap = binding.getNodeToEntityMap();
-    const auto& instanceMap = binding.getNodeToInstanceMap();
+    const auto& entityMap = binding->getNodeToEntityMap();
+    const auto& instanceMap = binding->getNodeToInstanceMap();
 
     EXPECT_EQ(entityMap.size(), instanceMap.size())
         << "Entity map and instance map should have same size";

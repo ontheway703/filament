@@ -63,6 +63,7 @@
 #include <utils/NameComponentManager.h>
 
 #include <iostream>
+#include <iomanip>
 #include <chrono>
 #include <thread>
 #include <vector>
@@ -120,6 +121,11 @@ struct App {
     int currentAnimIndex = 0;                 // 当前播放的动画在列表中的索引
     float animTime = 0.0f;                    // 当前动画时间
     bool animPlaying = true;                  // 是否正在播放
+
+    // 【UI增强】信息面板状态
+    bool showInfoPanel = true;                // 是否显示信息面板
+    float lastInfoUpdateTime = 0.0f;          // 上次更新信息的时间
+    float infoUpdateInterval = 0.5f;          // 信息更新间隔（秒）
 };
 
 // 初始化 SDL 窗口系统
@@ -335,10 +341,6 @@ static bool loadExternalAnimation(App& app) {
         return false;
     }
 
-    // 获取网格内部的动画数量（现在只返回内部动画）
-    size_t internalAnimCount = app.animator->getAnimationCount();
-    std::cout << "Internal animations in mesh: " << internalAnimCount << std::endl;
-
     // 【新 API】loadAnimationsFromSource() - 将外部动画加载到缓存中
     // 参数：sourceId - 唯一标识此动画源的字符串
     //       asset - AnimationAsset 指针
@@ -370,6 +372,57 @@ static bool loadExternalAnimation(App& app) {
 }
 
 // 更新动画（每帧调用）
+/**
+ * 显示动画信息面板
+ */
+static void printInfoPanel(App& app) {
+    if (!app.animator || !app.showInfoPanel || app.animationNames.empty()) return;
+
+    // 获取已加载的源列表
+    auto sources = app.animator->getLoadedSources();
+
+    std::cout << "\n========== Animation Info Panel ==========" << std::endl;
+
+    // 显示源信息
+    std::cout << "Loaded Sources (" << sources.size() << "):" << std::endl;
+    for (const auto& source : sources) {
+        std::cout << "  - " << source << std::endl;
+        auto anims = app.animator->getAnimationsInSource(source.c_str());
+        std::cout << "    Animations: ";
+        for (size_t i = 0; i < anims.size(); ++i) {
+            if (i == (size_t)app.currentAnimIndex && source == ANIM_SOURCE_ID) {
+                std::cout << "[" << anims[i] << "]";  // 高亮当前动画
+            } else {
+                std::cout << anims[i];
+            }
+            if (i < anims.size() - 1) std::cout << ", ";
+        }
+        std::cout << std::endl;
+    }
+
+    // 显示当前动画的详细信息
+    if (app.currentAnimIndex >= 0 && app.currentAnimIndex < (int)app.animationNames.size()) {
+        const std::string& currentAnimName = app.animationNames[app.currentAnimIndex];
+        float duration = app.animator->getAnimationDurationByName(currentAnimName.c_str());
+
+        std::cout << "\nCurrent Animation:" << std::endl;
+        std::cout << "  Name:     " << currentAnimName << std::endl;
+        std::cout << "  Duration: " << std::fixed << std::setprecision(2) << duration << " s" << std::endl;
+        std::cout << "  Time:     " << app.animTime << " / " << duration << " s" << std::endl;
+        std::cout << "  Progress: [";
+
+        // 进度条
+        int progress = duration > 0 ? (int)((app.animTime / duration) * 20) : 0;
+        for (int i = 0; i < 20; ++i) {
+            std::cout << (i < progress ? "=" : " ");
+        }
+        std::cout << "] " << (duration > 0 ? (int)((app.animTime / duration) * 100) : 0) << "%" << std::endl;
+        std::cout << "  Status:   " << (app.animPlaying ? "Playing" : "Paused") << std::endl;
+    }
+
+    std::cout << "===========================================\n" << std::endl;
+}
+
 static void updateAnimation(App& app, double deltaTime) {
     if (!app.animator) return;
 
@@ -486,9 +539,14 @@ int main(int argc, char* argv[]) {
 
     // 打印控制说明
     std::cout << "\n=== Controls ===" << std::endl;
-    std::cout << "  1/2/3: Switch animation" << std::endl;
-    std::cout << "  Space: Play/Pause animation" << std::endl;
-    std::cout << "  ESC/Q: Quit" << std::endl;
+    std::cout << "Animation:" << std::endl;
+    std::cout << "  1/2/3   : Switch animation" << std::endl;
+    std::cout << "  Space   : Play/Pause animation" << std::endl;
+    std::cout << "  T       : Reset to T-Pose" << std::endl;
+    std::cout << "\nInformation:" << std::endl;
+    std::cout << "  I       : Toggle info panel display" << std::endl;
+    std::cout << "\nGeneral:" << std::endl;
+    std::cout << "  ESC/Q   : Quit" << std::endl;
     std::cout << "\nPress keys to interact...\n" << std::endl;
 
     // 主循环
@@ -551,6 +609,26 @@ int main(int argc, char* argv[]) {
                             app.currentAnimIndex = 2;
                             app.animTime = 0.0f;
                             std::cout << "Switched to animation 3: " << app.animationNames[2] << std::endl;
+                        }
+                        break;
+
+                    // Reset to T-Pose (T key)
+                    case SDLK_t:
+                        if (app.animator) {
+                            std::cout << "\nResetting to T-Pose..." << std::endl;
+                            app.animator->resetBoneMatrices();
+                            app.animPlaying = false;
+                            std::cout << "Reset complete. Animation paused." << std::endl;
+                            std::cout << "Press Space to resume playback." << std::endl;
+                        }
+                        break;
+
+                    // Toggle Info Panel (I key)
+                    case SDLK_i:
+                        app.showInfoPanel = !app.showInfoPanel;
+                        std::cout << "\nInfo panel: " << (app.showInfoPanel ? "ON" : "OFF") << std::endl;
+                        if (app.showInfoPanel) {
+                            printInfoPanel(app);
                         }
                         break;
 

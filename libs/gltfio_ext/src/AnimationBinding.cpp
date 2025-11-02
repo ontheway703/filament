@@ -15,6 +15,7 @@
  */
 
 #include <gltfio_ext/AnimationBinding.h>
+#include <gltfio_ext/FilamentInstance.h>
 
 #include <utils/Log.h>
 
@@ -23,7 +24,50 @@ using namespace utils;
 namespace filament::gltfio_ext {
 
 /**
- * 构造函数：初始化骨骼绑定（不立即构建映射）
+ * Static factory method: Create binding for FilamentAsset (simple scenario)
+ *
+ * In this case, the asset provides both entities (via getEntities()) and names
+ * (via getName() through NameComponentManager).
+ */
+std::unique_ptr<AnimationBinding> AnimationBinding::createForAsset(
+    const AnimationAsset* externalAnim,
+    const FilamentAsset* meshAsset,
+    filament::Engine* engine) {
+
+    // Use private constructor with nullptr instance (using asset directly)
+    return std::unique_ptr<AnimationBinding>(new AnimationBinding(
+        externalAnim,
+        nullptr,    // No instance
+        meshAsset,  // The asset provides both entities and names
+        engine
+    ));
+}
+
+/**
+ * Static factory method: Create binding for FilamentInstance (multi-instance scenario)
+ *
+ * In this case, the instance provides entities (via getEntities()), and names come
+ * from the owner asset (via FilamentInstance::getAsset()->getName()).
+ */
+std::unique_ptr<AnimationBinding> AnimationBinding::createForInstance(
+    const AnimationAsset* externalAnim,
+    const FilamentInstance* instance,
+    filament::Engine* engine) {
+
+    // Get owner asset for name lookups
+    const FilamentAsset* ownerAsset = instance->getAsset();
+
+    // Pass the instance directly (no unsafe cast)
+    return std::unique_ptr<AnimationBinding>(new AnimationBinding(
+        externalAnim,
+        instance,    // The instance (provides entities)
+        ownerAsset,  // Owner asset (provides names)
+        engine
+    ));
+}
+
+/**
+ * 私有构造函数：初始化骨骼绑定（不立即构建映射）
  *
  * 设计原则：
  * - 轻量级构造，仅保存输入指针
@@ -32,14 +76,17 @@ namespace filament::gltfio_ext {
  *
  * 注意事项：
  * - 所有输入参数必须在 AnimationBinding 生命周期内保持有效
- * - 如果 externalAnim 或 residentMesh 被销毁，行为未定义（悬空指针）
+ * - 如果任何输入被销毁，行为未定义（悬空指针）
  */
 AnimationBinding::AnimationBinding(
     const AnimationAsset* externalAnim,
-    const FilamentAsset* residentMesh,
+    const FilamentInstance* instance,
+    const FilamentAsset* asset,
     filament::Engine* engine)
     : mExternalAnim(externalAnim)
-    , mResidentMesh(residentMesh)
+    , mInstance(instance)
+    , mAsset(asset)
+    , mNameProvider(asset)  // Name provider is always the asset
     , mEngine(engine) {
     // 注意：构造函数不调用 buildMapping()，由用户显式调用
     // 这样设计的原因：
@@ -74,7 +121,7 @@ bool AnimationBinding::buildMapping() {
     mUnmatchedBones.clear();
 
     // === 第 2 步：参数有效性检查 ===
-    if (!mExternalAnim || !mResidentMesh || !mEngine) {
+    if (!mExternalAnim || !mAsset || !mEngine) {
         slog.e << "AnimationBinding: Invalid input parameters (null pointers)" << io::endl;
         return false;
     }
@@ -95,9 +142,6 @@ bool AnimationBinding::buildMapping() {
         return false;
     }
 
-    slog.i << "AnimationBinding: Resident mesh has " << residentBoneMap.size()
-           << " named entities" << io::endl;
-
     // === 第 4 步：遍历动画节点，按名称匹配到网格实体 ===
     // 注意：跳过空名称节点（辅助节点、变换节点等），它们不参与骨骼匹配
     mEligibleNodeCount = 0;
@@ -108,7 +152,6 @@ bool AnimationBinding::buildMapping() {
 
         // 跳过空名称节点（不计入匹配率）
         if (node.name.empty()) {
-            slog.v << "AnimationBinding: Skipping unnamed node at index " << i << io::endl;
             continue;
         }
 
@@ -143,12 +186,6 @@ bool AnimationBinding::buildMapping() {
     }
 
     // === 第 6 步：记录结果（成功） ===
-    size_t skippedNodeCount = mExternalAnim->nodes.size() - mEligibleNodeCount;
-    if (skippedNodeCount > 0) {
-        slog.i << "AnimationBinding: Skipped " << skippedNodeCount
-               << " unnamed nodes (not included in match rate)" << io::endl;
-    }
-
     // 如果有未匹配的骨骼，记录警告日志（但不影响成功）
     if (!mUnmatchedBones.empty()) {
         slog.w << "AnimationBinding: " << mUnmatchedBones.size() << " named bones not matched:" << io::endl;
@@ -156,9 +193,6 @@ bool AnimationBinding::buildMapping() {
             slog.w << "  - " << bone << io::endl;
         }
     }
-
-    slog.i << "AnimationBinding: Bone mapping built successfully: " << mMatchedNodeCount << "/"
-           << mEligibleNodeCount << " named nodes matched (" << (matchRate * 100.0f) << "%)" << io::endl;
 
     return true;  // 绑定成功
 }
@@ -177,21 +211,31 @@ bool AnimationBinding::buildMapping() {
  * - 匹配时只会用到骨骼相关的实体（327 个）
  */
 void AnimationBinding::buildResidentBoneMap(std::map<std::string, Entity>& outMap) {
-    // 获取驻留网格的所有实体
-    const Entity* entities = mResidentMesh->getEntities();
-    size_t entityCount = mResidentMesh->getEntityCount();
+    // 获取实体列表（来自 FilamentInstance 或 FilamentAsset）
+    const Entity* instanceEntities;
+    size_t entityCount;
 
+    if (mInstance) {
+        // 使用 FilamentInstance 的实体列表
+        instanceEntities = mInstance->getEntities();
+        entityCount = mInstance->getEntityCount();
+    } else {
+        // 使用 FilamentAsset 的实体列表
+        instanceEntities = mAsset->getEntities();
+        entityCount = mAsset->getEntityCount();
+    }
+
+    // 直接通过 entity 查询名称
+    // mNameProvider->getName(Entity) 接受任何 entity，通过 NameComponentManager 查询名称
+    // 这样可以正确处理 instance 的 entity（即使它们在 owner asset 的实体数组中位于任意位置）
     for (size_t i = 0; i < entityCount; i++) {
-        Entity entity = entities[i];
-
-        // 从 FilamentAsset 获取实体名称（通过 NameComponentManager）
-        const char* name = mResidentMesh->getName(entity);
+        Entity entity = instanceEntities[i];
+        // 直接用当前 entity 查询名称
+        const char* name = mNameProvider->getName(entity);
         if (name && name[0] != '\0') {
             outMap[std::string(name)] = entity;
         }
     }
-
-    slog.i << "AnimationBinding: Resident mesh has " << outMap.size() << " named entities" << io::endl;
 }
 
 /**

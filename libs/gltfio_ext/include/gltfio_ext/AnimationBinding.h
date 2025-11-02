@@ -145,15 +145,49 @@ namespace filament::gltfio_ext {
 class UTILS_PUBLIC AnimationBinding {
 public:
     /**
-     * Creates an AnimationBinding.
+     * Creates an AnimationBinding for a FilamentAsset (simple scenario).
+     *
+     * In this case, the asset provides both entities and names through NameComponentManager.
      *
      * @param externalAnim External animation asset (must remain valid during binding lifetime)
-     * @param residentMesh Resident mesh asset (must remain valid during binding lifetime)
+     * @param meshAsset Mesh asset that provides both entities and names
      * @param engine Filament engine instance
+     * @return Unique pointer to the created AnimationBinding
+     *
+     * Usage example:
+     * \code
+     * auto binding = AnimationBinding::createForAsset(animAsset, meshAsset, engine);
+     * binding->buildMapping();
+     * \endcode
      */
-    AnimationBinding(
+    static std::unique_ptr<AnimationBinding> createForAsset(
         const AnimationAsset* externalAnim,
-        const FilamentAsset* residentMesh,
+        const FilamentAsset* meshAsset,
+        filament::Engine* engine
+    );
+
+    /**
+     * Creates an AnimationBinding for a FilamentInstance (multi-instance scenario).
+     *
+     * In this case, the instance provides entities, and names come from the owner asset.
+     * This is the typical use case when using AssetLoader::createInstance() to create
+     * multiple instances sharing the same mesh data but with independent transforms.
+     *
+     * @param externalAnim External animation asset (must remain valid during binding lifetime)
+     * @param instance Instance that provides entities (automatically uses owner asset for names)
+     * @param engine Filament engine instance
+     * @return Unique pointer to the created AnimationBinding
+     *
+     * Usage example:
+     * \code
+     * FilamentInstance* instance = loader->createInstance(baseAsset);
+     * auto binding = AnimationBinding::createForInstance(animAsset, instance, engine);
+     * binding->buildMapping();
+     * \endcode
+     */
+    static std::unique_ptr<AnimationBinding> createForInstance(
+        const AnimationAsset* externalAnim,
+        const FilamentInstance* instance,
         filament::Engine* engine
     );
 
@@ -219,15 +253,38 @@ public:
     float getMatchRate() const;
 
 private:
+    /**
+     * Private constructor - use factory methods instead.
+     *
+     * @param externalAnim External animation asset
+     * @param entityProvider Provider for getEntities() calls (can be asset or instance)
+     * @param nameProvider Provider for getName() calls (must be asset with NameComponentManager)
+     * @param engine Filament engine instance
+     */
+    AnimationBinding(
+        const AnimationAsset* externalAnim,
+        const FilamentInstance* instance,  // nullptr if using asset directly
+        const FilamentAsset* asset,        // The asset or owner asset
+        filament::Engine* engine
+    );
+
     // === 输入数据（弱引用，不拥有所有权） ===
 
     //! 外部动画资产（动画节点 + 关键帧数据）
     //! 必须在 AnimationBinding 生命周期内保持有效
     const AnimationAsset* mExternalAnim;
 
-    //! 驻留网格资产（可渲染的网格实体）
-    //! 必须在 AnimationBinding 生命周期内保持有效
-    const FilamentAsset* mResidentMesh;
+    //! 实体提供者：FilamentInstance（如果使用实例）或 nullptr（如果使用资产）
+    //! 用于获取实例的实体列表
+    const FilamentInstance* mInstance;
+
+    //! 实体提供者：FilamentAsset（如果直接使用资产）或 owner asset（如果使用实例）
+    //! 用于 getEntities() 调用（当 mInstance 为 nullptr 时）
+    const FilamentAsset* mAsset;
+
+    //! 名称提供者（总是 FilamentAsset，带有 NameComponentManager）
+    //! 用于 getName() 调用，提供骨骼名称映射
+    const FilamentAsset* mNameProvider;
 
     //! Filament 引擎实例（用于访问 TransformManager 和 NameComponentManager）
     filament::Engine* mEngine;
