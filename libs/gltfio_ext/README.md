@@ -542,21 +542,40 @@ cd out/cmake-debug/libs/gltfio_ext
 ./run_tests.sh
 
 # Or run individually
-./test_asset_loader       # Asset loading and validation
-./test_animation_binding  # Bone mapping and matching
-./test_animator           # Animation playback and lifecycle
-./test_animation_cache    # Cache system and LRU eviction
+./test_asset_loader             # Asset loading and validation
+./test_animation_binding        # Bone mapping and matching
+./test_animator_lifecycle       # Resource lifecycle and memory safety (3 tests)
+./test_animator_playback        # Source management, playback, queries (11 tests)
+./test_animator_cache           # Cache LRU eviction and statistics (3 tests)
+./test_animator_crossfade       # Animation blending and complex integration (7 tests)
+./test_animation_cache          # Lightweight cache system (Phase 2-3)
 ```
+
+### Test Architecture
+
+Animator tests are organized by functionality for better maintainability:
+
+| Test File | Focus Area | Test Count | Key Tests |
+|-----------|------------|------------|-----------|
+| `test_animator_lifecycle` | Resource Management | 3 | Safe destruction, load/unload cycles, lifecycle order |
+| `test_animator_playback` | Core Playback | 11 | Source loading, playback by name, queries, integration |
+| `test_animator_cache` | Cache System | 3 | LRU eviction, size management, statistics |
+| `test_animator_crossfade` | Animation Blending | 7 | Cross-fade, alpha blending, multi-animator sync |
+
+**Benefits of Split Architecture**:
+- ✅ **Focused testing**: Each file has a clear functional scope
+- ✅ **Faster iteration**: Run only relevant tests during development
+- ✅ **Better organization**: Easy to locate and modify specific test cases
+- ✅ **Independent execution**: Tests can run in parallel for faster CI/CD
 
 **Test Coverage**:
 - **Unit tests**: Data structures, validation, error handling
 - **Integration tests**: Complete workflows, multi-instance scenarios
 - **Lifecycle tests**: Destruction order, memory safety
 - **Edge cases**: Invalid inputs, bone mismatches, cache eviction
+- **Performance tests**: Fast switching, concurrent playback
 
 **Test Assets**: Uses real-world ecorche model (327 bones, 3 animations, 100% match rate)
-
-For detailed test documentation, see [`test/README.md`](test/README.md).
 
 ---
 

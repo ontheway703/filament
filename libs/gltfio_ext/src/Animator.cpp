@@ -29,6 +29,7 @@
 #include <filament/TransformManager.h>
 
 #include <utils/Log.h>
+#include <utils/Logger.h>
 
 #include <math/mat4.h>
 #include <math/quat.h>
@@ -171,6 +172,7 @@ struct AnimatorImpl {
     void applyCrossFade(float alpha);
     void resetBoneMatrices(FFilamentInstance* instance);
     void updateBoneMatrices(FFilamentInstance* instance);
+    bool resetToBindPose(FFilamentInstance* instance);
 
     // ========================================
     // 外部动画方法（Phase 2-3 实现）
@@ -454,6 +456,25 @@ void Animator::resetBoneMatrices() {
     for (FFilamentInstance* instance : mImpl->asset->mInstances) {
         mImpl->resetBoneMatrices(instance);
     }
+}
+
+bool Animator::resetToBindPose() {
+    // Check if source data is available
+    if (!mImpl->asset->mSourceAsset || !mImpl->asset->mSourceAsset->hierarchy) {
+        return false;
+    }
+
+    // If this is a single-instance animator, then reset only this instance.
+    if (mImpl->instance) {
+        return mImpl->resetToBindPose(mImpl->instance);
+    }
+
+    // If this is a broadcast animator, then reset all instances.
+    bool success = true;
+    for (FFilamentInstance* instance : mImpl->asset->mInstances) {
+        success &= mImpl->resetToBindPose(instance);
+    }
+    return success;
 }
 
 bool Animator::applyCrossFade(const char* prevSourceId, const char* prevAnimName, float prevTime, float alpha) {
@@ -765,6 +786,88 @@ void AnimatorImpl::resetBoneMatrices(FFilamentInstance* instance) {
             }
         }
     }
+}
+
+bool AnimatorImpl::resetToBindPose(FFilamentInstance* instance) {
+    // Verify source data is available
+    if (!asset->mSourceAsset || !asset->mSourceAsset->hierarchy) {
+        return false;
+    }
+
+    cgltf_data* sourceData = asset->mSourceAsset->hierarchy;
+    const cgltf_node* nodes = sourceData->nodes;
+    const size_t nodeCount = sourceData->nodes_count;
+
+    TransformManager& tm = *transformManager;
+    TrsTransformManager& trs = *trsTransformManager;
+
+    // Open transform transaction to batch updates
+    tm.openLocalTransformTransaction();
+
+    // Reset all node transforms to their original values from the glTF file
+    for (size_t i = 0; i < nodeCount; ++i) {
+        // Get entity from nodeMap using index
+        if (i >= instance->mNodeMap.size()) continue;
+
+        Entity entity = instance->mNodeMap[i];
+        if (!entity) continue;
+
+        const cgltf_node& sourceNode = nodes[i];
+
+        auto trsNode = trs.getInstance(entity);
+        if (!trsNode) {
+            continue;  // Skip nodes that don't have TRS component
+        }
+
+        // Read original TRS values from cgltf_node
+        float3 translation{0.0f};
+        quatf rotation{1.0f, 0.0f, 0.0f, 0.0f};  // Identity quaternion
+        float3 scale{1.0f};
+
+        if (sourceNode.has_translation) {
+            translation = float3{
+                sourceNode.translation[0],
+                sourceNode.translation[1],
+                sourceNode.translation[2]
+            };
+        }
+
+        if (sourceNode.has_rotation) {
+            rotation = quatf{
+                sourceNode.rotation[3],  // w (real part)
+                sourceNode.rotation[0],  // x
+                sourceNode.rotation[1],  // y
+                sourceNode.rotation[2]   // z
+            };
+        }
+
+        if (sourceNode.has_scale) {
+            scale = float3{
+                sourceNode.scale[0],
+                sourceNode.scale[1],
+                sourceNode.scale[2]
+            };
+        }
+
+        // Reset TrsTransformManager to bind pose
+        trs.setTranslation(trsNode, translation);
+        trs.setRotation(trsNode, rotation);
+        trs.setScale(trsNode, scale);
+
+        // Sync TRS → TransformManager (same as applyAnimation line 772)
+        auto node = tm.getInstance(entity);
+        if (node) {
+            tm.setTransform(node, trs.getTransform(trsNode));
+        }
+    }
+
+    // Commit transaction to sync TrsTransformManager -> TransformManager
+    tm.commitLocalTransformTransaction();
+
+    // Update bone matrices to match the new transforms
+    updateBoneMatrices(instance);
+
+    return true;
 }
 
 void AnimatorImpl::updateBoneMatrices(FFilamentInstance* instance) {
@@ -1256,7 +1359,7 @@ void AnimatorImpl::evictLRU(size_t count) {
         removeAnimation(fullName);
     }
 
-    slog.i << "Evicted " << actualEvict << " animations (LRU)" << io::endl;
+    DLOG(INFO) << "Evicted " << actualEvict << " animations (LRU)";
 }
 
 /**
@@ -1287,8 +1390,8 @@ bool AnimatorImpl::handleSpaceManagement(const std::string& sourceId, size_t ani
     // 场景 B：正常情况（LRU 淘汰）
     // ========================================
     size_t needEvict = requiredSpace - mMaxCacheSize;
-    slog.i << "Need to evict " << needEvict << " animations before loading source '"
-           << sourceId << "'" << io::endl;
+    DLOG(INFO) << "Need to evict " << needEvict << " animations before loading source '"
+               << sourceId << "'";
 
     evictLRU(needEvict);
 
@@ -1310,7 +1413,7 @@ void AnimatorImpl::clearAnimationCache() {
     mSourceIndex.clear();
     mAnimNameIndex.clear();
 
-    slog.i << "Cleared animation cache (" << count << " animations)" << io::endl;
+    DLOG(INFO) << "Cleared animation cache (" << count << " animations)";
 }
 
 /**
@@ -1333,7 +1436,7 @@ void AnimatorImpl::unloadAnimationsFromSource(const std::string& sourceId) {
         removeAnimation(fullName);
     }
 
-    slog.i << "Unloaded " << count << " animations from source '" << sourceId << "'" << io::endl;
+    DLOG(INFO) << "Unloaded " << count << " animations from source '" << sourceId << "'";
 }
 
 /**
@@ -1363,7 +1466,7 @@ size_t AnimatorImpl::loadAnimationsFromSource(const std::string& sourceId, Anima
     // 2. 如果 sourceId 已存在，先卸载（替换模式）
     // ========================================
     if (mSourceIndex.count(sourceId)) {
-        slog.i << "Source '" << sourceId << "' already loaded, replacing..." << io::endl;
+        DLOG(INFO) << "Source '" << sourceId << "' already loaded, replacing...";
         unloadAnimationsFromSource(sourceId);
     }
 
@@ -1392,28 +1495,10 @@ size_t AnimatorImpl::loadAnimationsFromSource(const std::string& sourceId, Anima
         return 0;
     }
 
-    float matchRate = binding->getMatchRate();
-    slog.i << "AnimationBinding for '" << sourceId << "': "
-           << "match rate = " << (matchRate * 100.0f) << "%" << io::endl;
-
     // ========================================
     // 5. 转换并缓存所有动画
     // ========================================
     const auto& nodeToEntityMap = binding->getNodeToEntityMap();
-
-    // DEBUG: Log animator and entity mapping info
-    slog.i << "DEBUG [Animator " << (void*)this << "]: "
-           << "instance=" << (void*)this->instance
-           << ", asset=" << (void*)this->asset << io::endl;
-
-    // Log first few entity mappings to verify they're different per animator
-    int logCount = 0;
-    for (const auto& pair : nodeToEntityMap) {
-        slog.i << "DEBUG [Animator " << (void*)this << "]: "
-               << "Node " << pair.first << " → Entity " << pair.second.getId() << io::endl;
-        if (++logCount >= 5) break;
-    }
-
     size_t loadedCount = 0;
 
     for (size_t i = 0; i < animCount; i++) {
@@ -1594,14 +1679,7 @@ bool AnimatorImpl::applyAnimationByName(const std::string& animName, float time)
             TransformManager& tm = *this->transformManager;
             tm.openLocalTransformTransaction();
 
-            // DEBUG: Log first few channel operations
-            int debugChannelCount = 0;
             for (const auto& channel : anim.channels) {
-                if (debugChannelCount < 3) {
-                    slog.i << "DEBUG [Animator " << (void*)this << ", anim=" << animName << "]: "
-                           << "Applying to Entity " << channel.targetEntity.getId() << io::endl;
-                    debugChannelCount++;
-                }
                 const Sampler* sampler = channel.sourceData;
                 if (sampler->times.size() < 2) {
                     continue;

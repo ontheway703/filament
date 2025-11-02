@@ -168,8 +168,8 @@ static bool initSDL(App& app) {
 
 static bool initFilament(App& app) {
     Engine::Config config = {};
-    config.commandBufferSizeMB = 32;
-    config.minCommandBufferSizeMB = 8;
+    config.commandBufferSizeMB = 96;   // Increased for complex skeleton animation (aligned with multi_character)
+    config.minCommandBufferSizeMB = 48; // Prevents overflow when calling resetBoneMatrices()
 
     app.engine = Engine::create(filament::backend::Backend::DEFAULT, nullptr, nullptr, &config);
     if (!app.engine) {
@@ -304,7 +304,8 @@ static bool loadMesh(App& app) {
         }
     }
 
-    app.meshAsset->releaseSourceData();
+    // NOTE: Keep source data for resetToBindPose() functionality
+    // app.meshAsset->releaseSourceData();
 
     // Add mesh entities to scene
     app.scene->addEntities(app.meshAsset->getEntities(), app.meshAsset->getEntityCount());
@@ -515,14 +516,16 @@ static void runLeakTest(App& app) {
 
         // 【步骤 4】模拟使用动画（验证缓存功能正常）
         auto animNames = app.animator->getAnimationsInSource(testSourceId.c_str());
+
         if (!animNames.empty()) {
             bool applied = app.animator->applyAnimationByName(animNames[0].c_str(), 0.5f);
-            if (applied) {
-                app.animator->updateBoneMatrices();
-            } else {
+
+            if (!applied) {
                 std::cerr << "Cycle " << i << ": Apply animation failed!" << std::endl;
                 // 继续测试，不中断
             }
+            // 【修复】不调用 updateBoneMatrices()，避免与主渲染循环的竞态条件
+            // 只测试加载、应用、卸载流程即可
         } else {
             std::cerr << "Cycle " << i << ": No animations found in source!" << std::endl;
         }
@@ -546,6 +549,19 @@ static void runLeakTest(App& app) {
     std::cout << "Total time: " << duration.count() << " ms" << std::endl;
     std::cout << "Average per cycle: " << (duration.count() / (double)CYCLES) << " ms" << std::endl;
     std::cout << "\nUse Instruments (macOS) or Valgrind (Linux) to verify no memory leaks." << std::endl;
+
+    // 【修复】恢复正常播放状态，避免骨骼肌肉分离
+    std::cout << "\nRestoring animation state..." << std::endl;
+    if (!app.animationNames.empty() && app.currentAnimIndex < (int)app.animationNames.size()) {
+        const std::string& animName = app.animationNames[app.currentAnimIndex];
+        app.animTime = 0.0f;  // 重置到动画开始
+        app.animator->applyAnimationByName(animName.c_str(), app.animTime);
+        app.animator->updateBoneMatrices();  // 同步到渲染器
+        app.animPlaying = true;  // 恢复播放
+        std::cout << "Animation state restored. Playback resumed from animation: " << animName << std::endl;
+    } else {
+        std::cout << "No animation to restore." << std::endl;
+    }
 }
 
 /**
@@ -601,6 +617,7 @@ static void updateAnimation(App& app, double deltaTime) {
         app.currentAnimIndex = 0;
     }
 
+    // 【修复】只在播放时才应用动画和更新骨骼矩阵
     if (app.animPlaying) {
         // 【新 API】getAnimationDurationByName() - 通过名称获取动画时长
         const std::string& animName = app.animationNames[app.currentAnimIndex];
@@ -613,12 +630,11 @@ static void updateAnimation(App& app, double deltaTime) {
                 app.animTime = fmod(app.animTime, duration);
             }
         }
-    }
 
-    // 【新 API】applyAnimationByName() - 通过名称应用动画
-    const std::string& animName = app.animationNames[app.currentAnimIndex];
-    app.animator->applyAnimationByName(animName.c_str(), app.animTime);
-    app.animator->updateBoneMatrices();
+        // 【新 API】applyAnimationByName() - 通过名称应用动画
+        app.animator->applyAnimationByName(animName.c_str(), app.animTime);
+        app.animator->updateBoneMatrices();
+    }
 }
 
 static void cleanup(App& app) {
@@ -773,10 +789,13 @@ int main(int argc, char* argv[]) {
                     case SDLK_t:
                         if (app.animator) {
                             std::cout << "\nResetting to T-Pose..." << std::endl;
-                            app.animator->resetBoneMatrices();
-                            app.animPlaying = false;
-                            std::cout << "Reset complete. Animation paused." << std::endl;
-                            std::cout << "Press Space to resume playback." << std::endl;
+                            if (app.animator->resetToBindPose()) {
+                                app.animPlaying = false;
+                                std::cout << "Reset complete. Animation paused." << std::endl;
+                                std::cout << "Press Space to resume playback." << std::endl;
+                            } else {
+                                std::cout << "Failed to reset to bind pose (source data not available)" << std::endl;
+                            }
                         }
                         break;
 

@@ -28,7 +28,10 @@ TEST_DIR="$PROJECT_ROOT/out/cmake-debug/libs/gltfio_ext"
 TESTS=(
     "test_asset_loader"
     "test_animation_binding"
-    "test_animator"
+    "test_animator_lifecycle"
+    "test_animator_playback"
+    "test_animator_cache"
+    "test_animator_crossfade"
     "test_animation_cache"
 )
 

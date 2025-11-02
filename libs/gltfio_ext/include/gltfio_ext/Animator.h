@@ -73,6 +73,21 @@ public:
     void resetBoneMatrices();
 
     /**
+     * Reset all animated nodes to their bind pose (rest pose / T-pose).
+     *
+     * This method reads the original TRS values from the glTF asset source data
+     * and resets all bone node transformations to their initial state. Both the
+     * TransformManager (for visible bone geometry) and bone matrices (for skinned
+     * meshes) are updated.
+     *
+     * NOTE: This requires the source asset data to be available. Do not call this
+     * after releaseSourceData() has been invoked on the asset.
+     *
+     * @return true if successful, false if source data is not available
+     */
+    bool resetToBindPose();
+
+    /**
      * Applies a blended transform to the union of nodes affected by two animations.
      * Used for cross-fading from a previous skinning-based animation or rigid body animation.
      *

@@ -33,6 +33,7 @@
  */
 
 #include "common/AnimationUtils.h"
+#include "materials/uberarchive.h"
 
 #include <SDL.h>
 
@@ -118,7 +119,7 @@ struct App {
     size_t currentAnimIdx = 0;           // Current animation index
     size_t previousAnimIdx = 0;          // Previous animation index
     float animationTime = 0.0f;          // Current animation playback time
-    float previousAnimTime = 0.0f;       // Previous animation playback time (for blending)
+    float previousAnimStartTime = 0.0f;  // Previous animation start time (for advancing during blend)
 
     // Blending state
     AnimBlendMode blendMode = AnimBlendMode::IDLE;
@@ -129,6 +130,7 @@ struct App {
     // Timing
     std::chrono::high_resolution_clock::time_point lastFrameTime;
     float deltaTime = 0.0f;
+    int frameCount = 0;              // Frame counter (for CommandBuffer warmup)
 
     // Control flags
     bool running = true;
@@ -186,6 +188,11 @@ int main(int argc, char* argv[]) {
     setupCamera(app);
     printInstructions();
 
+    // Pre-render a few frames to initialize CommandBuffer for large bone data
+    for (int i = 0; i < 3; ++i) {
+        render(app);
+    }
+
     app.lastFrameTime = std::chrono::high_resolution_clock::now();
 
     // Main loop
@@ -201,7 +208,12 @@ int main(int argc, char* argv[]) {
 }
 
 bool initFilament(App& app) {
-    app.engine = Engine::create(backend::Backend::DEFAULT);
+    // Create engine with larger CommandBuffer for large bone count (978 bones)
+    Engine::Config config;
+    config.minCommandBufferSizeMB = 15;  // Single buffer size (ecorche needs ~12MB per frame)
+    config.commandBufferSizeMB = 45;     // Total arena (3x single buffer for triple buffering)
+
+    app.engine = Engine::create(backend::Backend::DEFAULT, nullptr, nullptr, &config);
     if (!app.engine) {
         std::cerr << "Failed to create Filament engine" << std::endl;
         return false;
@@ -234,7 +246,12 @@ bool initFilament(App& app) {
     app.view->setCamera(app.camera);
 
     // Create gltfio_ext components
-    app.materialProvider = gltfio_ext::createJitShaderProvider(app.engine);
+    // Use UbershaderProvider for fast material loading (avoids JIT compilation blocking)
+    app.materialProvider = gltfio_ext::createUbershaderProvider(
+        app.engine,
+        UBERARCHIVE_DEFAULT_DATA,
+        UBERARCHIVE_DEFAULT_SIZE
+    );
     app.nameManager = new NameComponentManager(EntityManager::get());
     app.stbProvider = gltfio_ext::createStbProvider(app.engine);
     app.ktx2Provider = gltfio_ext::createKtx2Provider(app.engine);
@@ -279,12 +296,20 @@ bool loadAssets(App& app) {
         return false;
     }
 
-    // Load resources
-    app.resourceLoader->loadResources(app.meshAsset);
+    // Load resources (synchronously or asynchronously)
+    if (!app.resourceLoader->loadResources(app.meshAsset)) {
+        // Synchronous load failed, try async
+        if (!app.resourceLoader->asyncBeginLoad(app.meshAsset)) {
+            std::cerr << "Failed to load mesh resources" << std::endl;
+            return false;
+        }
 
-    // Wait for resources to load
-    while (app.resourceLoader->asyncGetLoadProgress() < 1.0f) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        // Wait for async load to complete
+        std::cout << "Loading resources..." << std::endl;
+        while (app.resourceLoader->asyncGetLoadProgress() < 1.0f) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        std::cout << "Resources loaded successfully" << std::endl;
     }
 
     // Load animation asset
@@ -389,11 +414,11 @@ void processInput(App& app) {
                     // Trigger auto blend to next animation
                     if (app.blendMode != AnimBlendMode::AUTO_BLEND) {
                         app.previousAnimIdx = app.currentAnimIdx;
-                        app.previousAnimTime = app.animationTime;  // Save previous animation time
+                        app.previousAnimStartTime = app.animationTime;  // Record start time for advancing
                         app.currentAnimIdx = (app.currentAnimIdx + 1) % app.animNames.size();
                         app.blendMode = AnimBlendMode::AUTO_BLEND;
                         app.blendAlpha = 0.0f;
-                        app.blendStartTime = app.animationTime;
+                        app.blendStartTime = 0.0f;
                         app.animationTime = 0.0f;  // Reset current animation time
                         std::cout << "\n[AUTO BLEND] " << app.animNames[app.previousAnimIdx]
                                   << " → " << app.animNames[app.currentAnimIdx] << std::endl;
@@ -414,7 +439,7 @@ void processInput(App& app) {
                     if (app.blendMode != AnimBlendMode::MANUAL_BLEND) {
                         app.blendMode = AnimBlendMode::MANUAL_BLEND;
                         app.previousAnimIdx = app.currentAnimIdx;
-                        app.previousAnimTime = app.animationTime;  // Save previous animation time
+                        app.previousAnimStartTime = app.animationTime;  // Record start time for advancing
                         app.currentAnimIdx = (app.currentAnimIdx + 1) % app.animNames.size();
                         app.blendAlpha = 0.5f;  // Start at middle
                         app.animationTime = 0.0f;  // Reset current animation time
@@ -470,9 +495,16 @@ void update(App& app) {
     app.deltaTime = elapsed.count();
     app.lastFrameTime = now;
 
+    app.frameCount++;
+
     // Update animation time
     if (!app.paused) {
         app.animationTime += app.deltaTime;
+    }
+
+    // Skip bone updates for first few frames to let CommandBuffer initialize
+    if (app.frameCount < 3) {
+        return;
     }
 
     // Update blend state
@@ -487,15 +519,19 @@ void update(App& app) {
         case AnimBlendMode::AUTO_BLEND:
             {
                 // Calculate blend alpha based on time
-                float blendProgress = (app.animationTime - app.blendStartTime) / app.blendDuration;
+                float blendProgress = app.animationTime / app.blendDuration;
                 app.blendAlpha = std::min(1.0f, blendProgress);
 
+                // Calculate animation times (both animations advance)
+                float currentTime = app.animationTime;
+                float prevTime = app.previousAnimStartTime + app.animationTime;
+
                 // Apply current animation first
-                if (app.animator->applyAnimationByName(app.animNames[app.currentAnimIdx].c_str(), app.animationTime)) {
-                    // Then blend with previous
+                if (app.animator->applyAnimationByName(app.animNames[app.currentAnimIdx].c_str(), currentTime)) {
+                    // Then blend with previous (using advancing time, not frozen)
                     app.animator->applyCrossFadeByName(
                         app.animNames[app.previousAnimIdx].c_str(),
-                        app.previousAnimTime,
+                        prevTime,
                         app.blendAlpha
                     );
                     app.animator->updateBoneMatrices();
@@ -510,14 +546,20 @@ void update(App& app) {
             break;
 
         case AnimBlendMode::MANUAL_BLEND:
-            // Manual blend (alpha controlled by arrow keys)
-            if (app.animator->applyAnimationByName(app.animNames[app.currentAnimIdx].c_str(), app.animationTime)) {
-                app.animator->applyCrossFadeByName(
-                    app.animNames[app.previousAnimIdx].c_str(),
-                    app.previousAnimTime,
-                    app.blendAlpha
-                );
-                app.animator->updateBoneMatrices();
+            {
+                // Manual blend (alpha controlled by arrow keys)
+                // Calculate animation times (both animations advance)
+                float currentTime = app.animationTime;
+                float prevTime = app.previousAnimStartTime + app.animationTime;
+
+                if (app.animator->applyAnimationByName(app.animNames[app.currentAnimIdx].c_str(), currentTime)) {
+                    app.animator->applyCrossFadeByName(
+                        app.animNames[app.previousAnimIdx].c_str(),
+                        prevTime,
+                        app.blendAlpha
+                    );
+                    app.animator->updateBoneMatrices();
+                }
             }
             break;
     }

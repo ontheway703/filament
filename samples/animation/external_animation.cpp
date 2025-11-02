@@ -156,8 +156,8 @@ static bool initSDL(App& app) {
 static bool initFilament(App& app) {
     // 配置引擎参数
     Engine::Config config = {};
-    config.commandBufferSizeMB = 32;       // 命令缓冲区大小
-    config.minCommandBufferSizeMB = 8;     // 最小命令缓冲区大小
+    config.commandBufferSizeMB = 96;       // Increased for complex skeleton animation
+    config.minCommandBufferSizeMB = 48;    // Prevents CommandStream overflow
 
     app.engine = Engine::create(filament::backend::Backend::DEFAULT, nullptr, nullptr, &config);
     if (!app.engine) {
@@ -542,7 +542,6 @@ int main(int argc, char* argv[]) {
     std::cout << "Animation:" << std::endl;
     std::cout << "  1/2/3   : Switch animation" << std::endl;
     std::cout << "  Space   : Play/Pause animation" << std::endl;
-    std::cout << "  T       : Reset to T-Pose" << std::endl;
     std::cout << "\nInformation:" << std::endl;
     std::cout << "  I       : Toggle info panel display" << std::endl;
     std::cout << "\nGeneral:" << std::endl;
@@ -609,17 +608,6 @@ int main(int argc, char* argv[]) {
                             app.currentAnimIndex = 2;
                             app.animTime = 0.0f;
                             std::cout << "Switched to animation 3: " << app.animationNames[2] << std::endl;
-                        }
-                        break;
-
-                    // Reset to T-Pose (T key)
-                    case SDLK_t:
-                        if (app.animator) {
-                            std::cout << "\nResetting to T-Pose..." << std::endl;
-                            app.animator->resetBoneMatrices();
-                            app.animPlaying = false;
-                            std::cout << "Reset complete. Animation paused." << std::endl;
-                            std::cout << "Press Space to resume playback." << std::endl;
                         }
                         break;
 

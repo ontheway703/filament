@@ -75,6 +75,7 @@ function(add_animation_sample NAME)
         filament
         gltfio
         gltfio_ext
+        uberarchive_ext
         utils
         ${SDL2_LIBRARIES}
     )
