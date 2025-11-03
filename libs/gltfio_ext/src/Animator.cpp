@@ -1906,4 +1906,119 @@ void AnimatorImpl::resetCacheStats() {
     mCacheMissCount = 0;
 }
 
-} // namespace filament::gltfio
+// ========================================
+// gltfio 兼容 API 实现
+// ========================================
+
+void Animator::applyAnimation(size_t animationIndex, float time) const {
+    // Validate animation index (only internal animations accessible via index)
+    if (animationIndex >= mImpl->mInternalAnimCount) {
+        utils::slog.w << "Invalid animation index " << animationIndex
+                      << " (internal count: " << mImpl->mInternalAnimCount << ")"
+                      << utils::io::endl;
+        return;
+    }
+
+    // Apply the internal animation (following gltfio implementation)
+    const Animation& anim = mImpl->animations[animationIndex];
+
+    // Time wrapping: loop animation if time exceeds duration (from gltfio)
+    time = time == anim.duration ? time : fmod(time, anim.duration);
+
+    // Open transform transaction for atomic updates (from gltfio)
+    TransformManager& transformManager = *mImpl->transformManager;
+    transformManager.openLocalTransformTransaction();
+
+    for (const auto& channel : anim.channels) {
+        const Sampler* sampler = channel.sourceData;
+
+        // Skip samplers with insufficient keyframes (from gltfio)
+        if (sampler->times.size() < 2) {
+            continue;
+        }
+
+        const TimeValues& times = sampler->times;
+
+        // Find the first keyframe after the given time, or the keyframe that matches it exactly
+        TimeValues::const_iterator iter = times.lower_bound(time);
+
+        // Compute the interpolant (between 0 and 1) and determine the keyframe pair
+        float t = 0.0f;
+        size_t nextIndex;
+        size_t prevIndex;
+        if (iter == times.end()) {
+            nextIndex = times.size() - 1;
+            prevIndex = nextIndex;
+        } else if (iter == times.begin()) {
+            nextIndex = 0;
+            prevIndex = 0;
+        } else {
+            TimeValues::const_iterator prev = iter; --prev;
+            nextIndex = iter->second;
+            prevIndex = prev->second;
+            const float nextTime = iter->first;
+            const float prevTime = prev->first;
+            float deltaTime = nextTime - prevTime;
+            assert(deltaTime >= 0);
+            if (deltaTime > 0) {
+                t = (time - prevTime) / deltaTime;
+            }
+        }
+
+        if (sampler->interpolation == Sampler::STEP) {
+            t = 0.0f;
+        }
+
+        const_cast<AnimatorImpl*>(mImpl)->applyAnimation(channel, t, prevIndex, nextIndex);
+    }
+
+    // Commit transform transaction (from gltfio)
+    transformManager.commitLocalTransformTransaction();
+}
+
+size_t Animator::getAnimationCount() const {
+    // Return only internal animation count (embedded in the asset)
+    // External animations loaded via loadAnimationsFromSource() are not counted
+    return mImpl->mInternalAnimCount;
+}
+
+float Animator::getAnimationDuration(size_t animationIndex) const {
+    // Validate animation index
+    if (animationIndex >= mImpl->mInternalAnimCount) {
+        utils::slog.w << "Invalid animation index " << animationIndex
+                      << " (internal count: " << mImpl->mInternalAnimCount << ")"
+                      << utils::io::endl;
+        return 0.0f;
+    }
+
+    return mImpl->animations[animationIndex].duration;
+}
+
+const char* Animator::getAnimationName(size_t animationIndex) const {
+    // Validate animation index
+    if (animationIndex >= mImpl->mInternalAnimCount) {
+        utils::slog.w << "Invalid animation index " << animationIndex
+                      << " (internal count: " << mImpl->mInternalAnimCount << ")"
+                      << utils::io::endl;
+        return "";  // Return empty string for invalid index (gltfio compatible)
+    }
+
+    // Return animation name or empty string if none specified (from gltfio)
+    return mImpl->animations[animationIndex].name.c_str();
+}
+
+void Animator::applyCrossFade(size_t previousAnimIndex, float previousAnimTime, float alpha) {
+    // Validate animation index (only internal animations accessible via index)
+    if (previousAnimIndex >= mImpl->mInternalAnimCount) {
+        utils::slog.w << "Invalid animation index " << previousAnimIndex
+                      << " (internal count: " << mImpl->mInternalAnimCount << ")"
+                      << utils::io::endl;
+        return;
+    }
+
+    // Get animation name and forward to the name-based implementation
+    const std::string& animName = mImpl->animations[previousAnimIndex].name;
+    applyCrossFadeByName(animName.empty() ? "" : animName.c_str(), previousAnimTime, alpha);
+}
+
+} // namespace filament::gltfio_ext

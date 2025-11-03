@@ -1,6 +1,6 @@
 # gltfio_ext - Extended glTF Animation Loading
 
-**[Overview](#overview)** | **[Quick Start](#quick-start)** | **[Core Concepts](#core-concepts)** | **[API Reference](#api-reference)** | **[Best Practices](#best-practices)** | **[Testing](#testing)**
+**[Overview](#overview)** | **[Compatibility](#gltfio-compatibility)** | **[Quick Start](#quick-start)** | **[Core Concepts](#core-concepts)** | **[API Reference](#api-reference)** | **[Best Practices](#best-practices)** | **[Testing](#testing)**
 
 > Decoupled animation loading for Filament's glTF pipeline - with multi-instance support and smart caching
 
@@ -9,6 +9,12 @@
 ## Table of Contents
 
 - [Overview](#overview)
+- [gltfio Compatibility](#gltfio-compatibility)
+  - [Migration from gltfio](#migration-from-gltfio)
+  - [Enhanced Features](#enhanced-features)
+  - [Internal vs External Animations](#internal-vs-external-animations)
+  - [Deprecated APIs](#deprecated-apis)
+  - [Synchronization with gltfio](#synchronization-with-gltfio)
 - [Quick Start](#quick-start)
   - [Prerequisites](#prerequisites)
   - [Basic Workflow](#basic-workflow)
@@ -60,6 +66,100 @@ Traditional glTF workflow bundles meshes and animations in a single file, leadin
 2. Blender Export → Animation GLB (export_meshes=False, skeleton + animations only)
 3. Load mesh → Load animations → Bind via bone names → Play animations
 ```
+
+---
+
+## gltfio Compatibility
+
+`gltfio_ext` is **fully backward compatible** with Filament's original `gltfio` library. You can drop in `gltfio_ext` as a replacement by simply changing the namespace.
+
+### Migration from gltfio
+
+**Simple namespace change**:
+```cpp
+// Before (gltfio)
+using namespace filament::gltfio;
+
+// After (gltfio_ext)
+using namespace filament::gltfio_ext;
+```
+
+**All existing APIs work identically**:
+```cpp
+// Legacy index-based API (for internal animations)
+size_t count = animator->getAnimationCount();           // Returns internal animation count
+const char* name = animator->getAnimationName(0);       // Get animation name by index
+float duration = animator->getAnimationDuration(0);     // Get animation duration
+animator->applyAnimation(0, time);                      // Play animation by index
+
+// Bone matrix updates (inherited from gltfio)
+animator->updateBoneMatrices();
+animator->resetBoneMatrices();
+```
+
+### Enhanced Features
+
+While maintaining full backward compatibility, `gltfio_ext` adds:
+
+- **External animation loading**: Load animations from separate GLB files
+- **Animation cache**: LRU cache with source-based organization
+- **Name-based playback**: Play animations by name without tracking indices
+- **Multi-instance support**: Independent animations for characters sharing mesh data
+
+### Internal vs External Animations
+
+`gltfio_ext` distinguishes between two types of animations:
+
+| Type | Source | Access Method | Use Case |
+|------|--------|---------------|----------|
+| **Internal** | Embedded in mesh GLB | Index-based API (`applyAnimation(index, time)`) | Legacy gltfio workflow |
+| **External** | Loaded via cache | Name-based API (`applyAnimationByName(name, time)`) | New decoupled workflow |
+
+**Example**:
+```cpp
+// Load mesh with 3 embedded animations
+FilamentAsset* meshAsset = loader->createAsset(meshData, meshSize);
+Animator* animator = meshAsset->getInstance()->getAnimator();
+
+// Legacy API: works with internal animations
+size_t internalCount = animator->getAnimationCount();  // Returns 3
+animator->applyAnimation(0, time);                     // Play "Walk"
+animator->applyAnimation(1, time);                     // Play "Run"
+
+// Load external animations into cache
+auto externalAnims = loader->loadAnimationAsset(animData, animSize);
+animator->loadAnimationsFromSource("combat", externalAnims.get());
+
+// New API: works with both internal and external animations
+animator->applyAnimationByName("Walk", time);           // Internal animation
+animator->applyAnimation("combat", "Slash", time);      // External animation
+
+// Internal count unchanged - external animations stored separately
+size_t stillThree = animator->getAnimationCount();     // Still returns 3
+```
+
+### Deprecated APIs
+
+The following methods are **deprecated but fully functional** for backward compatibility:
+
+```cpp
+void applyAnimation(size_t animationIndex, float time) const;
+size_t getAnimationCount() const;
+float getAnimationDuration(size_t animationIndex) const;
+const char* getAnimationName(size_t animationIndex) const;
+```
+
+**Recommendation**: For new code, prefer name-based APIs (`applyAnimationByName()`, `applyAnimation(sourceId, name, time)`).
+
+### Synchronization with gltfio
+
+`gltfio_ext` is a fork of `gltfio` and can be manually synchronized when gltfio receives updates:
+
+- **Compatible**: Core animation and rendering APIs remain stable
+- **Manual sync**: Apply gltfio changes by namespace replacement and conflict resolution
+- **Independent development**: gltfio_ext features (cache, external animations) are separate additions
+
+See `SYNC_GUIDE.md` for detailed synchronization procedures.
 
 ---
 
@@ -765,7 +865,7 @@ cd out/cmake-debug/libs/gltfio_ext
 
 ### Test Statistics
 
-**Total**: 115 test cases across 10 test files (110 passing + 5 skipped)
+**Total**: 117 test cases across 10 test files (112 passing + 5 skipped)
 
 | Test File | Tests | Status | Coverage |
 |-----------|-------|--------|----------|
@@ -775,7 +875,7 @@ cd out/cmake-debug/libs/gltfio_ext
 | `test_animation_binding` | 9 | ✅ Pass | **Bone name mapping, createForInstance() multi-instance** |
 | `test_bone_matrices` | 5 | ⏭️ Skip | updateBoneMatrices() (NOOP backend limitation) |
 | `test_animator_lifecycle` | 9 | ✅ Pass | Safe destruction, load/unload cycles |
-| `test_animator_playback` | 11 | ✅ Pass | Source loading, playback by name, queries |
+| `test_animator_playback` | 13 | ✅ Pass | Source loading, playback, **gltfio compatibility** |
 | `test_animator_cache` | 3 | ✅ Pass | Cache integration with Animator |
 | `test_animator_crossfade` | 7 | ✅ Pass | Cross-fade, alpha blending, multi-animator sync |
 | `test_animation_cache` | 34 | ✅ Pass | **LRU eviction, hit rate, cache statistics** |

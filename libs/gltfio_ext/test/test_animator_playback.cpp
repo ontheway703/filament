@@ -591,6 +591,241 @@ TEST_F(AnimatorTest, QuerySourcesAndAnimations) {
 }
 
 // ============================================================================
+// GLTFIO COMPATIBILITY TESTS
+// ============================================================================
+
+/**
+ * Test: gltfio Compatibility - Index-based API for internal animations
+ *
+ * This test verifies that the legacy gltfio API methods work correctly:
+ * - getAnimationCount() returns only internal animation count
+ * - getAnimationName(index) returns internal animation names
+ * - getAnimationDuration(index) returns internal animation durations
+ * - applyAnimation(index, time) applies internal animations
+ * - External animations loaded via cache don't affect internal count
+ */
+TEST_F(AnimatorTest, GltfioCompatibilityIndexBasedAPI) {
+    // Load asset with embedded (internal) animations
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    if (meshData.empty()) {
+        GTEST_SKIP() << "Test asset not found: ecorche_full.glb";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // === Test 1: getAnimationCount() returns internal animation count ===
+    size_t internalCount = animator->getAnimationCount();
+    EXPECT_EQ(internalCount, 3) << "ecorche_full.glb should have 3 internal animations";
+
+    // === Test 2: getAnimationName() returns correct names ===
+    const char* name0 = animator->getAnimationName(0);
+    const char* name1 = animator->getAnimationName(1);
+    const char* name2 = animator->getAnimationName(2);
+
+    ASSERT_NE(name0, nullptr);
+    ASSERT_NE(name1, nullptr);
+    ASSERT_NE(name2, nullptr);
+
+    EXPECT_STREQ(name0, "Pull");
+    EXPECT_STREQ(name1, "Push");
+    EXPECT_STREQ(name2, "Squat");
+
+    // === Test 3: Invalid index returns empty string (gltfio compatible) ===
+    const char* invalidName = animator->getAnimationName(999);
+    EXPECT_STREQ(invalidName, "") << "Invalid index should return empty string";
+
+    // === Test 4: getAnimationDuration() returns correct durations ===
+    float duration0 = animator->getAnimationDuration(0);
+    float duration1 = animator->getAnimationDuration(1);
+    float duration2 = animator->getAnimationDuration(2);
+
+    EXPECT_NEAR(duration0, 2.083f, 0.001f) << "Pull animation duration";
+    EXPECT_NEAR(duration1, 2.083f, 0.001f) << "Push animation duration";
+    EXPECT_NEAR(duration2, 2.083f, 0.001f) << "Squat animation duration";
+
+    // === Test 5: Invalid index returns 0.0f ===
+    float invalidDuration = animator->getAnimationDuration(999);
+    EXPECT_EQ(invalidDuration, 0.0f) << "Invalid index should return 0.0f";
+
+    // === Test 6: applyAnimation(index, time) works correctly ===
+    EXPECT_NO_THROW({
+        animator->applyAnimation(0, 0.0f);  // Pull at start
+        animator->applyAnimation(1, 1.0f);  // Push at mid
+        animator->applyAnimation(2, 2.0f);  // Squat at end
+    }) << "Index-based animation playback should work";
+
+    // === Test 7: Invalid index in applyAnimation() is handled gracefully ===
+    EXPECT_NO_THROW({
+        animator->applyAnimation(999, 0.0f);
+    }) << "Invalid index should be handled gracefully (no crash)";
+
+    // Cleanup
+    mLoader->destroyAsset(meshAsset);
+}
+
+/**
+ * Test: gltfio Compatibility - Internal vs External animation separation
+ *
+ * This test verifies that:
+ * - Internal animation count remains stable when external animations are loaded
+ * - Index-based API only accesses internal animations
+ * - Name-based API can access both internal and external animations
+ * - Both APIs can coexist without interference
+ */
+TEST_F(AnimatorTest, GltfioCompatibilityInternalVsExternal) {
+    // Load asset with 3 internal animations
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    if (meshData.empty()) {
+        GTEST_SKIP() << "Test asset not found: ecorche_full.glb";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // === Initial state: only internal animations ===
+    size_t initialCount = animator->getAnimationCount();
+    EXPECT_EQ(initialCount, 3) << "Should have 3 internal animations initially";
+
+    // === Load external animations from cache ===
+    auto animData = readBinaryFile("ecorche_animation_only.glb");
+    if (animData.empty()) {
+        mLoader->destroyAsset(meshAsset);
+        GTEST_SKIP() << "Test asset not found: ecorche_animation_only.glb";
+    }
+
+    auto animAsset = mLoader->loadAnimationAsset(animData.data(), animData.size());
+    ASSERT_NE(animAsset, nullptr);
+
+    size_t loadedCount = animator->loadAnimationsFromSource("external_source", animAsset.get());
+    EXPECT_GT(loadedCount, 0) << "Should load external animations";
+
+    // === Critical: Internal count should NOT change ===
+    size_t countAfterLoad = animator->getAnimationCount();
+    EXPECT_EQ(countAfterLoad, 3) << "Internal animation count should remain 3 after loading external animations";
+
+    // === Index-based API still only accesses internal animations ===
+    const char* name0 = animator->getAnimationName(0);
+    const char* name1 = animator->getAnimationName(1);
+    const char* name2 = animator->getAnimationName(2);
+
+    ASSERT_NE(name0, nullptr);
+    ASSERT_NE(name1, nullptr);
+    ASSERT_NE(name2, nullptr);
+
+    EXPECT_STREQ(name0, "Pull");
+    EXPECT_STREQ(name1, "Push");
+    EXPECT_STREQ(name2, "Squat");
+
+    // === Index 3 and beyond should be invalid (not external animations) ===
+    const char* name3 = animator->getAnimationName(3);
+    EXPECT_STREQ(name3, "") << "Index 3 should return empty string (external animations not accessible via index)";
+
+    float duration3 = animator->getAnimationDuration(3);
+    EXPECT_EQ(duration3, 0.0f) << "Index 3 duration should be 0.0f (invalid)";
+
+    // === Old API (index) and new API (name) can coexist ===
+
+    // Play internal animation via index
+    EXPECT_NO_THROW({
+        animator->applyAnimation(0, 1.0f);  // Old API: Pull
+    });
+
+    // Play internal animation via name
+    bool success1 = animator->applyAnimationByName("Push", 1.0f);  // New API
+    EXPECT_TRUE(success1);
+
+    // Play external animation via name + sourceId
+    std::vector<std::string> externalAnims = animator->getAnimationsInSource("external_source");
+    if (externalAnims.size() > 0) {
+        bool success2 = animator->applyAnimation("external_source", externalAnims[0].c_str(), 1.0f);
+        EXPECT_TRUE(success2) << "Should be able to play external animation via name-based API";
+    }
+
+    // === Verify internal count unchanged after all playback ===
+    size_t finalCount = animator->getAnimationCount();
+    EXPECT_EQ(finalCount, 3) << "Internal animation count should still be 3";
+
+    // === Clear external cache - internal animations remain accessible ===
+    animator->clearAnimationCache();
+
+    size_t countAfterClear = animator->getAnimationCount();
+    EXPECT_EQ(countAfterClear, 3) << "Internal animations should remain after clearing cache";
+
+    // Index-based API should still work for internal animations
+    const char* nameAfterClear = animator->getAnimationName(0);
+    ASSERT_NE(nameAfterClear, nullptr);
+    EXPECT_STREQ(nameAfterClear, "Pull");
+
+    // Cleanup
+    mLoader->destroyAsset(meshAsset);
+}
+
+TEST_F(AnimatorTest, GltfioCompatibilityCrossFade) {
+    // Load asset with multiple internal animations
+    auto meshData = readBinaryFile("ecorche_full.glb");
+    if (meshData.empty()) {
+        GTEST_SKIP() << "Test asset not found: ecorche_full.glb";
+    }
+
+    FilamentAsset* meshAsset = mLoader->createAsset(meshData.data(), meshData.size());
+    ASSERT_NE(meshAsset, nullptr);
+    mResourceLoader->loadResources(meshAsset);
+
+    FilamentInstance* instance = meshAsset->getInstance();
+    auto* animator = instance->getAnimator();
+    ASSERT_NE(animator, nullptr);
+
+    // Verify we have internal animations
+    size_t animCount = animator->getAnimationCount();
+    ASSERT_GE(animCount, 2) << "Need at least 2 animations for crossfade test";
+
+    // Apply current animation (animation 0)
+    animator->applyAnimation(0, 1.0f);
+
+    // Test 1: Cross-fade from previous animation (animation 1) using index-based API
+    EXPECT_NO_THROW({
+        animator->applyCrossFade(1, 0.5f, 0.3f);  // previousAnimIndex=1, previousTime=0.5s, alpha=0.3
+    }) << "applyCrossFade with valid index should not throw";
+
+    // Test 2: Cross-fade from animation 0 to current
+    animator->applyAnimation(1, 2.0f);  // Switch to animation 1
+    EXPECT_NO_THROW({
+        animator->applyCrossFade(0, 1.5f, 0.7f);  // Cross-fade from animation 0
+    });
+
+    // Test 3: Invalid index should be handled gracefully
+    EXPECT_NO_THROW({
+        animator->applyCrossFade(999, 1.0f, 0.5f);  // Invalid index
+    }) << "applyCrossFade with invalid index should not crash (just log warning)";
+
+    // Test 4: Boundary case - index at internal animation count
+    size_t invalidIndex = animator->getAnimationCount();
+    EXPECT_NO_THROW({
+        animator->applyCrossFade(invalidIndex, 1.0f, 0.5f);
+    }) << "applyCrossFade with boundary index should not crash";
+
+    // Test 5: Verify crossfade works with index 0
+    EXPECT_NO_THROW({
+        animator->applyAnimation(1, 1.0f);
+        animator->applyCrossFade(0, 0.5f, 0.5f);  // 50/50 blend
+    });
+
+    // Cleanup
+    mLoader->destroyAsset(meshAsset);
+}
+
+// ============================================================================
 // INTEGRATION TESTS
 // ============================================================================
 

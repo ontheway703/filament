@@ -87,6 +87,101 @@ public:
      */
     bool resetToBindPose();
 
+    // ========================================
+    // gltfio 兼容 API (Backward Compatibility)
+    // ========================================
+
+    /**
+     * Applies rotation, translation, and scale to entities that have been targeted by the given
+     * animation definition. Uses TransformManager.
+     *
+     * This is the legacy index-based API from gltfio, kept for backward compatibility.
+     * It only works with internal (embedded) animations in the asset.
+     *
+     * @param animationIndex Zero-based index for the animation of interest.
+     * @param time Elapsed time of interest in seconds.
+     *
+     * @deprecated For external animations loaded via loadAnimationsFromSource(),
+     *             use applyAnimationByName() or applyAnimation(sourceId, name, time) instead.
+     *
+     * NOTE: This method only affects internal animations embedded in the asset.
+     *       External animations loaded into the cache are not accessible via index.
+     */
+    void applyAnimation(size_t animationIndex, float time) const;
+
+    /**
+     * Returns the number of internal (embedded) animations in the asset.
+     *
+     * This is the legacy API from gltfio, kept for backward compatibility.
+     *
+     * @return Number of internal animations. Does NOT include external animations
+     *         loaded via loadAnimationsFromSource().
+     *
+     * @deprecated For external animations, use getLoadedSources() and
+     *             getAnimationsInSource(sourceId) instead.
+     *
+     * NOTE: External animations in the cache are managed separately and not counted here.
+     */
+    size_t getAnimationCount() const;
+
+    /**
+     * Returns the duration of the specified internal animation in seconds.
+     *
+     * This is the legacy index-based API from gltfio, kept for backward compatibility.
+     *
+     * @param animationIndex Zero-based index for the animation of interest.
+     * @return Animation duration in seconds, or 0 if index is invalid.
+     *
+     * @deprecated For external animations, use getAnimationDurationByName() or
+     *             getAnimationDuration(sourceId, name) instead.
+     *
+     * NOTE: This method only works with internal animations embedded in the asset.
+     */
+    float getAnimationDuration(size_t animationIndex) const;
+
+    /**
+     * Returns the name of the specified internal animation, or nullptr if none was specified.
+     *
+     * This is the legacy index-based API from gltfio, kept for backward compatibility.
+     *
+     * @param animationIndex Zero-based index for the animation of interest.
+     * @return Animation name, or nullptr if index is invalid or animation has no name.
+     *
+     * @deprecated For external animations, use getAnimationsInSource(sourceId) instead.
+     *
+     * NOTE: This method only works with internal animations embedded in the asset.
+     */
+    const char* getAnimationName(size_t animationIndex) const;
+
+    /**
+     * Applies a blended transform to the union of nodes affected by two animations.
+     * Used for cross-fading from a previous skinning-based animation or rigid body animation.
+     *
+     * This is the legacy index-based API from gltfio, kept for backward compatibility.
+     *
+     * First, this stashes the current transform hierarchy into a transient memory buffer.
+     *
+     * Next, this applies previousAnimIndex / previousAnimTime to the actual asset by internally
+     * calling applyAnimation().
+     *
+     * Finally, the stashed local transforms are lerped (via the scale / translation / rotation
+     * components) with their live counterparts, and the results are pushed to the asset.
+     *
+     * To achieve a cross fade effect with skinned models, clients will typically call animator
+     * methods in this order: (1) applyAnimation (2) applyCrossFade (3) updateBoneMatrices. The
+     * animation that clients pass to applyAnimation is the "current" animation corresponding to
+     * alpha=1, while the "previous" animation passed to applyCrossFade corresponds to alpha=0.
+     *
+     * @param previousAnimIndex Zero-based index for the previous animation
+     * @param previousAnimTime Previous animation time in seconds
+     * @param alpha Blend factor (0.0 = previous animation, 1.0 = current animation)
+     *
+     * @deprecated For external animations, use applyCrossFade(sourceId, animName, time, alpha) instead.
+     *
+     * NOTE: This method only works with internal animations embedded in the asset.
+     */
+    void applyCrossFade(size_t previousAnimIndex, float previousAnimTime, float alpha);
+
     /**
      * Applies a blended transform to the union of nodes affected by two animations.
      * Used for cross-fading from a previous skinning-based animation or rigid body animation.
