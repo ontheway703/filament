@@ -237,6 +237,13 @@ public:
     }
 
     /**
+     * Gets how many named nodes were considered during matching.
+     */
+    size_t getEligibleNodeCount() const {
+        return mEligibleNodeCount;
+    }
+
+    /**
      * Validates the current mapping.
      *
      * Checks that all mapped TransformManager::Instance objects are still alive.

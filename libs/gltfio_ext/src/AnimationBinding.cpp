@@ -19,6 +19,8 @@
 
 #include <utils/Log.h>
 
+#include <unordered_set>
+
 using namespace utils;
 
 namespace filament::gltfio_ext {
@@ -225,11 +227,54 @@ void AnimationBinding::buildResidentBoneMap(std::map<std::string, Entity>& outMa
         entityCount = mAsset->getEntityCount();
     }
 
+    // 收集驻留骨骼的实体（仅包含 skin joints）
+    std::unordered_set<Entity, Entity::Hasher> skeletonEntities;
+    auto collectSkeletonEntities = [&](const FilamentInstance* source) {
+        if (!source) {
+            return;
+        }
+        size_t skinCount = source->getSkinCount();
+        for (size_t skinIndex = 0; skinIndex < skinCount; ++skinIndex) {
+            const Entity* joints = source->getJointsAt(skinIndex);
+            size_t jointCount = source->getJointCountAt(skinIndex);
+            if (!joints) {
+                continue;
+            }
+            for (size_t joint = 0; joint < jointCount; ++joint) {
+                skeletonEntities.insert(joints[joint]);
+            }
+        }
+    };
+
+    if (mInstance) {
+        collectSkeletonEntities(mInstance);
+    } else if (mAsset) {
+        // 如果 AnimationBinding 是针对资产而非实例构建的，
+        // 尝试使用资产提供的默认实例收集骨骼实体
+        auto* mutableAsset = const_cast<FilamentAsset*>(mAsset);
+        if (auto* defaultInstance = mutableAsset ? mutableAsset->getInstance() : nullptr) {
+            collectSkeletonEntities(defaultInstance);
+        }
+    }
+
+    const bool hasSkeletonFilter = !skeletonEntities.empty();
+    if (hasSkeletonFilter) {
+        slog.i << "AnimationBinding: restricting resident bones to "
+               << skeletonEntities.size() << " joints ("
+               << entityCount << " entities in asset)" << io::endl;
+    } else {
+        slog.w << "AnimationBinding: skeleton joint set is empty, falling back to all "
+               << entityCount << " named entities (risk of non-skeleton matches)" << io::endl;
+    }
+
     // 直接通过 entity 查询名称
     // mNameProvider->getName(Entity) 接受任何 entity，通过 NameComponentManager 查询名称
     // 这样可以正确处理 instance 的 entity（即使它们在 owner asset 的实体数组中位于任意位置）
     for (size_t i = 0; i < entityCount; i++) {
         Entity entity = instanceEntities[i];
+        if (hasSkeletonFilter && skeletonEntities.find(entity) == skeletonEntities.end()) {
+            continue;  // 仅保留真正的骨骼节点，避免 Mesh/Camera 等名称冲突
+        }
         // 直接用当前 entity 查询名称
         const char* name = mNameProvider->getName(entity);
         if (name && name[0] != '\0') {

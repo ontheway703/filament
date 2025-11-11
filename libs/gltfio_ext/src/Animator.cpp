@@ -1504,10 +1504,33 @@ size_t AnimatorImpl::loadAnimationsFromSource(const std::string& sourceId, Anima
         return 0;
     }
 
+    float matchRate = binding->getMatchRate();
+    const auto& nodeToEntityMap = binding->getNodeToEntityMap();
+    const auto& unmatchedBones = binding->getUnmatchedBones();
+
+    slog.i << "AnimationBinding stats for source '" << sourceId << "': "
+           << "match rate=" << (matchRate * 100.0f) << "%, "
+           << "mapped bones=" << nodeToEntityMap.size()
+           << ", eligible named nodes=" << binding->getEligibleNodeCount()
+           << io::endl;
+
+    if (!unmatchedBones.empty()) {
+        slog.w << "Unmatched bones (" << unmatchedBones.size() << "):" << io::endl;
+        size_t printed = 0;
+        for (const auto& bone : unmatchedBones) {
+            if (printed >= 10) {
+                slog.w << "  ... (" << (unmatchedBones.size() - printed)
+                       << " more)" << io::endl;
+                break;
+            }
+            slog.w << "  - " << bone << io::endl;
+            printed++;
+        }
+    }
+
     // ========================================
     // 5. 转换并缓存所有动画
     // ========================================
-    const auto& nodeToEntityMap = binding->getNodeToEntityMap();
     size_t loadedCount = 0;
 
     for (size_t i = 0; i < animCount; i++) {
