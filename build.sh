@@ -630,10 +630,16 @@ function build_ios_target {
     local arch=$2
     local platform=$3
 
-    echo "Building iOS ${lc_target} (${arch}) for ${platform}..."
-    mkdir -p "out/cmake-ios-${lc_target}-${arch}"
+    # Add platform suffix for simulator to avoid directory conflict with device builds
+    local dir_suffix=""
+    if [[ "${platform}" == "iphonesimulator" ]]; then
+        dir_suffix="-simulator"
+    fi
 
-    pushd "out/cmake-ios-${lc_target}-${arch}" > /dev/null
+    echo "Building iOS ${lc_target} (${arch}) for ${platform}..."
+    mkdir -p "out/cmake-ios-${lc_target}-${arch}${dir_suffix}"
+
+    pushd "out/cmake-ios-${lc_target}-${arch}${dir_suffix}" > /dev/null
 
     if [[ ! -d "CMakeFiles" ]] || [[ "${ISSUE_CMAKE_ALWAYS}" == "true" ]]; then
         cmake \
@@ -651,7 +657,7 @@ function build_ios_target {
             ${MATOPT_OPTION} \
             ${STEREOSCOPIC_OPTION} \
             ../..
-        ln -sf "out/cmake-ios-${lc_target}-${arch}/compile_commands.json" \
+        ln -sf "out/cmake-ios-${lc_target}-${arch}${dir_suffix}/compile_commands.json" \
            ../../compile_commands.json
     fi
 
@@ -693,7 +699,7 @@ function build_ios {
     if [[ "${ISSUE_DEBUG_BUILD}" == "true" ]]; then
         build_ios_target "Debug" "arm64" "iphoneos"
         if [[ "${IOS_BUILD_SIMULATOR}" == "true" ]]; then
-            build_ios_target "Debug" "x86_64" "iphonesimulator"
+            build_ios_target "Debug" "arm64" "iphonesimulator"
         fi
 
         if [[ "${BUILD_UNIVERSAL_LIBRARIES}" == "true" ]]; then
@@ -711,7 +717,7 @@ function build_ios {
     if [[ "${ISSUE_RELEASE_BUILD}" == "true" ]]; then
         build_ios_target "Release" "arm64" "iphoneos"
         if [[ "${IOS_BUILD_SIMULATOR}" == "true" ]]; then
-            build_ios_target "Release" "x86_64" "iphonesimulator"
+            build_ios_target "Release" "arm64" "iphonesimulator"
         fi
 
         if [[ "${BUILD_UNIVERSAL_LIBRARIES}" == "true" ]]; then
