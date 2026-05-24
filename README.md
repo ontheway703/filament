@@ -1,5 +1,7 @@
 # Filament
 
+> XMuscle fork maintenance notes: see [XMUSCLE_README.md](XMUSCLE_README.md).
+
 [![Android Build Status](https://github.com/google/filament/workflows/Android/badge.svg)](https://github.com/google/filament/actions?query=workflow%3AAndroid)
 [![iOS Build Status](https://github.com/google/filament/workflows/iOS/badge.svg)](https://github.com/google/filament/actions?query=workflow%3AiOS)
 [![Linux Build Status](https://github.com/google/filament/workflows/Linux/badge.svg)](https://github.com/google/filament/actions?query=workflow%3ALinux)
