@@ -79,35 +79,50 @@ Filament.loadClassExtensions = function() {
     /// canvas ::argument:: the canvas DOM element
     /// options ::argument:: optional WebGL 2.0 context configuration
     /// ::retval:: an instance of [Engine]
-    Filament.Engine.create = function(canvas, options) {
-        const defaults = {
-            majorVersion: 2,
-            minorVersion: 0,
-            antialias: false,
-            depth: true,
-            alpha: false
-        };
-        options = Object.assign(defaults, options);
+    Filament.Engine.create = function (canvas, options, config) {
+        if (!canvas.id) {
+            canvas.id = 'filament-canvas-' + Math.random().toString(36).substr(2, 9);
+        }
+        const canvasId = '#' + canvas.id;
 
-        // Create the WebGL 2.0 context.
-        const ctx = canvas.getContext("webgl2", options);
+        const backend = (options && options.backend !== undefined) ?
+              options.backend : Filament.Backend.DEFAULT;
 
-        // Enable all desired extensions by calling getExtension on each one.
-        ctx.getExtension('WEBGL_compressed_texture_s3tc');
-        ctx.getExtension('WEBGL_compressed_texture_s3tc_srgb');
-        ctx.getExtension('WEBGL_compressed_texture_astc');
-        ctx.getExtension('WEBGL_compressed_texture_etc');
+        if (backend !== Filament.Backend.WEBGPU) {
+            const defaults = {
+                majorVersion: 2,
+                minorVersion: 0,
+                antialias: false,
+                depth: true,
+                alpha: false
+            };
+            const glOptions = Object.assign(defaults, options);
 
-        // These transient globals are used temporarily during Engine construction.
-        window.filament_glOptions = options;
-        window.filament_glContext = ctx;
+            // Create the WebGL 2.0 context.
+            const ctx = canvas.getContext("webgl2", glOptions);
+
+            // Enable all desired extensions by calling getExtension on each one.
+            ctx.getExtension('WEBGL_compressed_texture_s3tc');
+            ctx.getExtension('WEBGL_compressed_texture_s3tc_srgb');
+            ctx.getExtension('WEBGL_compressed_texture_astc');
+            ctx.getExtension('WEBGL_compressed_texture_etc');
+
+            // These transient globals are used temporarily during Engine construction.
+            window.filament_glOptions = glOptions;
+            window.filament_glContext = ctx;
+        }
 
         // Register the GL context with emscripten and create the Engine.
-        const engine = Filament.Engine._create();
+        const defaultConfig = Filament.Engine.createDefaultConfig();
+        const finalConfig = Object.assign(defaultConfig, config);
+        const engine = Filament.Engine._create(backend, finalConfig);
 
         // Annotate the engine with the GL context to support multiple canvases.
-        engine.context = window.filament_glContext;
-        engine.handle = window.filament_contextHandle;
+        if (backend !== Filament.Backend.WEBGPU) {
+            engine.context = window.filament_glContext;
+            engine.handle = window.filament_contextHandle;
+        }
+        engine.canvasId = canvasId;
 
         // Ensure that we do not pollute the global namespace.
         delete window.filament_glOptions;
@@ -115,6 +130,13 @@ Filament.loadClassExtensions = function() {
         delete window.filament_contextHandle;
 
         return engine;
+    };
+
+    Filament.Engine.prototype.createSwapChain = function() {
+        if (this.canvasId) {
+            return this._createSwapChainForCanvas(this.canvasId);
+        }
+        return this._createSwapChain();
     };
 
     Filament.Engine.prototype.execute = function() {
@@ -125,10 +147,12 @@ Filament.loadClassExtensions = function() {
 
     /// createMaterial ::method::
     /// package ::argument:: asset string, or Uint8Array, or [Buffer] with filamat contents
+    /// options ::argument:: optional dictionary with `uboBatching` key.
     /// ::retval:: an instance of [createMaterial]
-    Filament.Engine.prototype.createMaterial = function(buffer) {
+    Filament.Engine.prototype.createMaterial = function(buffer, options) {
         buffer = getBufferDescriptor(buffer);
-        const result = this._createMaterial(buffer);
+        const uboBatching = (options && options.uboBatching) || Filament.Material$UboBatchingMode.DEFAULT; // The default is DEFAULT
+        const result = this._createMaterial(buffer, uboBatching);
         buffer.delete();
         return result;
     };

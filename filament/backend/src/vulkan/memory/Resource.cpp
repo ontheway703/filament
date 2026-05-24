@@ -38,6 +38,12 @@ template ResourceType getTypeEnum<VulkanDescriptorSetLayout>() noexcept;
 template ResourceType getTypeEnum<VulkanDescriptorSet>() noexcept;
 template ResourceType getTypeEnum<VulkanFence>() noexcept;
 template ResourceType getTypeEnum<VulkanBuffer>() noexcept;
+template ResourceType getTypeEnum<VulkanSync>() noexcept;
+template ResourceType getTypeEnum<VulkanMemoryMappedBuffer>() noexcept;
+template ResourceType getTypeEnum<VulkanSemaphore>() noexcept;
+template ResourceType getTypeEnum<VulkanStream>() noexcept;
+template ResourceType getTypeEnum<VulkanFramebuffer>() noexcept;
+template ResourceType getTypeEnum<VulkanRenderPass>() noexcept;
 
 template<typename D>
 ResourceType getTypeEnum() noexcept {
@@ -92,6 +98,24 @@ ResourceType getTypeEnum() noexcept {
     if constexpr (std::is_same_v<D, VulkanBuffer>) {
         return ResourceType::VULKAN_BUFFER;
     }
+    if constexpr (std::is_same_v<D, VulkanSync>) {
+        return ResourceType::SYNC;
+    }
+    if constexpr (std::is_same_v<D, VulkanMemoryMappedBuffer>) {
+        return ResourceType::MEMORY_MAPPED_BUFFER;
+    }
+    if constexpr (std::is_same_v<D, VulkanSemaphore>) {
+        return ResourceType::SEMAPHORE;
+    }
+    if constexpr (std::is_same_v<D, VulkanStream>) {
+        return ResourceType::STREAM;
+    }
+    if constexpr (std::is_same_v<D, VulkanFramebuffer>) {
+        return ResourceType::FRAMEBUFFER;
+    }
+    if constexpr (std::is_same_v<D, VulkanRenderPass>) {
+        return ResourceType::RENDER_PASS;
+    }
     return ResourceType::UNDEFINED_TYPE;
 }
 
@@ -131,6 +155,18 @@ std::string_view getTypeStr(ResourceType type) {
             return "Fence";
         case ResourceType::VULKAN_BUFFER:
             return "VulkanBuffer";
+        case ResourceType::SYNC:
+            return "Sync";
+        case ResourceType::MEMORY_MAPPED_BUFFER:
+            return "VulkanMemoryMappedBuffer";
+        case ResourceType::SEMAPHORE:
+            return "Semaphore";
+        case ResourceType::STREAM:
+            return "VulkanStream";
+        case ResourceType::FRAMEBUFFER:
+            return "Framebuffer";
+        case ResourceType::RENDER_PASS:
+            return "RenderPass";
         case ResourceType::UNDEFINED_TYPE:
             return "";
     }

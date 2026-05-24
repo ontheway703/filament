@@ -77,6 +77,9 @@ struct MaterialInputs {
 #if defined(MATERIAL_HAS_TRANSMISSION)
     float transmission;
 #endif
+#if defined(MATERIAL_HAS_DISPERSION) && (REFRACTION_TYPE == REFRACTION_TYPE_SOLID)
+    float dispersion;
+#endif
 #if defined(MATERIAL_HAS_IOR)
     float ior;
 #endif
@@ -100,6 +103,10 @@ struct MaterialInputs {
 
 #if defined(MATERIAL_HAS_SHADOW_STRENGTH)
     float shadowStrength;
+#endif
+
+#if defined(FRAG_OUTPUT0)
+    FRAG_OUTPUT_PRECISION0 FRAG_OUTPUT_MATERIAL_TYPE0 FRAG_OUTPUT0;
 #endif
 
 };
@@ -178,6 +185,9 @@ void initMaterial(out MaterialInputs material) {
 #if defined(MATERIAL_HAS_TRANSMISSION)
     material.transmission = 1.0;
 #endif
+#if defined(MATERIAL_HAS_DISPERSION) && (REFRACTION_TYPE == REFRACTION_TYPE_SOLID)
+    material.dispersion = 0.0f;
+#endif
 #if defined(MATERIAL_HAS_IOR)
     material.ior = 1.5;
 #endif
@@ -201,6 +211,10 @@ void initMaterial(out MaterialInputs material) {
 
 #if defined(MATERIAL_HAS_SHADOW_STRENGTH)
     material.shadowStrength = 0.0;
+#endif
+
+#if defined(FRAG_OUTPUT0)
+    material.FRAG_OUTPUT0 = FRAG_OUTPUT_MATERIAL_TYPE0(0.0);
 #endif
 }
 

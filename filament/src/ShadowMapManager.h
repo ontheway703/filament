@@ -47,9 +47,13 @@
 #include <utils/Slice.h>
 
 #include <math/mat4.h>
+#include <math/half.h>
+#include <math/vec2.h>
 #include <math/vec4.h>
 
+#include <algorithm>
 #include <array>
+#include <limits>
 #include <memory>
 #include <new>
 #include <type_traits>
@@ -72,6 +76,7 @@ struct ShadowMappingUniforms {
     float ssContactShadowDistance;
     uint32_t directionalShadows;
     uint32_t cascades;
+    math::float2 atlasResolution;
 };
 
 class ShadowMapManager {
@@ -123,15 +128,30 @@ public:
 
     // Updates all the shadow maps and performs culling.
     // Returns true if any of the shadow maps have visible shadows.
-    ShadowTechnique update(Builder const& builder,
-            FEngine& engine, FView& view,
-            CameraInfo const& cameraInfo,
-            FScene::RenderableSoa& renderableData, FScene::LightSoa const& lightData) noexcept;
+    ShadowTechnique update(backend::DriverApi& driver,
+            Builder const& builder, FEngine& engine,
+            FView& view,
+            CameraInfo const& cameraInfo, FScene::RenderableSoa& renderableData, FScene::LightSoa const& lightData) noexcept;
 
     // Renders all the shadow maps.
     FrameGraphId<FrameGraphTexture> render(FEngine& engine, FrameGraph& fg,
             RenderPassBuilder const& passBuilder,
             FView& view, CameraInfo const& mainCameraInfo, math::float4 const& userTime) noexcept;
+
+    FrameGraphId<FrameGraphTexture> gaussianBlurSeparatedPass(
+        FEngine& engine,
+        FrameGraph& fg,
+        FrameGraphId<FrameGraphTexture> input,
+        FrameGraphId<FrameGraphTexture> output,
+        utils::FixedCapacityVector<ShadowMap const*> shadowMapList,
+        math::int2 dir);
+
+    FrameGraphId<FrameGraphTexture> vsmMipmapPass(
+            FEngine& engine,
+            FrameGraph& fg,
+            FrameGraphId<FrameGraphTexture> input, uint8_t layer, size_t level,
+            math::float4 clearColor) noexcept;
+
 
     // valid after calling update() above
     ShadowMappingUniforms getShadowMappingUniforms() const noexcept {
@@ -144,6 +164,32 @@ public:
 
     // for debugging only
     utils::FixedCapacityVector<Camera const*> getDirectionalShadowCameras() const noexcept;
+
+    static float getMaxMomentEVSM(VsmShadowOptions const& vsmShadowOptions) noexcept {
+        return vsmShadowOptions.highPrecision ?
+                std::numeric_limits<float>::max() :
+                float(std::numeric_limits<math::half>::max());
+    }
+
+    static float getMaxWrapExponentEVSM(VsmShadowOptions const& vsmShadowOptions) noexcept {
+        constexpr float low  = 5.2f;  // ~ std::log(std::numeric_limits<math::half>::max()) * 0.5f;
+        constexpr float high = 40.0f; // ~ std::log(std::numeric_limits<float>::max()) * 0.5f;
+        return vsmShadowOptions.highPrecision ? high : low;
+    }
+
+    static float getWrapExponentEVSM(
+            VsmShadowOptions const& vsmShadowOptions,
+            LightManager::ShadowOptions const& options) noexcept {
+        constexpr float ABSOLUTE_FILTER_LIMIT = 42.0f;
+        float const targetExponent = getMaxWrapExponentEVSM(vsmShadowOptions);
+        float const effectiveFilterRadius = std::max(1.0f, options.vsm.blurWidth);
+        float const filterCeiling = ABSOLUTE_FILTER_LIMIT / effectiveFilterRadius;
+        return std::min(targetExponent, filterCeiling);
+    }
+
+    ShadowMap::ShaderParameters const& getCascadeShaderParameters(size_t index) const noexcept {
+        return mCascadesShaderParameters[index];
+    }
 
 private:
     explicit ShadowMapManager(FEngine& engine);
@@ -216,6 +262,7 @@ private:
         uint8_t levels = 0;
         uint8_t msaaSamples = 1;
         backend::TextureFormat format = backend::TextureFormat::DEPTH16;
+        math::float4 clearColor{};
     } mTextureAtlasRequirements;
 
     SoftShadowOptions mSoftShadowOptions;
@@ -226,6 +273,8 @@ private:
     ShadowMappingUniforms mShadowMappingUniforms = {};
 
     ShadowMap::SceneInfo mSceneInfo;
+
+    ShadowMap::ShaderParameters mCascadesShaderParameters[4]{};
 
     // Inline storage for all our ShadowMap objects, we can't easily use a std::array<> directly.
     // Because ShadowMap doesn't have a default ctor, and we avoid out-of-line allocations.
@@ -238,6 +287,7 @@ private:
     bool const mIsDepthClampSupported;
     bool mInitialized = false;
     bool mFeatureShadowAllocator = false;
+    bool mDisableBlitIntoTextureArray = false;
 
     ShadowMap& getShadowMap(size_t const index) noexcept {
         assert_invariant(index < mShadowMapCache.size());
@@ -245,19 +295,26 @@ private:
     }
 
     ShadowMap const& getShadowMap(size_t const index) const noexcept {
-        return const_cast<ShadowMapManager*>(this)->getShadowMap(index);
+        assert_invariant(index < mShadowMapCache.size());
+        return *std::launder(reinterpret_cast<ShadowMap const*>(&mShadowMapCache[index]));
     }
 
     utils::Slice<ShadowMap> getCascadedShadowMap() noexcept {
+        ShadowMap* const p = &getShadowMap(0);
+        return { p, mDirectionalShadowMapCount };
+    }
+
+    utils::Slice<const ShadowMap> getCascadedShadowMap() const noexcept {
         ShadowMap const* const p = &getShadowMap(0);
         return { p, mDirectionalShadowMapCount };
     }
 
-    utils::Slice<ShadowMap> getCascadedShadowMap() const noexcept {
-        return const_cast<ShadowMapManager*>(this)->getCascadedShadowMap();
+    utils::Slice<ShadowMap> getSpotShadowMaps() noexcept {
+        ShadowMap* const p = &getShadowMap(CONFIG_MAX_SHADOW_CASCADES);
+        return { p, mSpotShadowMapCount };
     }
 
-    utils::Slice<ShadowMap> getSpotShadowMaps() const noexcept {
+    utils::Slice<const ShadowMap> getSpotShadowMaps() const noexcept {
         ShadowMap const* const p = &getShadowMap(CONFIG_MAX_SHADOW_CASCADES);
         return { p, mSpotShadowMapCount };
     }

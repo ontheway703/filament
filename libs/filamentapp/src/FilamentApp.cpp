@@ -16,6 +16,8 @@
 
 #include <filamentapp/FilamentApp.h>
 
+#include "KeyInputConversion.h"
+
 #if defined(WIN32)
 #    include <SDL_syswm.h>
 #    include <utils/unwindows.h>
@@ -40,16 +42,27 @@
 #include <filament/SwapChain.h>
 #include <filament/View.h>
 
+#include <backend/Platform.h>
+
 #ifndef NDEBUG
 #include <filament/DebugRegistry.h>
 #endif
 
 #if defined(FILAMENT_DRIVER_SUPPORTS_VULKAN)
 #include <backend/platforms/VulkanPlatform.h>
+#include <filamentapp/VulkanPlatformHelper.h>
 #endif
 
 #if defined(FILAMENT_SUPPORTS_WEBGPU)
-#include <backend/platforms/WebGPUPlatform.h>
+    #if defined(__ANDROID__)
+        #include "backend/platforms/WebGPUPlatformAndroid.h"
+    #elif defined(__APPLE__)
+        #include "backend/platforms/WebGPUPlatformApple.h"
+    #elif defined(__linux__)
+        #include "backend/platforms/WebGPUPlatformLinux.h"
+    #elif defined(WIN32)
+        #include "backend/platforms/WebGPUPlatformWindows.h"
+    #endif
 #endif
 
 #include <filagui/ImGuiHelper.h>
@@ -65,6 +78,10 @@
 #include <memory>
 #include <vector>
 
+#ifdef __EXCEPTIONS
+#include <exception>
+#endif
+
 #include <stdint.h>
 
 #include "generated/resources/filamentapp.h"
@@ -78,38 +95,16 @@ namespace {
 
 using namespace filament::backend;
 
-#if defined(FILAMENT_DRIVER_SUPPORTS_VULKAN)
-class FilamentAppVulkanPlatform : public VulkanPlatform {
-public:
-    FilamentAppVulkanPlatform(char const* gpuHintCstr) {
-        utils::CString gpuHint{ gpuHintCstr };
-        if (gpuHint.empty()) {
-            return;
-        }
-        VulkanPlatform::Customization::GPUPreference pref;
-        // Check to see if it is an integer, if so turn it into an index.
-        if (std::all_of(gpuHint.begin(), gpuHint.end(), ::isdigit)) {
-            char* p_end {};
-            pref.index = static_cast<int8_t>(std::strtol(gpuHint.c_str(), &p_end, 10));
-        } else {
-            pref.deviceName = gpuHint;
-        }
-        mCustomization = {
-            .gpu = pref
-        };
-    }
-
-    virtual VulkanPlatform::Customization getCustomization() const noexcept override {
-        return mCustomization;
-    }
-
-private:
-    VulkanPlatform::Customization mCustomization;
-};
-#endif
-
 #if defined(FILAMENT_SUPPORTS_WEBGPU)
-class FilamentAppWebGPUPlatform : public WebGPUPlatform {
+    #if defined(__ANDROID__)
+        class FilamentAppWebGPUPlatform : public WebGPUPlatformAndroid {
+    #elif defined(__APPLE__)
+        class FilamentAppWebGPUPlatform : public WebGPUPlatformApple {
+    #elif defined(__linux__)
+        class FilamentAppWebGPUPlatform : public WebGPUPlatformLinux {
+    #elif defined(WIN32)
+        class FilamentAppWebGPUPlatform : public WebGPUPlatformWindows {
+    #endif
 public:
     FilamentAppWebGPUPlatform(Config::WebGPUBackend backend)
         : mBackend(backend) {}
@@ -138,7 +133,7 @@ private:
 };
 #endif
 
-} // anonymous namespace
+}
 
 FilamentApp& FilamentApp::get() {
     static FilamentApp filamentApp;
@@ -238,27 +233,6 @@ void FilamentApp::run(const Config& config, SetupCallback setupCallback,
             SDL_GetWindowWMInfo(window->getSDLWindow(), &wmInfo);
             ImGui::GetMainViewport()->PlatformHandleRaw = wmInfo.info.win.window;
         #endif
-        io.KeyMap[ImGuiKey_Tab] = SDL_SCANCODE_TAB;
-        io.KeyMap[ImGuiKey_LeftArrow] = SDL_SCANCODE_LEFT;
-        io.KeyMap[ImGuiKey_RightArrow] = SDL_SCANCODE_RIGHT;
-        io.KeyMap[ImGuiKey_UpArrow] = SDL_SCANCODE_UP;
-        io.KeyMap[ImGuiKey_DownArrow] = SDL_SCANCODE_DOWN;
-        io.KeyMap[ImGuiKey_PageUp] = SDL_SCANCODE_PAGEUP;
-        io.KeyMap[ImGuiKey_PageDown] = SDL_SCANCODE_PAGEDOWN;
-        io.KeyMap[ImGuiKey_Home] = SDL_SCANCODE_HOME;
-        io.KeyMap[ImGuiKey_End] = SDL_SCANCODE_END;
-        io.KeyMap[ImGuiKey_Insert] = SDL_SCANCODE_INSERT;
-        io.KeyMap[ImGuiKey_Delete] = SDL_SCANCODE_DELETE;
-        io.KeyMap[ImGuiKey_Backspace] = SDL_SCANCODE_BACKSPACE;
-        io.KeyMap[ImGuiKey_Space] = SDL_SCANCODE_SPACE;
-        io.KeyMap[ImGuiKey_Enter] = SDL_SCANCODE_RETURN;
-        io.KeyMap[ImGuiKey_Escape] = SDL_SCANCODE_ESCAPE;
-        io.KeyMap[ImGuiKey_A] = SDL_SCANCODE_A;
-        io.KeyMap[ImGuiKey_C] = SDL_SCANCODE_C;
-        io.KeyMap[ImGuiKey_V] = SDL_SCANCODE_V;
-        io.KeyMap[ImGuiKey_X] = SDL_SCANCODE_X;
-        io.KeyMap[ImGuiKey_Y] = SDL_SCANCODE_Y;
-        io.KeyMap[ImGuiKey_Z] = SDL_SCANCODE_Z;
         io.SetClipboardTextFn = [](void*, const char* text) {
             SDL_SetClipboardText(text);
         };
@@ -278,6 +252,9 @@ void FilamentApp::run(const Config& config, SetupCallback setupCallback,
     SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
     SDL_Window* sdlWindow = window->getSDLWindow();
 
+#ifdef __EXCEPTIONS
+try {
+#endif
     while (!mClosed) {
         if (mWindowTitle != SDL_GetWindowTitle(sdlWindow)) {
             SDL_SetWindowTitle(sdlWindow, mWindowTitle.c_str());
@@ -292,7 +269,7 @@ void FilamentApp::run(const Config& config, SetupCallback setupCallback,
             cameraFocalLength = mCameraFocalLength;
             cameraNear = mCameraNear;
             cameraFar = mCameraFar;
-        }
+            }
 
         if (!UTILS_HAS_THREADING) {
             mEngine->execute();
@@ -332,15 +309,19 @@ void FilamentApp::run(const Config& config, SetupCallback setupCallback,
                         io.AddInputCharactersUTF8(event->text.text);
                         break;
                     }
-                    case SDL_KEYDOWN:
-                    case SDL_KEYUP: {
-                        int key = event->key.keysym.scancode;
-                        IM_ASSERT(key >= 0 && key < IM_ARRAYSIZE(io.KeysDown));
-                        io.KeysDown[key] = (event->type == SDL_KEYDOWN);
-                        io.KeyShift = ((SDL_GetModState() & KMOD_SHIFT) != 0);
-                        io.KeyAlt = ((SDL_GetModState() & KMOD_ALT) != 0);
-                        io.KeyCtrl = ((SDL_GetModState() & KMOD_CTRL) != 0);
-                        io.KeySuper = ((SDL_GetModState() & KMOD_GUI) != 0);
+                    case SDL_KEYUP:
+                    case SDL_KEYDOWN: {
+                        SDL_Scancode const scancode = event->key.keysym.scancode;
+                        SDL_Keycode const keycode = event->key.keysym.sym;
+
+                        auto modState = SDL_GetModState();
+                        io.AddKeyEvent(ImGuiMod_Ctrl, (modState & KMOD_CTRL) != 0);
+                        io.AddKeyEvent(ImGuiMod_Shift, (modState & KMOD_SHIFT) != 0);
+                        io.AddKeyEvent(ImGuiMod_Alt, (modState & KMOD_ALT) != 0);
+                        io.AddKeyEvent(ImGuiMod_Super, (modState & KMOD_GUI) != 0);
+                        io.AddKeyEvent(
+                                filamentapp_utils::ImGui_ImplSDL2_KeyEventToImGuiKey(keycode, scancode),
+                                event->type == SDL_KEYDOWN);
                         break;
                     }
                 }
@@ -397,10 +378,10 @@ void FilamentApp::run(const Config& config, SetupCallback setupCallback,
                     break;
                 case SDL_WINDOWEVENT:
                     switch (event.window.event) {
-                        case SDL_WINDOWEVENT_RESIZED:
+                    case SDL_WINDOWEVENT_RESIZED:
                             window->resize();
                             break;
-                        default:
+                    default:
                             break;
                     }
                     break;
@@ -588,6 +569,16 @@ void FilamentApp::run(const Config& config, SetupCallback setupCallback,
             ++mSkippedFrames;
         }
     }
+#ifdef __EXCEPTIONS
+} catch (Panic const& e) {
+    LOG(ERROR) << "Filament exception (terminate cleanly): " << e.what();
+    LOG(ERROR) << e.getCallStack();
+} catch (std::exception const& e) {
+    LOG(ERROR) << "System exception (terminate cleanly): " << e.what();
+} catch (...) {
+    LOG(ERROR) << "Unknown exception! (terminate cleanly)";
+}
+#endif
 
     if (mImGuiHelper) {
         mImGuiHelper.reset();
@@ -611,7 +602,7 @@ void FilamentApp::run(const Config& config, SetupCallback setupCallback,
 
 #if defined(FILAMENT_DRIVER_SUPPORTS_VULKAN)
     if (mVulkanPlatform) {
-        delete mVulkanPlatform;
+        filamentapp::destroyVulkanPlatform(mVulkanPlatform);
     }
 #endif
 
@@ -775,11 +766,11 @@ FilamentApp::Window::Window(FilamentApp* filamentApp,
         engineConfig.stereoscopicType = Engine::StereoscopicType::NONE;
 #endif
 
-        Platform* platform = nullptr;
+        backend::Platform* platform = nullptr;
 #if defined(FILAMENT_DRIVER_SUPPORTS_VULKAN)
         if (backend == Engine::Backend::VULKAN) {
             platform = mFilamentApp->mVulkanPlatform =
-                    new FilamentAppVulkanPlatform(config.vulkanGPUHint.c_str());
+                    filamentapp::createVulkanPlatform(config.vulkanGPUHint.c_str());
         }
 #endif
 
@@ -790,8 +781,17 @@ FilamentApp::Window::Window(FilamentApp* filamentApp,
         }
 #endif
 
-        return Engine::Builder()
-                .backend(backend)
+        Engine::Builder builder = Engine::Builder();
+
+        engineConfig.asynchronousMode = config.asynchronousMode;
+        if (engineConfig.asynchronousMode != AsynchronousMode::NONE) {
+            // This feature flag is forcibly enabled here, inheriting the setting from the Engine,
+            // purely to demonstrate the object's asynchronous behavior within Filament. Users
+            // should manage this flag at their discretion.
+            builder.feature("backend.enable_asynchronous_operation", true);
+        }
+
+        return builder.backend(backend)
                 .featureLevel(config.featureLevel)
                 .platform(platform)
                 .config(&engineConfig)
@@ -834,8 +834,8 @@ FilamentApp::Window::Window(FilamentApp* filamentApp,
         // Write back the active feature level.
         config.featureLevel = mFilamentApp->mEngine->getActiveFeatureLevel();
 
-        mSwapChain = mFilamentApp->mEngine->createSwapChain(
-                nativeSwapChain, filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER);
+        mSwapChain = mFilamentApp->mEngine->createSwapChain(nativeSwapChain,
+                filament::SwapChain::CONFIG_HAS_STENCIL_BUFFER);
     }
 
     mRenderer = mFilamentApp->mEngine->createRenderer();

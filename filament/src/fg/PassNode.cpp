@@ -19,15 +19,13 @@
 #include "fg/FrameGraph.h"
 #include "fg/details/ResourceNode.h"
 
-#include "ResourceAllocator.h"
+#include "TextureCache.h"
 
 #include <details/Texture.h>
 
 #include <utils/compiler.h>
 #include <utils/debug.h>
 #include <utils/CString.h>
-
-#include <string>
 
 using namespace filament::backend;
 
@@ -65,23 +63,23 @@ RenderPassNode::~RenderPassNode() noexcept = default;
 void RenderPassNode::execute(FrameGraphResources const& resources, DriverApi& driver) noexcept {
 
     FrameGraph& fg = mFrameGraph;
-    ResourceAllocatorInterface& resourceAllocator = fg.getResourceAllocator();
+    TextureCacheInterface& textureCache = fg.getTextureCache();
 
     // create the render targets
     for (auto& rt : mRenderTargetData) {
-        rt.devirtualize(fg, resourceAllocator);
+        rt.devirtualize(fg, textureCache);
     }
 
     mPassBase->execute(resources, driver);
 
     // destroy the render targets
     for (auto& rt : mRenderTargetData) {
-        rt.destroy(resourceAllocator);
+        rt.destroy(textureCache);
     }
 }
 
 uint32_t RenderPassNode::declareRenderTarget(FrameGraph& fg, FrameGraph::Builder&,
-        const char* name, FrameGraphRenderPass::Descriptor const& descriptor) {
+        utils::StaticString name, FrameGraphRenderPass::Descriptor const& descriptor) {
 
     RenderPassData data;
     data.name = name;
@@ -95,7 +93,7 @@ uint32_t RenderPassNode::declareRenderTarget(FrameGraph& fg, FrameGraph::Builder
 
     for (size_t i = 0; i < RenderPassData::ATTACHMENT_COUNT; i++) {
         FrameGraphId<FrameGraphTexture> const& handle =
-                data.descriptor.attachments.array[i];
+                data.descriptor.attachments[i];
         if (handle) {
             data.attachmentInfo[i] = handle;
 
@@ -150,7 +148,7 @@ void RenderPassNode::resolve() noexcept {
         constexpr size_t STENCIL_INDEX = MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT + 1;
 
         for (size_t i = 0; i < MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT + 2; i++) {
-            if (rt.descriptor.attachments.array[i]) {
+            if (rt.descriptor.attachments[i]) {
                 const TargetBufferFlags target = getTargetBufferFlagsAt(i);
 
                 rt.targetBufferFlags |= target;
@@ -174,8 +172,9 @@ void RenderPassNode::resolve() noexcept {
                 if (!rt.incoming[i] || !rt.incoming[i]->hasActiveWriters()) {
                     rt.backend.params.flags.discardStart |= target;
                 }
-                VirtualResource* pResource = mFrameGraph.getResource(rt.descriptor.attachments.array[i]);
-                Resource<FrameGraphTexture>* pTextureResource = static_cast<Resource<FrameGraphTexture>*>(pResource);
+                VirtualResource* pResource = mFrameGraph.getResource(rt.descriptor.attachments[i]);
+                Resource<FrameGraphTexture>* pTextureResource =
+                        static_cast<Resource<FrameGraphTexture>*>(pResource);
 
                 pImportedRenderTarget = pImportedRenderTarget ?
                         pImportedRenderTarget : pResource->asImportedRenderTarget();
@@ -250,7 +249,7 @@ void RenderPassNode::resolve() noexcept {
 }
 
 void RenderPassNode::RenderPassData::devirtualize(FrameGraph& fg,
-        ResourceAllocatorInterface& resourceAllocator) noexcept {
+        TextureCacheInterface& textureCache) noexcept {
     assert_invariant(any(targetBufferFlags));
     if (UTILS_LIKELY(!imported)) {
 
@@ -276,7 +275,7 @@ void RenderPassNode::RenderPassData::devirtualize(FrameGraph& fg,
             }
         }
 
-        backend.target = resourceAllocator.createRenderTarget(
+        backend.target = textureCache.createRenderTarget(
                 name, targetBufferFlags,
                 backend.params.viewport.width,
                 backend.params.viewport.height,
@@ -286,9 +285,9 @@ void RenderPassNode::RenderPassData::devirtualize(FrameGraph& fg,
 }
 
 void RenderPassNode::RenderPassData::destroy(
-        ResourceAllocatorInterface& resourceAllocator) const noexcept {
+        TextureCacheInterface& textureCache) const noexcept {
     if (UTILS_LIKELY(!imported)) {
-        resourceAllocator.destroyRenderTarget(backend.target);
+        textureCache.destroyRenderTarget(backend.target);
     }
 }
 
@@ -331,6 +330,52 @@ utils::CString RenderPassNode::graphvizify() const noexcept {
     return {};
 #endif
 }
+
+#if FILAMENT_ENABLE_FGVIEWER
+using RenderTargetInfo = fgviewer::FrameGraphInfo::Pass::RenderTargetInfo;
+using AttachmentInfo = fgviewer::FrameGraphInfo::Pass::AttachmentInfo;
+std::vector<RenderTargetInfo> RenderPassNode::getRenderTargetInfo() const noexcept {
+    using namespace backend;
+    std::vector<RenderTargetInfo> info;
+    info.reserve(mRenderTargetData.size());
+
+    for (auto const& rt: mRenderTargetData) {
+        RenderTargetInfo rtInfo;
+
+        auto extractAttachmentInfo = [&](TargetBufferFlags flags,
+                                             std::vector<AttachmentInfo>& list) {
+            for (size_t i = 0; i < RenderPassData::ATTACHMENT_COUNT; ++i) {
+                TargetBufferFlags mask = getTargetBufferFlagsAt(i);
+                if (any(flags & mask)) {
+                    FrameGraphHandle handle = rt.descriptor.attachments[i];
+                    if (handle) {
+                        const char* name = nullptr;
+                        if (i < MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT) name = "color";
+                        else if (i == MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT)
+                            name = "depth";
+                        else if (i == MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT + 1)
+                            name = "stencil";
+
+                        utils::CString slotName(name);
+                        if (i < MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT) {
+                            slotName += utils::to_string(i);
+                        }
+
+                        list.push_back({ slotName, handle.getIndex() });
+                    }
+                }
+            }
+        };
+
+        extractAttachmentInfo(rt.backend.params.flags.discardStart, rtInfo.discardStart);
+        extractAttachmentInfo(rt.backend.params.flags.discardEnd, rtInfo.discardEnd);
+        extractAttachmentInfo(rt.backend.params.flags.clear, rtInfo.clear);
+
+        info.push_back(std::move(rtInfo));
+    }
+    return info;
+}
+#endif
 
 // ------------------------------------------------------------------------------------------------
 

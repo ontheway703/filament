@@ -19,6 +19,7 @@
 #include "VulkanCommands.h"
 #include "VulkanTexture.h"
 
+#include <utils/debug.h>
 #include <utils/FixedCapacityVector.h>
 #include <utils/Panic.h>
 
@@ -59,7 +60,10 @@ VulkanSwapChain::~VulkanSwapChain() {
 
     mColors = {};
     mDepth = {};
-
+    for (auto& semaphore : mFinishedDrawing) {
+        semaphore = {};
+    }
+    mFinishedDrawing.clear();
     mPlatform->destroy(swapChain);
 }
 
@@ -67,8 +71,16 @@ void VulkanSwapChain::update() {
     mColors.clear();
 
     auto const bundle = mPlatform->getSwapChainBundle(swapChain);
+    size_t const swapChainCount = bundle.colors.size();
     mColors.reserve(bundle.colors.size());
     VkDevice const device = mPlatform->getDevice();
+
+    mFinishedDrawing.clear();
+    mFinishedDrawing.reserve(swapChainCount);
+    mFinishedDrawing.resize(swapChainCount);
+    for (size_t i = 0; i < swapChainCount; ++i) {
+        mFinishedDrawing[i] = {};
+    }
 
     TextureUsage depthUsage = TextureUsage::DEPTH_ATTACHMENT;
     TextureUsage colorUsage = TextureUsage::COLOR_ATTACHMENT;
@@ -94,6 +106,11 @@ void VulkanSwapChain::update() {
 }
 
 void VulkanSwapChain::present(DriverBase& driver) {
+    // The last acquire failed, so just skip presenting.
+    if (!mAcquired) {
+        return;
+    }
+
     if (!mHeadless && mTransitionSwapChainImageLayoutForPresent) {
         VulkanCommandBuffer& commands = mCommands->get();
         VkImageSubresourceRange const subresources{
@@ -110,8 +127,10 @@ void VulkanSwapChain::present(DriverBase& driver) {
 
     // We only present if it is not headless. No-op for headless.
     if (!mHeadless) {
-        VkSemaphore const finishedDrawing = mCommands->acquireFinishedSignal();
-        VkResult const result = mPlatform->present(swapChain, mCurrentSwapIndex, finishedDrawing);
+        auto finishedDrawing = mCommands->acquireFinishedSignal();
+        mFinishedDrawing[mCurrentSwapIndex] = finishedDrawing;
+        VkResult const result =
+                mPlatform->present(swapChain, mCurrentSwapIndex, finishedDrawing->getVkSemaphore());
         FILAMENT_CHECK_POSTCONDITION(result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR ||
                 result == VK_ERROR_OUT_OF_DATE_KHR)
                 << "Cannot present in swapchain. error=" << static_cast<int32_t>(result);
@@ -121,11 +140,11 @@ void VulkanSwapChain::present(DriverBase& driver) {
     mAcquired = false;
     mIsFirstRenderPass = true;
 
-    if (frameScheduled.callback) {
-        driver.scheduleCallback(frameScheduled.handler,
-                [callback = std::move(frameScheduled.callback)]() {
+    if (mFrameScheduled.callback) {
+        driver.scheduleCallback(mFrameScheduled.handler,
+                [callback = mFrameScheduled.callback]() {
                     PresentCallable noop = PresentCallable(PresentCallable::noopPresent, nullptr);
-                    callback(noop);
+                    callback->operator()(noop);
                 });
     }
 }
@@ -148,7 +167,16 @@ void VulkanSwapChain::acquire(bool& resized) {
 
     VulkanPlatform::ImageSyncData imageSyncData;
     VkResult const result = mPlatform->acquire(swapChain, &imageSyncData);
+
+    if (result != VK_SUCCESS) {
+        // We just don't set mAcquired here so the next present will just skip.
+        FVK_LOGD << "Failed to acquire next image in the swapchain result=" << (int) result;
+        return;
+    }
+
     mCurrentSwapIndex = imageSyncData.imageIndex;
+    assert_invariant(mCurrentSwapIndex < mFinishedDrawing.size());
+    mFinishedDrawing[mCurrentSwapIndex] = {};
     FILAMENT_CHECK_POSTCONDITION(result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)
             << "Cannot acquire in swapchain. error=" << static_cast<int32_t>(result);
     if (imageSyncData.imageReadySemaphore != VK_NULL_HANDLE) {

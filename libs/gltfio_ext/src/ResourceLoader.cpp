@@ -24,6 +24,7 @@
 #include "Utility.h"
 #include "extended/ResourceLoaderExtended.h"
 
+#include <limits>
 #include <filament/BufferObject.h>
 #include <filament/Engine.h>
 #include <filament/IndexBuffer.h>
@@ -38,7 +39,7 @@
 
 #include <utils/compiler.h>
 #include <utils/JobSystem.h>
-#include <utils/Log.h>
+#include <utils/Logger.h>
 #include <utils/Path.h>
 
 #include <cgltf.h>
@@ -160,12 +161,43 @@ uint8_t const* parseDataUri(const char* uri, std::string* mimeType, size_t* psiz
 inline void normalizeSkinningWeights(cgltf_data const* gltf) {
     auto normalize = [](cgltf_accessor* data) {
         if (data->type != cgltf_type_vec4 || data->component_type != cgltf_component_type_r_32f) {
-            slog.w << "Cannot normalize weights, unsupported attribute type." << io::endl;
+            LOG(WARNING) << "Cannot normalize weights, unsupported attribute type.";
             return;
         }
+        if (!data->buffer_view || !data->buffer_view->buffer ||
+                !data->buffer_view->buffer->data) {
+            LOG(WARNING) << "Cannot normalize weights, missing buffer data.";
+            return;
+        }
+        const cgltf_size bufferSize = data->buffer_view->buffer->size;
+        const cgltf_size viewOffset = data->buffer_view->offset;
+        const cgltf_size accessorOffset = data->offset;
+        const cgltf_size totalOffset = viewOffset + accessorOffset;
+
+        if (totalOffset >= bufferSize) {
+            LOG(WARNING) << "Cannot normalize weights, accessor offset exceeds buffer size.";
+            return;
+        }
+
+        const cgltf_size availableBytes = bufferSize - totalOffset;
+        const cgltf_size stride = data->stride;
+
+        cgltf_size maxCount = 0;
+        if (stride > 0 && availableBytes >= sizeof(float4)) {
+            maxCount = 1 + (availableBytes - sizeof(float4)) / stride;
+        }
+
+        cgltf_size safeCount = data->count;
+        if (safeCount > maxCount) {
+            LOG(WARNING) << "Skinning weights accessor count (" << safeCount
+                         << ") exceeds buffer capacity (" << maxCount
+                         << "), clamping to prevent out-of-bounds access.";
+            safeCount = maxCount;
+        }
+
         uint8_t* bytes = (uint8_t*) data->buffer_view->buffer->data;
-        bytes += data->offset + data->buffer_view->offset;
-        for (cgltf_size i = 0, n = data->count; i < n; ++i, bytes += data->stride) {
+        bytes += totalOffset;
+        for (cgltf_size i = 0, n = safeCount; i < n; ++i, bytes += stride) {
             float4* weights = (float4*) bytes;
             const float sum = weights->x + weights->y + weights->z + weights->w;
             *weights /= sum;
@@ -234,9 +266,46 @@ inline void uploadBuffers(FFilamentAsset* asset, Engine& engine,
     auto& slots = std::get<FFilamentAsset::ResourceInfo>(asset->mResourceInfo).mBufferSlots;
     for (auto const& slot: slots) {
         const cgltf_accessor* accessor = slot.accessor;
-        if (!accessor->buffer_view) {
+        // Morph target accessors may not have a buffer_view (data is directly in the accessor)
+        bool isMorphTarget = (slot.morphTargetBuffer != nullptr);
+
+        if (!accessor->buffer_view && !isMorphTarget) {
             continue;
         }
+
+        // For morph targets without buffer_view, use cgltf_accessor_unpack_floats to unpack data directly
+        if (!accessor->buffer_view && isMorphTarget) {
+            const size_t components = cgltf_num_components(accessor->type);
+            if (components > 0 && accessor->count > std::numeric_limits<size_t>::max() / components) {
+                continue;
+            }
+            const size_t floatsCount = accessor->count * components;
+            if (floatsCount == 0) {
+                continue;
+            }
+            
+            if (floatsCount > std::numeric_limits<size_t>::max() / sizeof(float)) {
+                continue;
+            }
+            const size_t floatsByteCount = sizeof(float) * floatsCount;
+            
+            float* floatsData = (float*)malloc(floatsByteCount);
+            cgltf_accessor_unpack_floats(accessor, floatsData, floatsCount);
+
+            if (accessor->type == cgltf_type_vec3) {
+                slot.morphTargetBuffer->setPositionsAt(engine, slot.bufferIndex,
+                    (const float3*)floatsData, slot.morphTargetCount, slot.morphTargetOffset);
+            }
+            else {
+                assert_invariant(accessor->type == cgltf_type_vec4);
+                slot.morphTargetBuffer->setPositionsAt(engine, slot.bufferIndex,
+                    (const float4*)floatsData, slot.morphTargetCount, slot.morphTargetOffset);
+            }
+
+            free(floatsData);
+            continue;
+        }
+
         const uint8_t* bufferData = nullptr;
         const uint8_t* data = nullptr;
         if (accessor->buffer_view->has_meshopt_compression) {
@@ -248,10 +317,48 @@ inline void uploadBuffers(FFilamentAsset* asset, Engine& engine,
         }
         assert_invariant(bufferData);
         const uint32_t size = utility::computeBindingSize(accessor);
+        if (size == 0) {
+            // Skip buffer upload for this accessor as requested by user
+            continue;
+        }
         if (slot.vertexBuffer) {
             if (utility::requiresConversion(accessor)) {
-                const size_t floatsCount = accessor->count * cgltf_num_components(accessor->type);
+                const cgltf_size bufferSize = accessor->buffer_view->buffer->size;
+                const cgltf_size totalOffset = accessor->buffer_view->offset + accessor->offset;
+                
+                if (totalOffset >= bufferSize) {
+                    continue;
+                }
+                
+                const cgltf_size availableBytes = bufferSize - totalOffset;
+                const cgltf_size stride = accessor->stride;
+                const cgltf_size elementSize = cgltf_calc_size(accessor->type, accessor->component_type);
+                
+                cgltf_size maxCount = 0;
+                if (stride > 0 && availableBytes >= elementSize) {
+                    maxCount = 1 + (availableBytes - elementSize) / stride;
+                }
+                
+                cgltf_size safeCount = accessor->count;
+                if (safeCount > maxCount) {
+                    LOG(WARNING) << "Accessor count exceeds buffer capacity, clamping.";
+                    safeCount = maxCount;
+                }
+
+                const size_t components = cgltf_num_components(accessor->type);
+                if (components > 0 && safeCount > std::numeric_limits<size_t>::max() / components) {
+                    continue;
+                }
+                const size_t floatsCount = safeCount * components;
+                if (floatsCount == 0) {
+                    continue;
+                }
+                
+                if (floatsCount > std::numeric_limits<size_t>::max() / sizeof(float)) {
+                    continue;
+                }
                 const size_t floatsByteCount = sizeof(float) * floatsCount;
+                
                 float* floatsData = (float*) malloc(floatsByteCount);
                 cgltf_accessor_unpack_floats(accessor, floatsData, floatsCount);
                 BufferObject* bo = BufferObject::Builder().size(floatsByteCount).build(engine);
@@ -288,8 +395,42 @@ inline void uploadBuffers(FFilamentAsset* asset, Engine& engine,
         assert(slot.morphTargetBuffer);
 
         if (utility::requiresPacking(accessor)) {
-            const size_t floatsCount = accessor->count * cgltf_num_components(accessor->type);
+            const cgltf_size bufferSize = accessor->buffer_view->buffer->size;
+            const cgltf_size totalOffset = accessor->buffer_view->offset + accessor->offset;
+            
+            if (totalOffset >= bufferSize) {
+                continue;
+            }
+            
+            const cgltf_size availableBytes = bufferSize - totalOffset;
+            const cgltf_size stride = accessor->stride;
+            const cgltf_size elementSize = cgltf_calc_size(accessor->type, accessor->component_type);
+            
+            cgltf_size maxCount = 0;
+            if (stride > 0 && availableBytes >= elementSize) {
+                maxCount = 1 + (availableBytes - elementSize) / stride;
+            }
+            
+            cgltf_size safeCount = accessor->count;
+            if (safeCount > maxCount) {
+                LOG(WARNING) << "Accessor count exceeds buffer capacity, clamping.";
+                safeCount = maxCount;
+            }
+
+            const size_t components = cgltf_num_components(accessor->type);
+            if (components > 0 && safeCount > std::numeric_limits<size_t>::max() / components) {
+                continue;
+            }
+            const size_t floatsCount = safeCount * components;
+            if (floatsCount == 0) {
+                continue;
+            }
+            
+            if (floatsCount > std::numeric_limits<size_t>::max() / sizeof(float)) {
+                continue;
+            }
             const size_t floatsByteCount = sizeof(float) * floatsCount;
+
             float* floatsData = (float*) malloc(floatsByteCount);
             cgltf_accessor_unpack_floats(accessor, floatsData, floatsCount);
             if (accessor->type == cgltf_type_vec3) {
@@ -442,7 +583,9 @@ bool ResourceLoader::loadResources(FFilamentAsset* asset, bool async) {
             }
             utility::decodeDracoMeshes(gltf, prim, dracoCache);
         }
-        utility::decodeMeshoptCompression((cgltf_data*) gltf);
+        if (!utility::decodeMeshoptCompression((cgltf_data*) gltf)) {
+            return false;
+        }
 
         uploadBuffers(asset, *pImpl->mEngine, pImpl->mUriDataCache);
 
@@ -525,8 +668,14 @@ void ResourceLoader::asyncUpdateLoad() {
 std::pair<Texture*, CacheResult> ResourceLoader::Impl::getOrCreateTexture(FFilamentAsset* asset,
         size_t textureIndex, TextureProvider::TextureFlags flags) {
     const cgltf_texture& srcTexture = asset->mSourceAsset->hierarchy->textures[textureIndex];
-    const cgltf_image* image = srcTexture.basisu_image ?
+    const cgltf_image* image = srcTexture.webp_image ? srcTexture.webp_image : srcTexture.basisu_image ?
             srcTexture.basisu_image : srcTexture.image;
+
+    if (!image) {
+        LOG(ERROR) << "Missing texture";
+        return {};
+    }
+
     const cgltf_buffer_view* bv = image->buffer_view;
     const char* uri = image->uri;
 
@@ -542,7 +691,7 @@ std::pair<Texture*, CacheResult> ResourceLoader::Impl::getOrCreateTexture(FFilam
 
     auto foundProvider = mTextureProviders.find(mime);
     if (foundProvider == mTextureProviders.end()) {
-        slog.e << "Missing texture provider for " << mime << io::endl;
+        LOG(ERROR) << "Missing texture provider for " << mime;
         return {};
     }
     TextureProvider* provider = foundProvider->second;
@@ -598,7 +747,7 @@ std::pair<Texture*, CacheResult> ResourceLoader::Impl::getOrCreateTexture(FFilam
         }
         Path fullpath = Path(mGltfPath).getParent() + uri;
         if (!fullpath.exists()) {
-            slog.e << "Unable to open " << fullpath << io::endl;
+            LOG(ERROR) << "Unable to open " << fullpath;
             return {};
         }
         using namespace std;
@@ -620,7 +769,7 @@ std::pair<Texture*, CacheResult> ResourceLoader::Impl::getOrCreateTexture(FFilam
     }
 
     const char* name = srcTexture.name ? srcTexture.name : uri;
-    slog.e << "Unable to create texture " << name << ": " << provider->getPushMessage() << io::endl;
+    LOG(ERROR) << "Unable to create texture " << name << ": " << provider->getPushMessage();
     return {};
 }
 

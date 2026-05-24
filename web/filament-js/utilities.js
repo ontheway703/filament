@@ -15,6 +15,53 @@
  */
 
 // ---------------
+// WebGPU Initialization
+// ---------------
+
+/// initWebGPU ::function:: Asynchronously initializes the WebGPU adapter and device.
+/// This must be awaited before initializing the Filament Engine with the WebGPU backend.
+/// ::retval:: Promise that resolves when WebGPU is ready.
+Filament.initWebGPU = async function() {
+    if (!navigator.gpu) {
+        throw new Error("WebGPU is not supported by this browser.");
+    }
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) {
+        throw new Error("No appropriate WebGPU adapter found.");
+    }
+    const requiredFeatures = [];
+    const optionalFeatures = [
+        'immediates',
+        'chromium-experimental-immediate-data',
+        'rg11b10ufloat-renderable',
+        'float32-filterable',
+        'float32-blendable',
+        'depth-clip-control',
+        'depth32float-stencil8',
+        'texture-compression-bc',
+        'texture-compression-etc2',
+        'texture-compression-astc'
+    ];
+    for (const feature of optionalFeatures) {
+        if (adapter.features.has(feature)) {
+            requiredFeatures.push(feature);
+        }
+    }
+    const requiredLimits = {};
+    for (const key in adapter.limits) {
+        requiredLimits[key] = adapter.limits[key];
+    }
+    if (adapter.limits.maxImmediateSize !== undefined) {
+        requiredLimits.maxImmediateSize = adapter.limits.maxImmediateSize;
+    } else if (requiredFeatures.includes('chromium-experimental-immediate-data')) {
+        requiredLimits.maxImmediateSize = 64;
+    }
+
+    const device = await adapter.requestDevice({ requiredFeatures, requiredLimits });
+    Filament.preinitializedWebGPUDevice = device;
+};
+
+// ---------------
 // Buffer Wrappers
 // ---------------
 
@@ -290,13 +337,18 @@ Filament._createTextureFromImageFile = function(fileContents, engine, options) {
         pbtype = Filament.PixelDataType.UBYTE;
     }
 
-    const tex = Filament.Texture.Builder()
+    let tex = Filament.Texture.Builder()
         .width(decodedImage.width)
         .height(decodedImage.height)
         .levels(nomips ? 1 : 0xff)
         .sampler(Sampler.SAMPLER_2D)
-        .format(texformat)
-        .build(engine);
+        .format(texformat);
+
+    if (options['usage'] !== undefined) {
+        tex.usage(options['usage']);
+    }
+
+    tex = tex.build(engine);
 
     const pixelbuffer = Filament.PixelBuffer(decodedImage.data.getBytes(), pbformat, pbtype);
     tex.setImage(engine, 0, pixelbuffer);

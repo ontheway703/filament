@@ -155,10 +155,11 @@ VkFormat getVkFormat(TextureFormat format) {
         case TextureFormat::RGBA16UI:          return VK_FORMAT_R16G16B16A16_UINT;
         case TextureFormat::RGBA16I:           return VK_FORMAT_R16G16B16A16_SINT;
 
-        // 96-bits per element.
-        case TextureFormat::RGB32F:            return VK_FORMAT_R32G32B32_SFLOAT;
-        case TextureFormat::RGB32UI:           return VK_FORMAT_R32G32B32_UINT;
-        case TextureFormat::RGB32I:            return VK_FORMAT_R32G32B32_SINT;
+        // 96-bits per element. In practice, very few GPU vendors support these. So, we simply
+        // always reshape them into 128-bit formats.
+        case TextureFormat::RGB32F:            return VK_FORMAT_R32G32B32A32_SFLOAT;
+        case TextureFormat::RGB32UI:           return VK_FORMAT_R32G32B32A32_UINT;
+        case TextureFormat::RGB32I:            return VK_FORMAT_R32G32B32A32_SINT;
 
         // 128-bits per element.
         case TextureFormat::RGBA32F:           return VK_FORMAT_R32G32B32A32_SFLOAT;
@@ -632,6 +633,19 @@ VkCompareOp getCompareOp(SamplerCompareFunc func) {
     }
 }
 
+VkStencilOp getStencilOp(StencilOperation op) {
+    switch (op) {
+        case StencilOperation::KEEP:      return VK_STENCIL_OP_KEEP;
+        case StencilOperation::ZERO:      return VK_STENCIL_OP_ZERO;
+        case StencilOperation::REPLACE:   return VK_STENCIL_OP_REPLACE;
+        case StencilOperation::INCR:      return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+        case StencilOperation::INCR_WRAP: return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+        case StencilOperation::DECR:      return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+        case StencilOperation::DECR_WRAP: return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+        case StencilOperation::INVERT:    return VK_STENCIL_OP_INVERT;
+    }
+}
+
 VkBlendFactor getBlendFactor(BlendFunction mode) {
     switch (mode) {
         case BlendFunction::ZERO:                  return VK_BLEND_FACTOR_ZERO;
@@ -753,6 +767,14 @@ PixelDataType getComponentType(VkFormat format) {
         case VK_FORMAT_R32G32B32A32_UINT: return PixelDataType::UINT;
         case VK_FORMAT_R32G32B32A32_SINT: return PixelDataType::INT;
         case VK_FORMAT_R32G32B32A32_SFLOAT: return PixelDataType::FLOAT;
+        case VK_FORMAT_D16_UNORM: return PixelDataType::USHORT;
+        case VK_FORMAT_D32_SFLOAT: return PixelDataType::FLOAT;
+        case VK_FORMAT_X8_D24_UNORM_PACK32: return PixelDataType::UINT;
+        case VK_FORMAT_B10G11R11_UFLOAT_PACK32: return PixelDataType::UINT_10F_11F_11F_REV;
+        // For combined depth/stencil formats, we return the primary (depth) aspect type.
+        // Stencil aspect overrides are handled dynamically during readback.
+        case VK_FORMAT_D24_UNORM_S8_UINT: return PixelDataType::UINT;
+        case VK_FORMAT_D32_SFLOAT_S8_UINT: return PixelDataType::FLOAT;
         default: assert_invariant(false && "Unknown data type, conversion is not supported.");
     }
     return {};
@@ -777,6 +799,9 @@ uint32_t getComponentCount(VkFormat format) {
         case VK_FORMAT_R32_UINT:
         case VK_FORMAT_R32_SINT:
         case VK_FORMAT_R32_SFLOAT:
+        case VK_FORMAT_D16_UNORM:
+        case VK_FORMAT_D32_SFLOAT:
+        case VK_FORMAT_X8_D24_UNORM_PACK32:
             return 1;
 
         case VK_FORMAT_R8G8_UNORM:
@@ -796,6 +821,8 @@ uint32_t getComponentCount(VkFormat format) {
         case VK_FORMAT_R32G32_UINT:
         case VK_FORMAT_R32G32_SINT:
         case VK_FORMAT_R32G32_SFLOAT:
+        case VK_FORMAT_D24_UNORM_S8_UINT:
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:
             return 2;
 
         case VK_FORMAT_R8G8B8_UNORM:
@@ -822,6 +849,8 @@ uint32_t getComponentCount(VkFormat format) {
         case VK_FORMAT_R32G32B32_UINT:
         case VK_FORMAT_R32G32B32_SINT:
         case VK_FORMAT_R32G32B32_SFLOAT:
+        case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+        case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
             return 3;
 
         case VK_FORMAT_R8G8B8A8_UNORM:

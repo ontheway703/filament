@@ -35,6 +35,14 @@ FILAMENT_MD = 'Filament.md.html'
 MATERIALS_MD = 'Materials.md.html'
 
 def transform_dup_file_link(line, transforms):
+  """
+  Transforms markdown links in duplicated files to point to the correct relative locations
+  within the generated mdbook site.
+
+  Args:
+    line: The markdown line containing potential links.
+    transforms: A dictionary mapping original link prefixes to their new destinations.
+  """
   URL_CONTENT = '[-a-zA-Z0-9()@:%_\+.~#?&//=]+'
   res = re.findall(f'\[(.+)\]\(({URL_CONTENT})\)', line)
   for text, url in  res:
@@ -47,6 +55,12 @@ def transform_dup_file_link(line, transforms):
   return line
 
 def pull_duplicates():
+  """
+  Reads `duplicates.json` and copies files from the project root into the mdbook source directory.
+  This allows us to maintain a single source of truth for files like README.md or CONTRIBUTING.md,
+  while seamlessly embedding them into the generated documentation site.
+  It also converts raw HTML examples to Markdown by extracting just the body and styles.
+  """
   if not os.path.exists(DUP_DIR):
     os.mkdir(DUP_DIR)
 
@@ -59,11 +73,28 @@ def pull_duplicates():
     link_transforms = config[fin].get('link_transforms', {})
     fpath = os.path.join(ROOT_DIR, fin)
     new_fpath = os.path.join(SRC_DIR, new_name)
+    os.makedirs(os.path.dirname(new_fpath), exist_ok=True)
 
     with open(fpath, 'r') as in_file:
-      with open(new_fpath, 'w') as out_file:
-        for line in in_file.readlines():
-          out_file.write(transform_dup_file_link(line, link_transforms))
+      content = in_file.read()
+
+    if fpath.endswith('.html') and new_fpath.endswith('.md'):
+      # We replace double newlines so mdbook does not treat it as separated markdown paragraphs
+      content = content.replace("\n\n", "\n")
+      import re
+      style_match = re.search(r'<style>(.*?)</style>', content, re.DOTALL | re.IGNORECASE)
+      style_str = f"<style>{style_match.group(1)}</style>\n" if style_match else ""
+      body_match = re.search(r'<body[^>]*>(.*?)</body>', content, re.DOTALL | re.IGNORECASE)
+      if body_match:
+        content = style_str + body_match.group(1)
+
+    replacements = config[fin].get('replacements', {})
+    for old, new in replacements.items():
+      content = content.replace(old, new)
+
+    with open(new_fpath, 'w') as out_file:
+      for line in content.splitlines(True):
+        out_file.write(transform_dup_file_link(line, link_transforms))
 
 def pull_markdeep_docs():
   import http.server
@@ -81,6 +112,28 @@ def pull_markdeep_docs():
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=MARKDEEP_DIR, **kwargs)
 
+    def do_GET(self):
+      print(f'================ {self.path}')
+      # Use the checked-in markdeep since its locked to a version
+      if self.path == '/third_party/markdeep/markdeep.min.js':
+        file_path = f'{ROOT_DIR}/third_party/markdeep/markdeep.min.js'
+        try:
+          with open(file_path, 'rb') as f:
+            content = f.read()
+
+          self.send_response(200)
+          self.send_header('Content-type', 'application/javascript')
+          self.send_header('Content-Length', len(content))
+          self.end_headers()
+
+          # Send the file content
+          self.wfile.write(content)
+        except FileNotFoundError:
+          self.send_error(404, 'File not found')
+      else:
+        # For all other paths, use the default behavior (serve from MARKDEEP_DIR)
+        super().do_GET()
+
   def start_server(port):
     """Starts the web server in a separate thread."""
     httpd = Server(("", port), Handler)
@@ -92,6 +145,9 @@ def pull_markdeep_docs():
 
   PORT = 12345
   httpd = start_server(PORT)
+
+  # Workaround for unknown dead-lock when the selenium tries to make request to the local server above.
+  time.sleep(3)
 
   # Set up Chrome options for headless mode
   chrome_options = Options()
@@ -107,7 +163,8 @@ def pull_markdeep_docs():
     # Open the URL with ?export, which markdeep will export the resulting html.
     driver.get(f"http://localhost:{PORT}/{doc}.md.html?export")
 
-    time.sleep(3)
+    time.sleep(1.5)
+
     # We extract the html from the resulting "page" (an html output itself).
     text = driver.find_elements(By.TAG_NAME, "pre")[0].text
 
@@ -143,3 +200,6 @@ if __name__ == "__main__":
   shutil.copytree(RAW_COPIES_DIR, BOOK_OUPUT_DIR, dirs_exist_ok=True)
   shutil.copy(os.path.join(MARKDEEP_DIR, FILAMENT_MD), BOOK_OUPUT_DIR)
   shutil.copy(os.path.join(MARKDEEP_DIR, MATERIALS_MD), BOOK_OUPUT_DIR)
+
+  import copy_web_docs
+  copy_web_docs.run()

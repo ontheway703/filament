@@ -15,6 +15,7 @@
  */
 
 #include "WebGPURenderPassMipmapGenerator.h"
+#include "WebGPUQueueManager.h"
 
 #include <utils/Panic.h>
 
@@ -89,7 +90,7 @@ constexpr std::string_view SHADER_SOURCE{ R"(
 }
 
 [[nodiscard]] wgpu::ShaderModule createShaderModule(wgpu::Device const& device) {
-    wgpu::ShaderModuleWGSLDescriptor wgslDescriptor{};
+    wgpu::ShaderSourceWGSL wgslDescriptor{};
     wgslDescriptor.code = SHADER_SOURCE.data();
     const wgpu::ShaderModuleDescriptor shaderModuleDescriptor{
         .nextInChain = &wgslDescriptor,
@@ -199,12 +200,14 @@ constexpr std::string_view SHADER_SOURCE{ R"(
 
 } // namespace
 
-WebGPURenderPassMipmapGenerator::WebGPURenderPassMipmapGenerator(wgpu::Device const& device)
-    : mDevice{ device },
-      mPreviousMipLevelSampler{ createPreviousMipLevelSampler(mDevice) },
-      mShaderModule{ createShaderModule(mDevice) },
-      mTextureBindGroupLayout{ createTextureBindGroupLayout(mDevice) },
-      mPipelineLayout{ createPipelineLayout(mDevice, mTextureBindGroupLayout) } {}
+WebGPURenderPassMipmapGenerator::WebGPURenderPassMipmapGenerator(wgpu::Device const& device,
+        WebGPUQueueManager* queueManager)
+        : mDevice{ device },
+          mQueueManager(queueManager),
+          mPreviousMipLevelSampler{ createPreviousMipLevelSampler(mDevice) },
+          mShaderModule{ createShaderModule(mDevice) },
+          mTextureBindGroupLayout{ createTextureBindGroupLayout(mDevice) },
+          mPipelineLayout{ createPipelineLayout(mDevice, mTextureBindGroupLayout) } {}
 
 WebGPURenderPassMipmapGenerator::FormatCompatibility
 WebGPURenderPassMipmapGenerator::getCompatibilityFor(const wgpu::TextureFormat format,
@@ -223,10 +226,9 @@ WebGPURenderPassMipmapGenerator::getCompatibilityFor(const wgpu::TextureFormat f
                           "generation.",
             };
         case wgpu::TextureFormat::Undefined:
-        case wgpu::TextureFormat::External:
             return {
                 .compatible = false,
-                .reason = "Undefined or External textures are not supported for render pass based "
+                .reason = "Undefined textures are not supported for render pass based "
                           "mipmap generation.",
             };
         default:
@@ -390,6 +392,9 @@ WebGPURenderPassMipmapGenerator::getScalarSampleTypeFrom(const wgpu::TextureForm
         case wgpu::TextureFormat::R16Snorm:
         case wgpu::TextureFormat::RG16Snorm:
         case wgpu::TextureFormat::RGBA16Snorm:
+
+        // Formats not available on WASM
+#if !defined(__EMSCRIPTEN__)
         case wgpu::TextureFormat::R8BG8Biplanar420Unorm:
         case wgpu::TextureFormat::R10X6BG10X6Biplanar420Unorm:
         case wgpu::TextureFormat::R8BG8A8Triplanar420Unorm:
@@ -397,6 +402,8 @@ WebGPURenderPassMipmapGenerator::getScalarSampleTypeFrom(const wgpu::TextureForm
         case wgpu::TextureFormat::R8BG8Biplanar444Unorm:
         case wgpu::TextureFormat::R10X6BG10X6Biplanar422Unorm:
         case wgpu::TextureFormat::R10X6BG10X6Biplanar444Unorm:
+        case wgpu::TextureFormat::OpaqueYCbCrAndroid:
+#endif
             return ScalarSampleType::F32;
         case wgpu::TextureFormat::Depth16Unorm:
         case wgpu::TextureFormat::Depth24Plus:
@@ -409,39 +416,25 @@ WebGPURenderPassMipmapGenerator::getScalarSampleTypeFrom(const wgpu::TextureForm
                     format);
             break;
         case wgpu::TextureFormat::Undefined:
-        case wgpu::TextureFormat::External:
             PANIC_POSTCONDITION("No scalar sample type for texture format %d", format);
             break;
     }
 }
 
-void WebGPURenderPassMipmapGenerator::generateMipmaps(wgpu::Queue const& queue,
-        wgpu::Texture const& texture) {
+void WebGPURenderPassMipmapGenerator::generateMipmaps(wgpu::Texture const& texture) {
     const uint32_t mipLevelCount{ texture.GetMipLevelCount() };
     if (mipLevelCount < 2) {
         return; // Nothing to do.
     }
+    auto commandEncoder = mQueueManager->getCommandEncoder();
     wgpu::RenderPipeline const& pipeline{ getOrCreatePipelineFor(texture.GetFormat()) };
-    const wgpu::CommandEncoderDescriptor commandEncoderDescriptor{
-        .label = "mipmap_generation_render_pass_cmd_encoder",
-    };
-    const wgpu::CommandEncoder commandEncoder{ mDevice.CreateCommandEncoder(
-            &commandEncoderDescriptor) };
-    FILAMENT_CHECK_POSTCONDITION(commandEncoder)
-            << "Failed to create command encoder for render pass mipmap generation.";
     const uint32_t layerCount{ texture.GetDepthOrArrayLayers() };
     for (uint32_t layer = 0; layer < layerCount; layer++) {
         for (uint32_t mipLevel = 1; mipLevel < mipLevelCount; mipLevel++) {
             generateMipmap(commandEncoder, texture, pipeline, layer, mipLevel);
         }
     }
-    const wgpu::CommandBufferDescriptor commandBufferDescriptor{
-        .label = "mipmap_generation_render_pass_cmd_buffer",
-    };
-    const wgpu::CommandBuffer commandBuffer{ commandEncoder.Finish(&commandBufferDescriptor) };
-    FILAMENT_CHECK_POSTCONDITION(commandBuffer)
-            << "Failed to create command buffer for render pass mipmap generation.";
-    queue.Submit(1, &commandBuffer);
+    mQueueManager->flush();
 }
 
 void WebGPURenderPassMipmapGenerator::generateMipmap(wgpu::CommandEncoder const& commandEncoder,

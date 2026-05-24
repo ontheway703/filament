@@ -88,22 +88,35 @@ public:
      * @see getFrameInfoHistory()
      */
     struct FrameInfo {
+        /** duration in nanosecond since epoch of std::steady_clock */
         using time_point_ns = int64_t;
+        /** duration in nanosecond on the std::steady_clock */
         using duration_ns = int64_t;
+        static constexpr time_point_ns INVALID = -1;    //!< value not supported
+        static constexpr time_point_ns PENDING = -2;    //!< value not yet available
         uint32_t frameId;                   //!< monotonically increasing frame identifier
-        duration_ns frameTime;              //!< frame duration on the GPU in nanosecond [ns]
-        duration_ns denoisedFrameTime;      //!< denoised frame duration on the GPU in [ns]
+        duration_ns gpuFrameDuration;       //!< frame duration on the GPU in nanosecond [ns]
+        duration_ns denoisedGpuFrameDuration; //!< denoised frame duration on the GPU in [ns]
         time_point_ns beginFrame;           //!< Renderer::beginFrame() time since epoch [ns]
         time_point_ns endFrame;             //!< Renderer::endFrame() time since epoch [ns]
         time_point_ns backendBeginFrame;    //!< Backend thread time of frame start since epoch [ns]
         time_point_ns backendEndFrame;      //!< Backend thread time of frame end since epoch [ns]
+        time_point_ns gpuFrameComplete;     //!< GPU thread time of frame end since epoch [ns] or 0
+        time_point_ns vsync;                //!< VSYNC time of this frame since epoch [ns]
+        time_point_ns displayPresent;       //!< Actual presentation time of this frame since epoch [ns]
+        time_point_ns presentDeadline;      //!< deadline for queuing a frame [ns]
+        duration_ns displayPresentInterval; //!< display refresh rate [ns]
+        duration_ns compositionToPresentLatency; //!< time between the start of composition and the expected present time [ns]
+        duration_ns expectedPresentLatency; //!< system's expected presentation time since epoch [ns]
     };
 
     /**
-     * Retrieve an historic of frame timing information. The maximum frame history size is
+     * Retrieve a history of frame timing information. The maximum frame history size is
      * given by getMaxFrameHistorySize().
+     * All or part of the history can be lost when using a different SwapChain in beginFrame().
      * @param historySize requested history size. The returned vector could be smaller.
      * @return A vector of FrameInfo.
+     * @see beginFrame()
      */
     utils::FixedCapacityVector<FrameInfo> getFrameInfoHistory(
             size_t historySize = 1) const noexcept;
@@ -285,8 +298,10 @@ public:
      * This is a convenience method that returns the same value as beginFrame().
      *
      * @return
-     *      *false* the current frame should be skipped,
+     *      *false* the current frame should be skipped, or an unrecoverable backend exception has occurred.
      *      *true* the current frame can be rendered
+     *
+     * @note This method will return false once a backend exception has been delivered to the main thread.
      *
      * @see
      * beginFrame()
@@ -315,6 +330,8 @@ public:
      *                                 or 0 if unknown. This value should be the timestamp of
      *                                 the last h/w vsync. It is expressed in the
      *                                 std::chrono::steady_clock time base.
+     *                                 On Android this should be the frame time received from
+     *                                 a Choreographer.
      * @param swapChain A pointer to the SwapChain instance to use.
      *
      * @return
@@ -326,6 +343,12 @@ public:
      *
      * @note
      * All calls to render() must happen *after* beginFrame().
+     * It is recommended to use the same swapChain for every call to beginFrame, failing to do
+     * so can result is losing all or part of the FrameInfo history.
+     *
+     * @throws std::exception (or derived) if the backend thread encountered an unrecoverable error (when exceptions are enabled).
+     *
+     * @note This method will return false if called again after a backend exception was already thrown and delivered to the main thread.
      *
      * @see
      * endFrame()
@@ -396,6 +419,9 @@ public:
      *
      * @remark
      * render() is typically called once per frame (but not necessarily).
+     *
+     * @throws std::exception (or derived) if the backend thread encountered an unrecoverable error (when exceptions are enabled).
+     * @throws utils::Panic if called again after a backend exception was already thrown.
      *
      * @see
      * beginFrame(), endFrame(), View
@@ -488,6 +514,9 @@ public:
      * All calls to render() must happen *before* endFrame(). endFrame() must be called if
      * beginFrame() returned true, otherwise, endFrame() must not be called unless the caller
      * ignored beginFrame()'s return value.
+     *
+     * @throws std::exception (or derived) if the backend thread encountered an unrecoverable error (when exceptions are enabled).
+     * @throws utils::Panic if called again after a backend exception was already thrown.
      *
      * @see
      * beginFrame()
@@ -645,6 +674,19 @@ public:
      * getUserTime()
      */
     void resetUserTime();
+
+
+    /**
+     * Requests the next frameCount frames to be skipped. For Debugging.
+     * @param frameCount number of frames to skip.
+     */
+    void skipNextFrames(size_t frameCount) noexcept;
+
+    /**
+     * Remainder count of frame to be skipped
+     * @return remaining frames to be skipped
+     */
+    size_t getFrameToSkipCount() const noexcept;
 
 protected:
     // prevent heap allocation

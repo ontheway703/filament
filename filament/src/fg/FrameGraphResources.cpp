@@ -14,10 +14,16 @@
  * limitations under the License.
  */
 
+#include "fg/FrameGraphId.h"
 #include "fg/FrameGraph.h"
 #include "fg/FrameGraphResources.h"
 #include "fg/details/PassNode.h"
 #include "fg/details/ResourceNode.h"
+
+#include <utils/debug.h>
+#include <utils/Panic.h>
+
+#include <cstdint>
 
 namespace filament {
 
@@ -32,7 +38,7 @@ const char* FrameGraphResources::getPassName() const noexcept {
 // this perhaps weirdly returns a reference, this is to express the fact that if this method
 // fails, it has to assert (or throw), it can't return for e.g. a nullptr, because the public
 // API doesn't return pointers.
-// We still use FILAMENT_CHECK_PRECONDITION() because these failures are due to post conditions not met.
+// We use FILAMENT_CHECK_PRECONDITION() because these failures are due to caller contract violations (preconditions).
 VirtualResource& FrameGraphResources::getResource(FrameGraphHandle const handle) const {
     FILAMENT_CHECK_PRECONDITION(handle) << "Uninitialized handle when using FrameGraphResources.";
 
@@ -43,7 +49,7 @@ VirtualResource& FrameGraphResources::getResource(FrameGraphHandle const handle)
 
     FILAMENT_CHECK_PRECONDITION(hasReadOrWrite)
             << "Pass \"" << mPassNode.getName() << "\" didn't declare any access to resource \""
-            << resource->name << "\"";
+            << resource->name.c_str() << "\"";
 
     assert_invariant(resource->refcount);
 

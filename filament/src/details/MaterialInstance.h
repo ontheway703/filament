@@ -18,14 +18,13 @@
 #define TNT_FILAMENT_DETAILS_MATERIALINSTANCE_H
 
 #include "downcast.h"
-
+#include "LocalProgramCache.h"
 #include "UniformBuffer.h"
 
 #include "ds/DescriptorSet.h"
 
+#include "details/BufferAllocator.h"
 #include "details/Engine.h"
-
-#include "private/backend/DriverApi.h"
 
 #include <filament/MaterialInstance.h>
 
@@ -44,6 +43,7 @@
 #include <limits>
 #include <mutex>
 #include <string_view>
+#include <variant>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -55,8 +55,7 @@ class FTexture;
 
 class FMaterialInstance : public MaterialInstance {
 public:
-    FMaterialInstance(FEngine& engine, FMaterial const* material,
-                      const char* name) noexcept;
+    FMaterialInstance(FEngine& engine, FMaterial const* material, const char* name) noexcept;
     FMaterialInstance(FEngine& engine, FMaterialInstance const* other, const char* name);
     FMaterialInstance(const FMaterialInstance& rhs) = delete;
     FMaterialInstance& operator=(const FMaterialInstance& rhs) = delete;
@@ -67,13 +66,17 @@ public:
 
     void terminate(FEngine& engine);
 
-    void commitStreamUniformAssociations(FEngine::DriverApi& driver);
-    
     void commit(FEngine& engine) const;
 
-    void commit(FEngine::DriverApi& driver) const;
+    void commit(FEngine::DriverApi& driver, UboManager* uboManager) const;
 
     void use(FEngine::DriverApi& driver, Variant variant = {}) const;
+
+    void assignUboAllocation(const backend::Handle<backend::HwBufferObject>& ubHandle,
+            BufferAllocator::AllocationId id,
+            BufferAllocator::allocation_size_t offset);
+
+    BufferAllocator::AllocationId getAllocationId() const noexcept;
 
     FMaterial const* getMaterial() const noexcept { return mMaterial; }
 
@@ -81,11 +84,41 @@ public:
 
     UniformBuffer const& getUniformBuffer() const noexcept { return mUniforms; }
 
+    void compile(backend::CompilerPriorityQueue priority, UserVariantFilterMask variantSpec,
+            backend::CallbackHandler* handler,
+            utils::Invocable<void(MaterialInstance*)>&& callback) noexcept;
+
+    // prepareProgram creates the program for the material's given variant at the backend level.
+    // Must be called outside of backend render pass.
+    // Must be called before getProgram() below.
+    backend::Handle<backend::HwProgram> prepareProgram(backend::DriverApi& driver,
+            Variant const variant,
+            backend::CompilerPriorityQueue const priorityQueue) const noexcept {
+        flushSpecializationConstants();
+        return getPrograms().prepareProgram(driver, variant, priorityQueue);
+    }
+
+    // getProgram returns the backend program for the material's given variant.
+    // Must be called after prepareProgram().
+    //
+    // See also Material::getProgram().
+    [[nodiscard]]
+    backend::Handle<backend::HwProgram> getProgram(Variant const variant) const noexcept {
+#if FILAMENT_ENABLE_MATDBG
+        updateActiveProgramsForMatdbg(variant);
+#endif
+        return getPrograms().getProgram(variant);
+    }
+
     void setScissor(uint32_t const left, uint32_t const bottom, uint32_t const width, uint32_t const height) noexcept {
         constexpr uint32_t maxvalu = std::numeric_limits<int32_t>::max();
         mScissorRect = { int32_t(left), int32_t(bottom),
                 std::min(width, maxvalu), std::min(height, maxvalu) };
         mHasScissor = true;
+    }
+
+    void setScissor(backend::Viewport const& viewport) noexcept {
+        setScissor(viewport.left, viewport.bottom, viewport.width, viewport.height);
     }
 
     void unsetScissor() noexcept {
@@ -97,6 +130,8 @@ public:
     backend::Viewport const& getScissor() const noexcept { return mScissorRect; }
 
     bool hasScissor() const noexcept { return mHasScissor; }
+
+    backend::RasterState getRasterState() const noexcept;
 
     backend::CullingMode getCullingMode() const noexcept { return mCulling; }
 
@@ -234,6 +269,8 @@ public:
         return mIsDefaultInstance;
     }
 
+    bool isUsingUboBatching() const noexcept { return mUseUboBatching; }
+
     // Called by the engine to ensure that unset samplers are initialized with placedholders.
     void fixMissingSamplers() const;
 
@@ -243,10 +280,14 @@ public:
             backend::Handle<backend::HwTexture> texture, backend::SamplerParams params);
 
     using MaterialInstance::setParameter;
+    using MaterialInstance::setConstant;
 
 private:
     friend class FMaterial;
     friend class MaterialInstance;
+
+    // Cannot inline since it inspects the FMaterial class.
+    LocalProgramCache const& getPrograms() const noexcept;
 
     template<size_t Size>
     void setParameterUntypedImpl(std::string_view name, const void* value);
@@ -266,6 +307,19 @@ private:
     template<typename T>
     T getParameterImpl(std::string_view name) const;
 
+    template<typename T>
+    void setConstantImpl(std::string_view name, T value);
+
+    template<typename T>
+    T getConstantImpl(std::string_view name) const;
+
+    void flushSpecializationConstants() const noexcept;
+
+#if FILAMENT_ENABLE_MATDBG
+    // Called by getProgram() to update active program list for matdbg UI.
+    void updateActiveProgramsForMatdbg(Variant const variant) const noexcept;
+#endif
+
     // keep these grouped, they're accessed together in the render-loop
     FMaterial const* mMaterial = nullptr;
 
@@ -274,11 +328,16 @@ private:
         backend::SamplerParams params;
     };
 
-    backend::Handle<backend::HwBufferObject> mUbHandle;
+    std::variant<BufferAllocator::AllocationId, backend::Handle<backend::HwBufferObject>> mUboData;
+    BufferAllocator::allocation_size_t mUboOffset = 0;
     tsl::robin_map<backend::descriptor_binding_t, TextureParameter> mTextureParameters;
     mutable DescriptorSet mDescriptorSet;
     UniformBuffer mUniforms;
-    bool mHasStreamUniformAssociations = false;
+
+    // HACK: Mutable so that prepareProgram() can update specialization constants.
+    mutable LocalProgramCache mPrograms;
+    mutable utils::FixedCapacityVector<backend::Program::SpecializationConstant>
+            mPendingSpecializationConstants;
 
     backend::PolygonOffset mPolygonOffset{};
     backend::StencilState mStencilState{};
@@ -296,6 +355,7 @@ private:
     bool mHasScissor : 1;
     bool mIsDoubleSided : 1;
     bool mIsDefaultInstance : 1;
+    const bool mUseUboBatching : 1;
     TransparencyMode mTransparencyMode : 2;
 
     uint64_t mMaterialSortingKey = 0;

@@ -10,18 +10,16 @@ set(TARGET matlang)
 # Sources and headers
 # ==================================================================================================
 set(HDRS
-        src/matc/CommandlineConfig.h
-        src/matc/Compiler.h
-        src/matc/DirIncluder.h
-        src/matc/MaterialCompiler.h
-        )
+ src/matc/CommandlineConfig.h
+ src/matc/Compiler.h
+ src/matc/MaterialCompiler.h
+ )
 
 set(SRCS
-        src/matc/Compiler.cpp
-        src/matc/MaterialCompiler.cpp
-        src/matc/CommandlineConfig.cpp
-        src/matc/DirIncluder.cpp
-        )
+ src/matc/Compiler.cpp
+ src/matc/CommandlineConfig.cpp
+ src/matc/MaterialCompiler.cpp
+ )
 
 # ==================================================================================================
 # Target definitions
@@ -31,15 +29,15 @@ add_library(${TARGET} STATIC ${SRCS} ${HDRS})
 target_include_directories(${TARGET} PUBLIC src)
 target_include_directories(${TARGET} PRIVATE ${filamat_SOURCE_DIR}/src)
 
-target_link_libraries(${TARGET} getopt filamat filabridge utils matp)
+target_link_libraries(${TARGET} filamat filabridge utils matp)
 set_target_properties(${TARGET} PROPERTIES FOLDER Tools)
 
 # =================================================================================================
 # Licenses
 # ==================================================================================================
-set(MODULE_LICENSES getopt glslang spirv-cross spirv-tools smol-v)
+set(MODULE_LICENSES glslang spirv-cross spirv-tools smol-v)
 set(GENERATION_ROOT ${CMAKE_CURRENT_BINARY_DIR}/generated)
-list_licenses(${GENERATION_ROOT}/licenses/licenses.inc ${MODULE_LICENSES})
+list_licenses(${GENERATION_ROOT}/licenses/licenses.inc "${MODULE_LICENSES}")
 target_include_directories(${TARGET} PRIVATE ${GENERATION_ROOT})
 
 # ==================================================================================================
@@ -65,15 +63,3 @@ set_target_properties(${TARGET} PROPERTIES FOLDER Tools)
 # ==================================================================================================
 install(TARGETS ${TARGET} RUNTIME DESTINATION bin)
 
-# ==================================================================================================
-# Tests
-# ==================================================================================================
-project(test_matc)
-set(TARGET test_matc)
-set(SRCS tests/test_includer.cpp)
-
-add_executable(${TARGET} ${SRCS})
-
-target_link_libraries(${TARGET} matlang gtest)
-
-set_target_properties(test_matc PROPERTIES FOLDER Tests)

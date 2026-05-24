@@ -39,6 +39,7 @@ public:
     enum class OutputFormat {
         BLOB,
         C_HEADER,
+        MAT,
     };
 
     using Platform = filamat::MaterialBuilder::Platform;
@@ -154,6 +155,10 @@ public:
         return mWorkarounds;
     }
 
+    bool getInsertLineDirectives() const noexcept { return mInsertLineDirectives; }
+    bool getInsertLineDirectiveChecks() const noexcept { return mInsertLineDirectiveChecks; }
+    bool getIncludeSourceMaterial() const noexcept { return mIncludeSourceMaterial; }
+
 protected:
     bool mDebug = false;
     bool mIsValid = true;
@@ -171,8 +176,11 @@ protected:
     StringReplacementMap mTemplateMap;
     StringReplacementMap mMaterialParameters;
     filament::UserVariantFilterMask mVariantFilter = 0;
-    Workarounds mWorkarounds = Workarounds::NONE;
+    Workarounds mWorkarounds = Workarounds::ALL;
     bool mIncludeEssl1 = true;
+    bool mInsertLineDirectives = true;
+    bool mInsertLineDirectiveChecks = true;
+    bool mIncludeSourceMaterial = false;
 };
 
 } // namespace matp

@@ -51,10 +51,6 @@ add_library(bluevk STATIC IMPORTED)
 set_target_properties(bluevk PROPERTIES IMPORTED_LOCATION
         ${FILAMENT_DIR}/lib/${ANDROID_ABI}/libbluevk.a)
 
-add_library(vkshaders STATIC IMPORTED)
-set_target_properties(vkshaders PROPERTIES IMPORTED_LOCATION
-        ${FILAMENT_DIR}/lib/${ANDROID_ABI}/libvkshaders.a)
-
 if (FILAMENT_SUPPORTS_WEBGPU)
         add_library(webgpu_dawn STATIC IMPORTED)
         set_target_properties(webgpu_dawn PROPERTIES IMPORTED_LOCATION
@@ -130,6 +126,7 @@ add_library(filament-jni SHARED
     # Common utils
     ../common/CallbackUtils.cpp
     ../common/NioUtils.cpp
+    ../common/JniUtils.cpp
 )
 
 target_include_directories(filament-jni PRIVATE
@@ -138,6 +135,7 @@ target_include_directories(filament-jni PRIVATE
         ../../filament/backend/include
         ../../third_party/robin-map
         ../../third_party/perfetto
+        ../../libs/bluevk/include
         ../../libs/utils/include)
 
 # Ordering is significant in the following list. The PRIVATE qualifier prevents transitive deps.
@@ -165,10 +163,15 @@ target_link_libraries(filament-jni
     PRIVATE $<$<STREQUAL:${FILAMENT_ENABLE_MATDBG},ON>:matdbg>
     PRIVATE $<$<STREQUAL:${FILAMENT_ENABLE_MATDBG},ON>:filamat>
     PRIVATE $<$<STREQUAL:${FILAMENT_SUPPORTS_VULKAN},ON>:bluevk>
-    PRIVATE $<$<STREQUAL:${FILAMENT_SUPPORTS_VULKAN},ON>:vkshaders>
     PRIVATE $<$<STREQUAL:${FILAMENT_SUPPORTS_VULKAN},ON>:smol-v>
     PRIVATE $<$<STREQUAL:${FILAMENT_SUPPORTS_WEBGPU},ON>:webgpu_dawn>
 )
 
 # Force a relink when the version script is changed:
 set_target_properties(filament-jni PROPERTIES LINK_DEPENDS ${VERSION_SCRIPT})
+
+if (FILAMENT_SUPPORTS_VULKAN)
+    add_definitions(-DFILAMENT_SUPPORTS_VULKAN=1)
+else()
+    add_definitions(-DFILAMENT_SUPPORTS_VULKAN=0)
+endif()

@@ -54,7 +54,7 @@
 
 namespace filament {
 
-class ResourceAllocator;
+class TextureCache;
 
 namespace backend {
 class Driver;
@@ -83,9 +83,16 @@ public:
 
     void resetUserTime();
 
+    void skipNextFrames(size_t frameCount) noexcept {
+        mFrameSkipper.skipNextFrames(frameCount);
+    }
+
+    size_t getFrameToSkipCount() const noexcept {
+        return mFrameSkipper.getFrameToSkipCount();
+    }
+
     // renders a single standalone view. The view must have a a custom rendertarget.
     void renderStandaloneView(FView const* view);
-
 
     void setPresentationTime(int64_t monotonic_clock_ns) const;
 
@@ -189,8 +196,8 @@ private:
         return mCommandsHighWatermark;
     }
 
-    void renderInternal(FView const* view, bool flush);
-    void renderJob(RootArenaScope& rootArenaScope, FView& view);
+    void renderInternal(backend::DriverApi& driver, FView const* view, bool flush);
+    void renderJob(backend::DriverApi& driver, RootArenaScope& rootArenaScope, FView& view);
 
     static std::pair<float, math::float2> prepareUpscaler(math::float2 scale,
             TemporalAntiAliasingOptions const& taaOptions,
@@ -202,12 +209,16 @@ private:
     backend::Handle<backend::HwRenderTarget> mRenderTargetHandle;
     FSwapChain* mSwapChain = nullptr;
     size_t mCommandsHighWatermark = 0;
-    uint32_t mFrameId = 0;
+    uint32_t mFrameId = 1; // id 0 is reserved for standalone views
     FrameInfoManager mFrameInfoManager;
     backend::TextureFormat mHdrTranslucent;
     backend::TextureFormat mHdrQualityMedium;
     backend::TextureFormat mHdrQualityHigh;
+    backend::FeatureLevel mFeatureLevel;
     bool mIsRGB8Supported : 1;
+    bool mIsFrameBufferFetchSupported : 1;
+    bool mIsFrameBufferFetchMultiSampleSupported : 1;
+    bool mIsAutoDepthResolveSupported : 1;
     Epoch mUserEpoch;
     math::float4 mShaderUserTime{};
     DisplayInfo mDisplayInfo;
@@ -218,7 +229,8 @@ private:
     tsl::robin_set<FRenderTarget*> mPreviousRenderTargets;
     std::function<void()> mBeginFrameInternal;
     uint64_t mVsyncSteadyClockTimeNano = 0;
-    std::unique_ptr<ResourceAllocator> mResourceAllocator{};
+    std::unique_ptr<TextureCache> mResourceAllocator{};
+    int64_t mLastFrameId = -1;
 };
 
 FILAMENT_DOWNCAST(Renderer)

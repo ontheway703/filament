@@ -47,6 +47,7 @@ list(SORT NDK_VERSIONS)
 list(GET NDK_VERSIONS -1 NDK_VERSION)
 get_filename_component(NDK_VERSION ${NDK_VERSION} NAME)
 set(TOOLCHAIN ${ANDROID_HOME_UNIX}/ndk/${NDK_VERSION}/toolchains/llvm/prebuilt/${HOST_NAME_L}-x86_64)
+set(CMAKE_ANDROID_NDK_VERSION ${NDK_VERSION})
 
 # specify the cross compiler
 set(COMPILER_SUFFIX)
@@ -87,7 +88,7 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 # for hardfp: CFLAGS must have -mhard-float
 #             LDFLAGS must have -Wl,--no-warn-mismatch
 #
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -mthumb -march=armv7-a -mcpu=cortex-a15 -mfloat-abi=softfp -mfpu=neon-vfpv4 -fPIE" CACHE STRING "Toolchain CFLAGS")
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -mthumb -march=armv7-a -mfloat-abi=softfp -mfpu=neon-vfpv4 -fPIE" CACHE STRING "Toolchain CFLAGS")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CMAKE_C_FLAGS}" CACHE STRING "Toolchain CXXFLAGS")
 set(CMAKE_EXE_LINKER_FLAGS    "${CMAKE_EXE_LINKER_FLAGS}    -march=armv7-a -Wl,--no-warn-mismatch -L${TOOLCHAIN}/arm-linux-androideabi/lib/armv7-a -static-libstdc++ -fPIE -pie" CACHE STRING "Toolchain LDFLAGS")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -march=armv7-a -Wl,--no-warn-mismatch -L${TOOLCHAIN}/arm-linux-androideabi/lib/armv7-a -static-libstdc++" CACHE STRING "Toolchain LDFLAGS")

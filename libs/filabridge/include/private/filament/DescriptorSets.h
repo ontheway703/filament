@@ -28,15 +28,15 @@
 
 namespace filament::descriptor_sets {
 
-backend::DescriptorSetLayout const& getPostProcessLayout() noexcept;
 backend::DescriptorSetLayout const& getDepthVariantLayout() noexcept;
 backend::DescriptorSetLayout const& getSsrVariantLayout() noexcept;
+
 backend::DescriptorSetLayout const& getPerRenderableLayout() noexcept;
 
 backend::DescriptorSetLayout getPerViewDescriptorSetLayout(
         MaterialDomain domain,
         bool isLit, bool isSSR, bool hasFog,
-        bool isVSM) noexcept;
+        bool isShadowSampler2D) noexcept;
 
 backend::DescriptorSetLayout getPerViewDescriptorSetLayoutWithVariant(
         Variant variant,

@@ -64,6 +64,7 @@ BackendTest::BackendTest() : commandBufferQueue(CONFIG_MIN_COMMAND_BUFFERS_SIZE,
         CONFIG_COMMAND_BUFFERS_SIZE, /*mPaused=*/false) {
     initializeDriver();
     mImageExpectations.emplace(getDriverApi());
+    mCleanup = std::make_unique<Cleanup>(getDriverApi());
     NativeView nativeView = getNativeView();
     mScreenSize = {nativeView.width, nativeView.height};
 }
@@ -72,21 +73,30 @@ BackendTest::~BackendTest() {
     // Ensure all graphics commands and callbacks are finished.
     flushAndWait();
     mImageExpectations->evaluate();
-    // Note: Don't terminate the driver for OpenGL, as it wipes away the context and removes the buffer from the screen.
-    if (sBackend != Backend::OPENGL) {
-        driver->terminate();
-        delete driver;
-    }
 
+    // We need to clean up all the handles before the driver terminates. Note that this should
+    // happen before the above flushAndWait, which will complete readPixels.
+    mCleanup.reset();
+    // This flush and wait will execute all the destroy commands.
+    flushAndWait();
+
+    driver->terminate();
+    delete driver;
     recordFailedImages();
+
+    delete mPlatform;
 }
 
 void BackendTest::initializeDriver() {
     auto backend = static_cast<filament::backend::Backend>(sBackend);
-    Platform* platform = PlatformFactory::create(&backend);
+    mPlatform = PlatformFactory::create(&backend);
     assert_invariant(static_cast<uint8_t>(backend) == static_cast<uint8_t>(sBackend));
-    Platform::DriverConfig const driverConfig;
-    driver = platform->createDriver(nullptr, driverConfig);
+    Platform::DriverConfig driverConfig;
+    // Enable asynchronous mode for backends that support it.
+    if (sBackend == Backend::METAL || sBackend == Backend::OPENGL) {
+        driverConfig.asynchronousMode = Platform::AsynchronousMode::THREAD_PREFERRED;
+    }
+    driver = mPlatform->createDriver(nullptr, driverConfig);
     commandStream = std::make_unique<CommandStream>(*driver, commandBufferQueue.getCircularBuffer());
 }
 
@@ -107,12 +117,12 @@ void BackendTest::flushAndWait() {
     getDriver().purge();
 }
 
-Handle<HwSwapChain> BackendTest::createSwapChain() {
+Handle<HwSwapChain> BackendTest::createSwapChain(uint64_t flags) {
     const NativeView& view = getNativeView();
     if (!view.ptr) {
-        return getDriverApi().createSwapChainHeadless(view.width, view.height, 0);
+        return getDriverApi().createSwapChainHeadless(view.width, view.height, flags);
     }
-    return getDriverApi().createSwapChain(view.ptr, 0);
+    return getDriverApi().createSwapChain(view.ptr, flags);
 }
 
 PipelineState BackendTest::getColorWritePipelineState() {

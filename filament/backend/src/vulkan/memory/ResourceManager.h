@@ -24,6 +24,7 @@
 #include <private/backend/HandleAllocator.h>
 
 #include <utils/Panic.h>
+#include <utils/ImmutableCString.h>
 
 namespace filament::backend::fvkmemory {
 
@@ -36,7 +37,7 @@ public:
         return mHandleAllocatorImpl.allocate<D>();
     }
 
-    inline void associateHandle(HandleBase::HandleId id, utils::CString&& tag) noexcept {
+    inline void associateHandle(HandleBase::HandleId id, utils::ImmutableCString&& tag) noexcept {
         mHandleAllocatorImpl.associateTagToHandle(id, std::move(tag));
     }
 
@@ -48,8 +49,11 @@ private:
     using AllocatorImpl = HandleAllocatorVK;
 
     template<typename D>
-    using requires_thread_safety = typename std::disjunction<std::is_same<D, VulkanFence>,
-            std::is_same<D, VulkanTimerQuery>>;
+    using requires_thread_safety = typename std::disjunction<
+            std::is_same<D, VulkanProgram>,
+            std::is_same<D, VulkanFence>,
+            std::is_same<D, VulkanTimerQuery>,
+            std::is_same<D, VulkanSync>>;
 
     template<typename D, typename B, typename... ARGS>
     inline D* construct(Handle<B> const& handle, ARGS&&... args) noexcept {

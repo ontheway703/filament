@@ -16,6 +16,9 @@
 
 package com.google.android.filament.utils
 
+import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceView
@@ -26,6 +29,7 @@ import com.google.android.filament.android.UiHelper
 import com.google.android.filament.gltfio.*
 import kotlinx.coroutines.*
 import java.nio.Buffer
+import java.nio.ByteBuffer
 
 private const val kNearPlane = 0.05f     // 5 cm
 private const val kFarPlane = 1000.0f    // 1 km
@@ -102,8 +106,8 @@ class ModelViewer(
     var skyboxCubemap: Texture? = null
 
     private lateinit var displayHelper: DisplayHelper
-    private lateinit var cameraManipulator: Manipulator
-    private lateinit var gestureDetector: GestureDetector
+    private var cameraManipulator: Manipulator? = null
+    private var gestureDetector: GestureDetector? = null
     private var surfaceView: SurfaceView? = null
     private var textureView: TextureView? = null
 
@@ -118,6 +122,8 @@ class ModelViewer(
     private val eyePos = DoubleArray(3)
     private val target = DoubleArray(3)
     private val upward = DoubleArray(3)
+
+    private var debugFrameCallback: ((Bitmap) -> Unit)? = null
 
     init {
         renderer = engine.createRenderer()
@@ -137,7 +143,7 @@ class ModelViewer(
         light = EntityManager.get().create()
 
         val (r, g, b) = Colors.cct(6_500.0f)
-        LightManager.Builder(LightManager.Type.DIRECTIONAL)
+        LightManager.Builder(LightManager.Type.SUN)
                 .color(r, g, b)
                 .intensity(100_000.0f)
                 .direction(0.0f, -1.0f, 0.0f)
@@ -151,15 +157,13 @@ class ModelViewer(
             surfaceView: SurfaceView,
             engine: Engine = Engine.create(),
             uiHelper: UiHelper = UiHelper(UiHelper.ContextErrorPolicy.DONT_CHECK),
-            manipulator: Manipulator? = null
+            manipulator: Manipulator? = defaultCameraManipulator(surfaceView.width, surfaceView.height)
     ) : this(engine, uiHelper) {
-        cameraManipulator = manipulator ?: Manipulator.Builder()
-                .targetPosition(kDefaultObjectPosition.x, kDefaultObjectPosition.y, kDefaultObjectPosition.z)
-                .viewport(surfaceView.width, surfaceView.height)
-                .build(Manipulator.Mode.ORBIT)
-
         this.surfaceView = surfaceView
-        gestureDetector = GestureDetector(surfaceView, cameraManipulator)
+        cameraManipulator = manipulator
+        cameraManipulator?.let { c ->
+            gestureDetector = GestureDetector(surfaceView, c)
+        }
         displayHelper = DisplayHelper(surfaceView.context)
         uiHelper.renderCallback = SurfaceCallback()
         uiHelper.attachTo(surfaceView)
@@ -171,15 +175,14 @@ class ModelViewer(
             textureView: TextureView,
             engine: Engine = Engine.create(),
             uiHelper: UiHelper = UiHelper(UiHelper.ContextErrorPolicy.DONT_CHECK),
-            manipulator: Manipulator? = null
+            manipulator: Manipulator? = defaultCameraManipulator(textureView.width, textureView.height)
     ) : this(engine, uiHelper) {
-        cameraManipulator = manipulator ?: Manipulator.Builder()
-                .targetPosition(kDefaultObjectPosition.x, kDefaultObjectPosition.y, kDefaultObjectPosition.z)
-                .viewport(textureView.width, textureView.height)
-                .build(Manipulator.Mode.ORBIT)
-
+        cameraManipulator = manipulator
         this.textureView = textureView
-        gestureDetector = GestureDetector(textureView, cameraManipulator)
+        cameraManipulator = manipulator
+        cameraManipulator?.let { c ->
+            gestureDetector = GestureDetector(textureView, c)
+        }
         displayHelper = DisplayHelper(textureView.context)
         uiHelper.renderCallback = SurfaceCallback()
         uiHelper.attachTo(textureView)
@@ -264,6 +267,35 @@ class ModelViewer(
     }
 
     /**
+     * Resets the model's transform, animation, and camera state to defaults.
+     * Call this when reusing the same model across multiple tests.
+     */
+    fun resetToDefaultState() {
+        // 1. Reset Camera parameters
+        cameraFocalLength = 28f
+        cameraNear = kNearPlane
+        cameraFar = kFarPlane
+        updateCameraProjection()
+
+        // 2. Reset the manipulator's look-at vectors to initial state
+        cameraManipulator?.let { cm ->
+            cm.jumpToBookmark(cm.homeBookmark)
+        }
+
+        // 3. Reset Animations
+        animator?.let {
+            if (it.animationCount > 0) {
+                it.applyAnimation(0, 0.0f)
+            }
+            it.updateBoneMatrices()
+        }
+
+        // 4. Re-apply the unit cube transform to clear custom scaling/translation
+        clearRootTransform()
+        transformToUnitCube()
+    }
+
+    /**
      * Frees all entities associated with the most recently-loaded model.
      */
     fun destroyModel() {
@@ -284,9 +316,9 @@ class ModelViewer(
      * @param frameTimeNanos time in nanoseconds when the frame started being rendered,
      *                       typically comes from {@link android.view.Choreographer.FrameCallback}
      */
-    fun render(frameTimeNanos: Long) {
+    fun render(frameTimeNanos: Long): Boolean {
         if (!uiHelper.isReadyToRender) {
-            return
+            return false
         }
 
         // Allow the resource loader to finalize textures that have become ready.
@@ -296,17 +328,51 @@ class ModelViewer(
         asset?.let { populateScene(it) }
 
         // Extract the camera basis from the helper and push it to the Filament camera.
-        cameraManipulator.getLookAt(eyePos, target, upward)
-        camera.lookAt(
+        cameraManipulator?.let { cm ->
+            cm.getLookAt(eyePos, target, upward)
+            camera.lookAt(
                 eyePos[0], eyePos[1], eyePos[2],
                 target[0], target[1], target[2],
                 upward[0], upward[1], upward[2])
+        }
 
         // Render the scene, unless the renderer wants to skip the frame.
+        var rendered = false
         if (renderer.beginFrame(swapChain!!, frameTimeNanos)) {
+            rendered = true
             renderer.render(view)
+
+            debugFrameCallback?.let {
+                val viewport = view.viewport
+                val bitmap = Bitmap.createBitmap(viewport.width, viewport.height,
+                        Bitmap.Config.ARGB_8888)
+                val buffer = ByteBuffer.allocateDirect(viewport.width * viewport.height * 4)
+
+                val handler = Handler(Looper.getMainLooper())
+                val pixelBufferDescriptor = Texture.PixelBufferDescriptor(buffer,
+                        Texture.Format.RGBA, Texture.Type.UBYTE, 1, 0, 0, 0, handler) {
+                    buffer.rewind()
+                    bitmap.copyPixelsFromBuffer(buffer)
+                    it(bitmap)
+                }
+                renderer.readPixels(viewport.left, viewport.bottom, viewport.width,
+                                    viewport.height, pixelBufferDescriptor)
+                debugFrameCallback = null
+            }
+
             renderer.endFrame()
         }
+        return rendered
+    }
+
+    /*
+     * Sets a callback that will be invoked with the next rendered frame as a Bitmap. Note that this
+     * is a one-time callback.
+     *
+     *  @param callback   callback to be invoked with a rendered frame as [Bitmap]
+     */
+    fun debugGetNextFrameCallback(callback: (Bitmap) -> Unit) {
+        debugFrameCallback = callback
     }
 
     private fun populateScene(asset: FilamentAsset) {
@@ -327,43 +393,50 @@ class ModelViewer(
         view.addOnAttachStateChangeListener(object : android.view.View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: android.view.View) {}
             override fun onViewDetachedFromWindow(v: android.view.View) {
-                uiHelper.detach()
-
-                destroyModel()
-                assetLoader.destroy()
-                materialProvider.destroyMaterials()
-                materialProvider.destroy()
-                resourceLoader.destroy()
-
-                if (indirectLightCubemap != null) {
-                    engine.destroyTexture(indirectLightCubemap!!)
-                    indirectLightCubemap = null
-                }
-
-                if (skyboxCubemap != null) {
-                    engine.destroyTexture(skyboxCubemap!!)
-                    skyboxCubemap = null
-                }
-
-                engine.destroyEntity(light)
-                engine.destroyRenderer(renderer)
-                engine.destroyView(this@ModelViewer.view)
-                engine.destroyScene(scene)
-                engine.destroyCameraComponent(camera.entity)
-                EntityManager.get().destroy(camera.entity)
-
-                EntityManager.get().destroy(light)
-
-                engine.destroy()
+                destroy()
             }
         })
+    }
+
+    /**
+     * Explicitly destroys the ModelViewer and its underlying Filament engine and resources.
+     */
+    fun destroy() {
+        uiHelper.detach()
+
+        destroyModel()
+        assetLoader.destroy()
+        materialProvider.destroyMaterials()
+        materialProvider.destroy()
+        resourceLoader.destroy()
+
+        if (indirectLightCubemap != null) {
+            engine.destroyTexture(indirectLightCubemap!!)
+            indirectLightCubemap = null
+        }
+
+        if (skyboxCubemap != null) {
+            engine.destroyTexture(skyboxCubemap!!)
+            skyboxCubemap = null
+        }
+
+        engine.destroyEntity(light)
+        engine.destroyRenderer(renderer)
+        engine.destroyView(this@ModelViewer.view)
+        engine.destroyScene(scene)
+        engine.destroyCameraComponent(camera.entity)
+        EntityManager.get().destroy(camera.entity)
+
+        EntityManager.get().destroy(light)
+
+        engine.destroy()
     }
 
     /**
      * Handles a [MotionEvent] to enable one-finger orbit, two-finger pan, and pinch-to-zoom.
      */
     fun onTouchEvent(event: MotionEvent) {
-        gestureDetector.onTouchEvent(event)
+        gestureDetector?.onTouchEvent(event)
     }
 
     @SuppressWarnings("ClickableViewAccessibility")
@@ -416,7 +489,7 @@ class ModelViewer(
 
         override fun onResized(width: Int, height: Int) {
             view.viewport = Viewport(0, 0, width, height)
-            cameraManipulator.setViewport(width, height)
+            cameraManipulator?.setViewport(width, height)
             updateCameraProjection()
             synchronizePendingFrames(engine)
         }
@@ -433,5 +506,11 @@ class ModelViewer(
 
     companion object {
         private val kDefaultObjectPosition = Float3(0.0f, 0.0f, -4.0f)
+        private fun defaultCameraManipulator(width: Int, height: Int) : Manipulator {
+            return Manipulator.Builder()
+                .targetPosition(kDefaultObjectPosition.x, kDefaultObjectPosition.y, kDefaultObjectPosition.z)
+                .viewport(width, height)
+                .build(Manipulator.Mode.ORBIT)
+        }
     }
 }

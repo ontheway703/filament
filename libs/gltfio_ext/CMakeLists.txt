@@ -53,6 +53,7 @@ set(SRCS
         src/UbershaderProvider.cpp
         src/Utility.cpp
         src/Utility.h
+        src/WebpProvider.cpp
         src/Wireframe.cpp
         src/Wireframe.h
         src/downcast.h
@@ -72,7 +73,7 @@ set(SRCS
 
 set(RESOURCE_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
-if (CMAKE_CROSSCOMPILING)
+if (CMAKE_CROSSCOMPILING OR FILAMENT_IMPORT_PREBUILT_EXECUTABLES)
     include(${IMPORT_EXECUTABLES})
 endif()
 
@@ -185,6 +186,10 @@ set_target_properties(uberarchive_ext PROPERTIES FOLDER Libs)
 # Build the "core" library (no filamat)
 # ==================================================================================================
 
+if(FILAMENT_SUPPORTS_WEBP_TEXTURES)
+    set(WEBP_DECODER_LIB_TARGET webpdecoder)
+endif()
+
 include_directories(${PUBLIC_HDR_DIR} ${RESOURCE_DIR})
 link_libraries(math utils filament cgltf stb ktxreader geometry tsl uberzlib)
 
@@ -193,19 +198,20 @@ add_library(gltfio_ext_core STATIC ${PUBLIC_HDRS} ${SRCS})
 target_include_directories(gltfio_ext_core PUBLIC ${PUBLIC_HDR_DIR})
 set_target_properties(gltfio_ext_core PROPERTIES FOLDER Libs)
 
-target_compile_definitions(gltfio_ext_core PUBLIC -DGLTFIO_DRACO_SUPPORTED=1)
-target_link_libraries(gltfio_ext_core PUBLIC dracodec meshoptimizer)
+target_compile_definitions(gltfio_ext_core PUBLIC -DGLTFIO_EXT_DRACO_SUPPORTED=1)
+target_link_libraries(gltfio_ext_core PUBLIC dracodec meshoptimizer ${WEBP_DECODER_LIB_TARGET})
 
-if (WEBGL_PTHREADS)
+if (WASM_PTHREADS)
     target_compile_definitions(gltfio_ext_core PUBLIC -DFILAMENT_WASM_THREADS)
 endif()
 
 set(GLTFIO_EXT_WARNINGS -Wall -Werror)
-if (NOT MSVC)
-    target_compile_options(gltfio_ext_core PRIVATE ${GLTFIO_WARNINGS})
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    list(APPEND GLTFIO_EXT_WARNINGS -Wno-error=character-conversion)
 endif()
+target_compile_options(gltfio_ext_core PRIVATE ${FILAMENT_WARNINGS})
 
-if (NOT WEBGL AND NOT ANDROID AND NOT IOS)
+if (NOT WASM AND NOT ANDROID AND NOT IOS)
 
     # ==================================================================================================
     # Link the core library with additional dependencies to create the "full" library
@@ -248,7 +254,7 @@ add_custom_target(test_gltfio_ext_files DEPENDS ${GLTF_TEST_FILES})
 
 # The following tests rely on private APIs that are stripped
 # away in Release builds
-if (TNT_DEV AND NOT WEBGL AND NOT ANDROID AND NOT IOS)
+if (TNT_DEV AND NOT WASM AND NOT ANDROID AND NOT IOS)
     set(TEST_TARGET test_gltfio_ext)
 
     add_executable(${TEST_TARGET} test/gltfio_test.cpp)

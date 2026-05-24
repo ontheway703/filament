@@ -16,7 +16,7 @@
 
 #include "details/Engine.h"
 
-#include "ResourceAllocator.h"
+#include "TextureCache.h"
 
 #include "details/BufferObject.h"
 #include "details/Camera.h"
@@ -30,6 +30,7 @@
 #include "details/Skybox.h"
 #include "details/Stream.h"
 #include "details/SwapChain.h"
+#include "details/Sync.h"
 #include "details/Texture.h"
 #include "details/VertexBuffer.h"
 #include "details/View.h"
@@ -37,12 +38,18 @@
 #include <filament/Engine.h>
 
 #include <backend/DriverEnums.h>
+#include <backend/CallbackHandler.h>
 
 #include <utils/compiler.h>
+#include <utils/Invocable.h>
 #include <utils/Panic.h>
 #include <utils/Slice.h>
+#include <utils/tribool.h>
 
 #include <chrono>
+#include <memory>
+#include <optional>
+#include <utility>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -132,6 +139,10 @@ SwapChain* Engine::createSwapChain(uint32_t const width, uint32_t const height, 
     return downcast(this)->createSwapChain(width, height, flags);
 }
 
+Sync* Engine::createSync() noexcept {
+    return downcast(this)->createSync();
+}
+
 bool Engine::destroy(const BufferObject* p) {
     return downcast(this)->destroy(downcast(p));
 }
@@ -204,6 +215,10 @@ bool Engine::destroy(const SwapChain* p) {
     return downcast(this)->destroy(downcast(p));
 }
 
+bool Engine::destroy(const Sync* p) {
+    return downcast(this)->destroy(downcast(p));
+}
+
 bool Engine::destroy(const InstanceBuffer* p) {
     return downcast(this)->destroy(downcast(p));
 }
@@ -219,6 +234,9 @@ bool Engine::isValid(const VertexBuffer* p) const {
     return downcast(this)->isValid(downcast(p));
 }
 bool Engine::isValid(const Fence* p) const {
+    return downcast(this)->isValid(downcast(p));
+}
+bool Engine::isValid(const Sync* p) const {
     return downcast(this)->isValid(downcast(p));
 }
 bool Engine::isValid(const IndexBuffer* p) const {
@@ -337,12 +355,21 @@ size_t Engine::getRenderTargetCount() const noexcept {
     return downcast(this)->getRenderTargetCount();
 }
 
+AsyncCallId Engine::runCommandAsync(Invocable<void()>&& command, CallbackHandler* handler,
+        AsyncCompletionCallback onComplete, void* user) {
+    return downcast(this)->runCommandAsync(std::move(command), handler, std::move(onComplete),
+            user);
+}
+
+bool Engine::cancelAsyncCall(AsyncCallId const id) {
+    return downcast(this)->cancelAsyncCall(id);
+}
 
 void Engine::flushAndWait() {
     downcast(this)->flushAndWait();
 }
 
-bool Engine::flushAndWait(uint64_t timeout) {
+bool Engine::flushAndWait(uint64_t const timeout) {
     return downcast(this)->flushAndWait(timeout);
 }
 
@@ -443,6 +470,14 @@ bool Engine::isStereoSupported(StereoscopicType) const noexcept {
     return downcast(this)->isStereoSupported();
 }
 
+bool Engine::isAsynchronousModeEnabled() const noexcept {
+    return downcast(this)->isAsynchronousModeEnabled();
+}
+
+bool Engine::hasUnrecoverableFailure() const noexcept {
+    return downcast(this)->hasUnrecoverableFailure();
+}
+
 size_t Engine::getMaxStereoscopicEyes() noexcept {
     return FEngine::getMaxStereoscopicEyes();
 }
@@ -465,6 +500,14 @@ std::optional<bool> Engine::getFeatureFlag(char const* name) const noexcept {
 
 bool* Engine::getFeatureFlagPtr(char const* UTILS_NONNULL name) const noexcept {
     return downcast(this)->getFeatureFlagPtr(name);
+}
+
+void Engine::compile(CompilerPriorityQueue priority, Material const* material, View const* view,
+        tribool shadowReceiver, tribool skinning, CallbackHandler* handler,
+        Invocable<void(Material*)>&& callback) {
+    downcast(this)->compile(priority,
+            downcast(material), downcast(view), shadowReceiver, skinning,
+            handler, std::move(callback));
 }
 
 #if defined(__EMSCRIPTEN__)

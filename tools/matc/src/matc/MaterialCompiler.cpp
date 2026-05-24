@@ -16,8 +16,6 @@
 
 #include "MaterialCompiler.h"
 
-#include "DirIncluder.h"
-
 #include <memory>
 #include <iostream>
 #include <utility>
@@ -52,8 +50,6 @@ bool MaterialCompiler::run(const matp::Config& config) {
     }
     std::unique_ptr<const char[]> buffer = input->read();
 
-    mParser.processTemplateSubstitutions(config, size, buffer);
-
     utils::Path const materialFilePath = utils::Path(input->getName()).getAbsolutePath();
     assert(materialFilePath.isFile());
 
@@ -69,24 +65,47 @@ bool MaterialCompiler::run(const matp::Config& config) {
         glslang::FinalizeProcess();
         return success;
     }
+    auto [resolvedStatus, resolvedString] =
+            mParser.resolveIncludes(buffer, size, materialFilePath,
+            config.getInsertLineDirectives(),
+            config.getInsertLineDirectiveChecks());
+
+    // It has failed to resolve the include directives.
+    if (!resolvedStatus.isOk()) {
+        std::cerr << resolvedStatus.getMessage() << std::endl;
+        return false;
+    }
+
+    // Now that the buffer is mutated, we need to update the buffer pointer and the size
+    // before parsing.
+    size = resolvedString.size();
+    auto modifiedBuffer = std::make_unique<char[]>(size);
+    std::strncpy(modifiedBuffer.get(), resolvedString.c_str(), size);
+    buffer = std::move(modifiedBuffer);
+
+    if (config.getOutputFormat() == matp::Config::OutputFormat::MAT) {
+        return writeMat(buffer, size, config);
+    }
+
+    mParser.processTemplateSubstitutions(config, size, buffer);
 
     MaterialBuilder::init();
     MaterialBuilder builder;
 
-    // Set the root include directory to the directory containing the material file.
-    DirIncluder includer;
-    includer.setIncludeDirectory(materialFilePath.getParent());
-
-    builder.includeCallback(includer)
-            .fileName(materialFilePath.getName().c_str());
-
-    if (!mParser.parse(builder, config, size, buffer)) {
+    utils::Status status = mParser.parse(builder, config, size, buffer);
+    if (!status.isOk()) {
+        std::cerr << status.getMessage() << std::endl;
         return false;
+    }
+
+    if (config.getIncludeSourceMaterial()) {
+        builder.materialSource(std::string_view(buffer.get(), size));
     }
 
     // If we're reflecting parameters, the MaterialParser will have handled it inside of parse().
     // We should return here to avoid actually building a material.
     if (config.getReflectionTarget() != matp::Config::Metadata::NONE) {
+        std::cout << status.getMessage() << std::endl;
         return true;
     }
 
@@ -130,7 +149,6 @@ bool MaterialCompiler::checkParameters(const matp::Config& config) {
     return true;
 }
 
-// this can either be here or material parser
 bool MaterialCompiler::compileRawShader(const char* glsl, size_t size, bool isDebug,
         matp::Config::Output* output, const char* ext) const noexcept {
     using namespace glslang;

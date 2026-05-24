@@ -387,14 +387,17 @@ wgpu::Texture WebGPUSwapChain::getCurrentTexture() {
 }
 
 void WebGPUSwapChain::present(DriverBase& driver) {
+#if !defined(__EMSCRIPTEN__)
     if (!isHeadless()) {
         mSurface.Present();
     }
-    if (frameScheduled.callback) {
-        driver.scheduleCallback(frameScheduled.handler,
-                [callback = std::move(frameScheduled.callback)]() {
+#endif
+
+    if (mFrameScheduled.callback) {
+        driver.scheduleCallback(mFrameScheduled.handler,
+                [callback = mFrameScheduled.callback]() {
                     PresentCallable noop = PresentCallable(PresentCallable::noopPresent, nullptr);
-                    callback(noop);
+                    callback->operator()(noop);
                 });
     }
 }

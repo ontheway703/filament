@@ -17,8 +17,10 @@
 #include "VulkanFboCache.h"
 
 #include "VulkanConstants.h"
+#include "VulkanHandles.h"
 #include "vulkan/utils/Image.h"
 
+#include <utils/compiler.h>
 #include <utils/Panic.h>
 
 // If any VkRenderPass or VkFramebuffer is unused for more than TIME_BEFORE_EVICTION frames, it
@@ -31,11 +33,11 @@ namespace filament::backend {
 
 bool VulkanFboCache::RenderPassEq::operator()(const RenderPassKey& k1,
         const RenderPassKey& k2) const {
-    if (k1.initialDepthLayout != k2.initialDepthLayout) return false;
+    if (k1.initialDepthStencilLayout != k2.initialDepthStencilLayout) return false;
     for (int i = 0; i < MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT; i++) {
         if (k1.colorFormat[i] != k2.colorFormat[i]) return false;
     }
-    if (k1.depthFormat != k2.depthFormat) return false;
+    if (k1.depthStencilFormat != k2.depthStencilFormat) return false;
     if (k1.clear != k2.clear) return false;
     if (k1.discardStart != k2.discardStart) return false;
     if (k1.discardEnd != k2.discardEnd) return false;
@@ -53,7 +55,7 @@ bool VulkanFboCache::FboKeyEqualFn::operator()(const FboKey& k1, const FboKey& k
     if (k1.height != k2.height) return false;
     if (k1.layers != k2.layers) return false;
     if (k1.samples != k2.samples) return false;
-    if (k1.depth != k2.depth) return false;
+    if (k1.depthStencil != k2.depthStencil) return false;
     for (int i = 0; i < MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT; i++) {
         if (k1.color[i] != k2.color[i]) return false;
         if (k1.resolve[i] != k2.resolve[i]) return false;
@@ -61,17 +63,20 @@ bool VulkanFboCache::FboKeyEqualFn::operator()(const FboKey& k1, const FboKey& k
     return true;
 }
 
-VulkanFboCache::VulkanFboCache(VkDevice device)
-    : mDevice(device) {}
+VulkanFboCache::VulkanFboCache(VkDevice device, uint32_t timeBeforeEvictionFbo)
+        : mDevice(device),
+          mTimeBeforeEvictionFbo(timeBeforeEvictionFbo) {}
 
 VulkanFboCache::~VulkanFboCache() {
     FILAMENT_CHECK_POSTCONDITION(mFramebufferCache.empty() && mRenderPassCache.empty())
             << "Please explicitly call terminate() while the VkDevice is still alive.";
 }
 
-VkFramebuffer VulkanFboCache::getFramebuffer(FboKey const& config) noexcept {
+fvkmemory::resource_ptr<VulkanFramebuffer> VulkanFboCache::getFramebuffer(FboKey const& config,
+        fvkmemory::ResourceManager* resManager,
+        fvkmemory::resource_ptr<VulkanRenderTarget> renderTarget) noexcept {
     FboMap::iterator iter = mFramebufferCache.find(config);
-    if (UTILS_LIKELY(iter != mFramebufferCache.end() && iter->second.handle != VK_NULL_HANDLE)) {
+    if (UTILS_LIKELY(iter != mFramebufferCache.end())) {
         iter.value().timestamp = mCurrentTime;
         return iter->second.handle;
     }
@@ -91,8 +96,8 @@ VkFramebuffer VulkanFboCache::getFramebuffer(FboKey const& config) noexcept {
             attachments[attachmentCount++] = attachment;
         }
     }
-    if (config.depth) {
-        attachments[attachmentCount++] = config.depth;
+    if (config.depthStencil) {
+        attachments[attachmentCount++] = config.depthStencil;
     }
 
     #if FVK_ENABLED(FVK_DEBUG_FBO_CACHE)
@@ -117,13 +122,17 @@ VkFramebuffer VulkanFboCache::getFramebuffer(FboKey const& config) noexcept {
     VkResult error = vkCreateFramebuffer(mDevice, &info, VKALLOC, &framebuffer);
     FILAMENT_CHECK_POSTCONDITION(error == VK_SUCCESS) << "Unable to create framebuffer."
                                                      << " error=" << static_cast<int32_t>(error);
-    mFramebufferCache[config] = {framebuffer, mCurrentTime};
-    return framebuffer;
+    fvkmemory::resource_ptr<VulkanFramebuffer> fbh =
+            fvkmemory::resource_ptr<VulkanFramebuffer>::construct(resManager, mDevice, framebuffer,
+                    renderTarget);
+    mFramebufferCache[config] = { fbh, mCurrentTime };
+    return fbh;
 }
 
-VkRenderPass VulkanFboCache::getRenderPass(RenderPassKey const& config) noexcept {
+fvkmemory::resource_ptr<VulkanRenderPass> VulkanFboCache::getRenderPass(
+        RenderPassKey const& config, fvkmemory::ResourceManager* resManager) noexcept {
     auto iter = mRenderPassCache.find(config);
-    if (UTILS_LIKELY(iter != mRenderPassCache.end() && iter->second.handle != VK_NULL_HANDLE)) {
+    if (UTILS_LIKELY(iter != mRenderPassCache.end())) {
         iter.value().timestamp = mCurrentTime;
         return iter->second.handle;
     }
@@ -142,26 +151,27 @@ VkRenderPass VulkanFboCache::getRenderPass(RenderPassKey const& config) noexcept
     VkAttachmentReference inputAttachmentRef[MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT] = {};
     VkAttachmentReference colorAttachmentRefs[2][MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT] = {};
     VkAttachmentReference resolveAttachmentRef[MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT] = {};
-    VkAttachmentReference depthAttachmentRef = {};
+    VkAttachmentReference depthStencilAttachmentRef = {};
 
-    const bool hasDepth = config.depthFormat != VK_FORMAT_UNDEFINED;
+    const bool hasDepthOrStencil = fvkutils::isVkDepthFormat(config.depthStencilFormat) ||
+                                   fvkutils::isVkStencilFormat(config.depthStencilFormat);
 
     VkSubpassDescription subpasses[2] = {{
         .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
         .pInputAttachments = nullptr,
         .pColorAttachments = colorAttachmentRefs[0],
         .pResolveAttachments = resolveAttachmentRef,
-        .pDepthStencilAttachment = hasDepth ? &depthAttachmentRef : nullptr
+        .pDepthStencilAttachment = hasDepthOrStencil ? &depthStencilAttachmentRef : nullptr
     },
     {
         .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
         .pInputAttachments = inputAttachmentRef,
         .pColorAttachments = colorAttachmentRefs[1],
         .pResolveAttachments = resolveAttachmentRef,
-        .pDepthStencilAttachment = hasDepth ? &depthAttachmentRef : nullptr
+        .pDepthStencilAttachment = hasDepthOrStencil ? &depthStencilAttachmentRef : nullptr
     }};
 
-    // The attachment list contains: Color Attachments, Resolve Attachments, and Depth Attachment.
+    // The attachment list contains: Color Attachments, Resolve Attachments, and Depth/Stencil Attachment.
     // For simplicity, create an array that can hold the maximum possible number of attachments.
     // Note that this needs to have the same ordering as the corollary array in getFramebuffer.
     VkAttachmentDescription attachments[MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT + MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT + 1] = {};
@@ -301,22 +311,26 @@ VkRenderPass VulkanFboCache::getRenderPass(RenderPassKey const& config) noexcept
         };
     }
 
-    // Populate the Depth Attachment.
-    if (hasDepth) {
-        const bool clear = any(config.clear & TargetBufferFlags::DEPTH);
-        const bool discardStart = any(config.discardStart & TargetBufferFlags::DEPTH);
-        const bool discardEnd = any(config.discardEnd & TargetBufferFlags::DEPTH);
-        depthAttachmentRef.layout = fvkutils::getVkLayout(VulkanLayout::DEPTH_ATTACHMENT);
-        depthAttachmentRef.attachment = attachmentIndex;
+    // Populate the Depth/Stencil Attachment.
+    if (hasDepthOrStencil) {
+        const bool clearDepth = any(config.clear & TargetBufferFlags::DEPTH);
+        const bool discardStartDepth = any(config.discardStart & TargetBufferFlags::DEPTH);
+        const bool discardEndDepth = any(config.discardEnd & TargetBufferFlags::DEPTH);
+        const bool clearStencil = any(config.clear & TargetBufferFlags::STENCIL);
+        const bool discardStartStencil = any(config.discardStart & TargetBufferFlags::STENCIL);
+        const bool discardEndStencil = any(config.discardEnd & TargetBufferFlags::STENCIL);
+
+        depthStencilAttachmentRef.layout = fvkutils::getVkLayout(VulkanLayout::DEPTH_STENCIL_ATTACHMENT);
+        depthStencilAttachmentRef.attachment = attachmentIndex;
         attachments[attachmentIndex++] = {
-            .format = config.depthFormat,
+            .format = config.depthStencilFormat,
             .samples = (VkSampleCountFlagBits) config.samples,
-            .loadOp = clear ? kClear : (discardStart ? kDontCare : kKeep),
-            .storeOp = discardEnd ? kDisableStore : kEnableStore,
-            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .initialLayout = fvkutils::getVkLayout(config.initialDepthLayout),
-            .finalLayout = fvkutils::getVkLayout(FINAL_DEPTH_ATTACHMENT_LAYOUT),
+            .loadOp = clearDepth ? kClear : (discardStartDepth ? kDontCare : kKeep),
+            .storeOp = discardEndDepth ? kDisableStore : kEnableStore,
+            .stencilLoadOp = clearStencil ? kClear : (discardStartStencil ? kDontCare : kKeep),
+            .stencilStoreOp = discardEndStencil ? kDisableStore : kEnableStore,
+            .initialLayout = fvkutils::getVkLayout(config.initialDepthStencilLayout),
+            .finalLayout = fvkutils::getVkLayout(FINAL_DEPTH_STENCIL_ATTACHMENT_LAYOUT),
         };
     }
     renderPassInfo.attachmentCount = attachmentIndex;
@@ -326,7 +340,9 @@ VkRenderPass VulkanFboCache::getRenderPass(RenderPassKey const& config) noexcept
     VkResult error = vkCreateRenderPass(mDevice, &renderPassInfo, VKALLOC, &renderPass);
     FILAMENT_CHECK_POSTCONDITION(error == VK_SUCCESS) << "Unable to create render pass."
                                                       << " error=" << error;
-    mRenderPassCache[config] = {renderPass, mCurrentTime};
+    fvkmemory::resource_ptr<VulkanRenderPass> rph =
+        fvkmemory::resource_ptr<VulkanRenderPass>::construct(resManager, mDevice, renderPass);
+    mRenderPassCache[config] = {rph, mCurrentTime};
 
 #if FVK_ENABLED(FVK_DEBUG_FBO_CACHE)
     FVK_LOGD << "Created render pass " << renderPass << " with ";
@@ -343,13 +359,12 @@ VkRenderPass VulkanFboCache::getRenderPass(RenderPassKey const& config) noexcept
              << "colorAttachmentCount[0] = " << subpasses[0].colorAttachmentCount;
 #endif
 
-    return renderPass;
+    return rph;
 }
 
 void VulkanFboCache::resetFramebuffers() noexcept {
     for (const auto& pair: mFramebufferCache) {
         mRenderPassRefCount[pair.first.renderPass]--;
-        vkDestroyFramebuffer(mDevice, pair.second.handle, VKALLOC);
     }
     mFramebufferCache.clear();
 }
@@ -357,9 +372,6 @@ void VulkanFboCache::resetFramebuffers() noexcept {
 void VulkanFboCache::terminate() noexcept {
     resetFramebuffers();
 
-    for (const auto& pair: mRenderPassCache) {
-        vkDestroyRenderPass(mDevice, pair.second.handle, VKALLOC);
-    }
     mRenderPassRefCount.clear();
     mRenderPassCache.clear();
 }
@@ -371,26 +383,39 @@ void VulkanFboCache::gc() noexcept {
     FVK_SYSTRACE_START("fbocache::gc");
 
     // If this is one of the first few frames, return early to avoid wrapping unsigned integers.
-    if (++mCurrentTime <= TIME_BEFORE_EVICTION) {
-        return;
-    }
-    const uint32_t evictTime = mCurrentTime - TIME_BEFORE_EVICTION;
+    ++mCurrentTime;
 
-    for (FboMap::iterator iter = mFramebufferCache.begin(); iter != mFramebufferCache.end(); ++iter) {
-        const FboVal fbo = iter->second;
-        if (fbo.timestamp < evictTime && fbo.handle) {
-            mRenderPassRefCount[iter->first.renderPass]--;
-            vkDestroyFramebuffer(mDevice, fbo.handle, VKALLOC);
-            iter.value().handle = VK_NULL_HANDLE;
+    if (UTILS_UNLIKELY(mCurrentTime > mTimeBeforeEvictionFbo)) {
+        const uint32_t evictTimeFbo = mCurrentTime - mTimeBeforeEvictionFbo;
+        for (FboMap::iterator iter = mFramebufferCache.begin(); iter != mFramebufferCache.end();) {
+            const FboVal fbo = iter->second;
+            if (fbo.timestamp < evictTimeFbo && fbo.handle) {
+                mRenderPassRefCount[iter->first.renderPass]--;
+
+                // erase(iterator) returns the iterator to the next element.
+                iter = mFramebufferCache.erase(iter);
+            } else {
+                ++iter;
+            }
         }
     }
-    for (auto iter = mRenderPassCache.begin(); iter != mRenderPassCache.end(); ++iter) {
-        const VkRenderPass handle = iter->second.handle;
-        if (iter->second.timestamp < evictTime && handle && mRenderPassRefCount[handle] == 0) {
-            vkDestroyRenderPass(mDevice, handle, VKALLOC);
-            iter.value().handle = VK_NULL_HANDLE;
+
+    if (UTILS_UNLIKELY(mCurrentTime > TIME_BEFORE_EVICTION)) {
+        const uint32_t evictTimeRp = mCurrentTime - TIME_BEFORE_EVICTION;
+        for (RenderPassMap::iterator iter = mRenderPassCache.begin();
+                iter != mRenderPassCache.end();) {
+            const VkRenderPass handle = iter->second.handle->getVkRenderPass();
+            if (iter->second.timestamp < evictTimeRp && handle &&
+                    mRenderPassRefCount[handle] == 0) {
+                // erase(iterator) returns the iterator to the next element.
+                iter = mRenderPassCache.erase(iter);
+                mRenderPassRefCount.erase(handle);
+            } else {
+                ++iter;
+            }
         }
     }
+
     FVK_SYSTRACE_END();
 }
 

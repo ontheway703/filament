@@ -21,7 +21,6 @@
 
 #include <filament/MaterialEnums.h>
 
-#include <filamat/IncludeCallback.h>
 #include <filamat/Package.h>
 
 #include <backend/DriverEnums.h>
@@ -146,7 +145,7 @@ protected:
     Platform mPlatform = Platform::DESKTOP;
     TargetApi mTargetApi = (TargetApi) 0;
     Optimization mOptimization = Optimization::PERFORMANCE;
-    Workarounds mWorkarounds = Workarounds::NONE;
+    Workarounds mWorkarounds = Workarounds::ALL;
     bool mPrintShaders = false;
     bool mSaveRawVariants = false;
     bool mGenerateDebugInfo = false;
@@ -254,6 +253,7 @@ public:
     using AttributeType = filament::backend::UniformType;
     using UniformType = filament::backend::UniformType;
     using ConstantType = filament::backend::ConstantType;
+    using ConstantValue = filament::backend::ConstantValue;
     using SamplerType = filament::backend::SamplerType;
     using SubpassType = filament::backend::SubpassType;
     using SamplerFormat = filament::backend::SamplerFormat;
@@ -278,7 +278,15 @@ public:
         FLOAT,
         FLOAT2,
         FLOAT3,
-        FLOAT4
+        FLOAT4,
+        INT,
+        INT2,
+        INT3,
+        INT4,
+        UINT,
+        UINT2,
+        UINT3,
+        UINT4
     };
 
     struct PreprocessorDefine {
@@ -383,17 +391,12 @@ public:
      * }
      * ~~~~~
      *
-     * @param code The source code of the material.
+     * @param code The source code of the material. Expected it to be all inlined. (#includes are
+     * resolved.)
      * @param line The line number offset of the material, where 0 is the first line. Used for error
      *             reporting
      */
     MaterialBuilder& material(const char* code, size_t line = 0) noexcept;
-
-    /**
-     * Set the callback used for resolving include directives.
-     * The default is no callback, which disallows all includes.
-     */
-    MaterialBuilder& includeCallback(IncludeCallback callback) noexcept;
 
     /**
      * Set the vertex code content of this material.
@@ -418,7 +421,8 @@ public:
      * }
      * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-     * @param code The source code of the material.
+     * @param code The source code of the material. Expected it to be all inlined. (#includes are
+     * resolved.)
      * @param line The line number offset of the material, where 0 is the first line. Used for error
      *             reporting
      */
@@ -665,6 +669,15 @@ public:
     MaterialBuilder& useDefaultDepthVariant() noexcept;
 
     /**
+     * Sets the source ASCII material (aka .mat file).
+     * The provided `source` string_view must remain valid until MaterialBuilder::build() is called.
+     */
+    MaterialBuilder& materialSource(std::string_view source) noexcept;
+
+    //! Set the (client requested) api level that the material is supposed to be compiled against.
+    MaterialBuilder& setApiLevel(uint32_t apiLevel) noexcept;
+
+    /**
      * Build the material. If you are using the Filament engine with this library, you should use
      * the job system provided by Engine.
      */
@@ -765,11 +778,7 @@ public:
     struct Constant {
         utils::CString name;
         ConstantType type;
-        union {
-            int32_t i;
-            float f;
-            bool b;
-        } defaultValue;
+        ConstantValue defaultValue;
     };
 
     struct PushConstant {
@@ -805,17 +814,16 @@ public:
     // Returns true if any of the parameter samplers matches the specified type.
     bool hasSamplerType(SamplerType samplerType) const noexcept;
 
-    static constexpr size_t MAX_PARAMETERS_COUNT = 48;
     static constexpr size_t MAX_SUBPASS_COUNT = 1;
     static constexpr size_t MAX_BUFFERS_COUNT = 4;
-    using ParameterList = Parameter[MAX_PARAMETERS_COUNT];
+    using ParameterList = std::vector<Parameter>;
     using SubpassList = Parameter[MAX_SUBPASS_COUNT];
     using BufferList = std::vector<std::unique_ptr<filament::BufferInterfaceBlock>>;
     using ConstantList = std::vector<Constant>;
     using PushConstantList = std::vector<PushConstant>;
 
     // returns the number of parameters declared in this material
-    uint8_t getParameterCount() const noexcept { return mParameterCount; }
+    size_t getParameterCount() const noexcept { return mParameters.size(); }
 
     // returns a list of at least getParameterCount() parameters
     const ParameterList& getParameters() const noexcept { return mParameters; }
@@ -892,22 +900,16 @@ private:
     bool isLit() const noexcept { return mShading != filament::Shading::UNLIT; }
 
     utils::CString mMaterialName;
-    utils::CString mFileName;
     utils::CString mCompilationParameters;
 
     class ShaderCode {
     public:
         void setLineOffset(size_t offset) noexcept { mLineOffset = offset; }
-        void setUnresolved(const utils::CString& code) noexcept {
-            mIncludesResolved = false;
+        void setCode(const utils::CString& code) noexcept {
             mCode = code;
         }
 
-        // Resolve all the #include directives, returns true if successful.
-        bool resolveIncludes(IncludeCallback callback, const utils::CString& fileName) noexcept;
-
-        const utils::CString& getResolved() const noexcept {
-            assert(mIncludesResolved);
+        const utils::CString& getCode() const noexcept {
             return mCode;
         }
 
@@ -916,13 +918,11 @@ private:
     private:
         utils::CString mCode;
         size_t mLineOffset = 0;
-        bool mIncludesResolved = false;
     };
 
     ShaderCode mMaterialFragmentCode;
     ShaderCode mMaterialVertexCode;
-
-    IncludeCallback mIncludeCallback = nullptr;
+    std::string_view mMaterialSource;
 
     PropertyList mProperties;
     ParameterList mParameters;
@@ -961,7 +961,6 @@ private:
     bool mShadowMultiplier = false;
     bool mTransparentShadow = false;
 
-    uint8_t mParameterCount = 0;
     uint8_t mSubpassCount = 0;
 
     bool mDoubleSided = false;
@@ -1002,6 +1001,9 @@ private:
     bool mNoSamplerValidation = false;
 
     bool mUseDefaultDepthVariant = false;
+
+    // Default api level is always 1.
+    uint32_t mApiLevel = 1;
 };
 
 } // namespace filamat

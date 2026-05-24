@@ -28,6 +28,7 @@
 
 #include "PlatformRunner.h"
 #include "ImageExpectations.h"
+#include "Lifetimes.h"
 
 namespace test {
 
@@ -48,15 +49,17 @@ public:
     static std::filesystem::path binaryDirectory();
 
 protected:
-
     BackendTest();
     ~BackendTest() override;
-
+    template<typename HandleType>
+    filament::backend::Handle<HandleType> addCleanup(filament::backend::Handle<HandleType> handle) {
+        return mCleanup->add(handle);
+    }
     void initializeDriver();
     void executeCommands();
     void flushAndWait();
 
-    filament::backend::Handle<filament::backend::HwSwapChain> createSwapChain();
+    filament::backend::Handle<filament::backend::HwSwapChain> createSwapChain(uint64_t flags = 0);
 
     static filament::backend::PipelineState getColorWritePipelineState();
 
@@ -69,6 +72,7 @@ protected:
 
     filament::backend::DriverApi& getDriverApi() { return *commandStream; }
     filament::backend::Driver& getDriver() { return *driver; }
+    filament::backend::Platform* getPlatform() { return mPlatform; }
 
     ImageExpectations& getExpectations() { return *mImageExpectations; }
 
@@ -77,6 +81,9 @@ protected:
 
     static bool matchesEnvironment(Backend backend);
     static bool matchesEnvironment(OperatingSystem operatingSystem);
+
+    std::unique_ptr<Cleanup> mCleanup;
+
 private:
     // Adds all the images that failed an ImageExpectation to the XML metadata for the current tests
     // case. Add --gtest_output=xml as a command line argument to generate a test_detail.xml file in
@@ -88,6 +95,7 @@ private:
     filament::backend::Driver* driver = nullptr;
     filament::backend::CommandBufferQueue commandBufferQueue;
     std::unique_ptr<filament::backend::DriverApi> commandStream;
+    filament::backend::Platform* mPlatform = nullptr;
 
     filament::backend::Handle<filament::backend::HwBufferObject> uniform;
 

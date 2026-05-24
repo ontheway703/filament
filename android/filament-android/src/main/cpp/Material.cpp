@@ -20,24 +20,28 @@
 
 #include "common/NioUtils.h"
 #include "common/CallbackUtils.h"
+#include <common/JniUtils.h>
 
 using namespace filament;
+using namespace filament::android;
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_google_android_filament_Material_nBuilderBuild(JNIEnv *env, jclass,
-        jlong nativeEngine, jobject buffer_, jint size, jint shBandCount, jint shadowQuality) {
+        jlong nativeEngine, jobject buffer_, jint size, jint shBandCount, jint shadowQuality, jint uboBatchingMode) {
     Engine* engine = (Engine*) nativeEngine;
-    AutoBuffer buffer(env, buffer_, size);
-    auto builder = Material::Builder();
-    if (shBandCount) {
-        builder.sphericalHarmonicsBandCount(shBandCount);
-    }
-    builder.shadowSamplingQuality((Material::Builder::ShadowSamplingQuality)shadowQuality);
-    Material* material = builder
-            .package(buffer.getData(), buffer.getSize())
-            .build(*engine);
-
-    return (jlong) material;
+    return wrapJni<jlong>(env, [=]() {
+        AutoBuffer buffer(env, buffer_, size);
+        auto builder = Material::Builder();
+        if (shBandCount) {
+            builder.sphericalHarmonicsBandCount(shBandCount);
+        }
+        builder.shadowSamplingQuality((Material::Builder::ShadowSamplingQuality)shadowQuality);
+        builder.uboBatching((Material::UboBatchingMode)uboBatchingMode);
+        Material* material = builder
+                .package(buffer.getData(), buffer.getSize())
+                .build(*engine);
+        return (jlong) material;
+    });
 }
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -93,6 +97,14 @@ Java_com_google_android_filament_Material_nGetBlendingMode(JNIEnv*, jclass,
         jlong nativeMaterial) {
     Material* material = (Material*) nativeMaterial;
     return (jint) material->getBlendingMode();
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_google_android_filament_Material_nGetTransparencyMode(JNIEnv*, jclass,
+        jlong nativeMaterial) {
+    Material* material = (Material*) nativeMaterial;
+    return (jint) material->getTransparencyMode();
 }
 
 
@@ -277,6 +289,17 @@ Java_com_google_android_filament_Material_nHasParameter(JNIEnv* env, jclass,
     bool hasParameter = material->hasParameter(name);
     env->ReleaseStringUTFChars(name_, name);
     return (jboolean) hasParameter;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_google_android_filament_Material_nGetParameterTransformName(JNIEnv* env, jclass,
+        jlong nativeMaterial, jstring samplerName_) {
+    Material* material = (Material*) nativeMaterial;
+    const char* samplerName = env->GetStringUTFChars(samplerName_, 0);
+    const char* transformName = material->getParameterTransformName(samplerName);
+    jstring transformName_ = env->NewStringUTF(transformName ? transformName : "");
+    env->ReleaseStringUTFChars(samplerName_, samplerName);
+    return transformName_;
 }
 
 extern "C"

@@ -7,6 +7,118 @@ A new header is inserted each time a *tag* is created.
 Instead, if you are authoring a PR for the main branch, add your release note to
 [NEW_RELEASE_NOTES.md](./NEW_RELEASE_NOTES.md).
 
+## v1.71.4
+
+- iOS: add Apple silicon (`arm64`) iOS Simulator support. The sample Xcode projects now require Xcode 16+ (CI is pinned to Xcode 16.2).
+- WEBGL_PTHREADS renamed to WASM_PTHREADS in CMakeLists.txt
+
+## v1.71.3
+
+- Metal: add support for asynchronous resource loading
+
+## v1.71.2
+
+
+## v1.71.1
+
+
+## v1.71.0
+
+- matc: better material compression using a Multi-Base Variable-Length Interleaved Token Stream [⚠️ **New Material Version**]
+
+## v1.70.2
+
+
+## v1.70.1
+
+
+## v1.70.0
+
+- engine: fix crash when using variance shadow maps
+- materials: better shadow normal-bias calculations [⚠️ **New Material Version**]
+
+## v1.69.5
+
+- engine: fix crash when using variance shadow maps
+
+## v1.69.4
+
+
+## v1.69.3
+
+
+## v1.69.2
+
+- engine: fix shader compilation failure in TAA material
+- engine: fix stereo & parallel shader compilation
+
+## v1.69.1
+
+
+## v1.69.0
+
+- engine: Support custom attributes morphing, and allow for omitting position and/or normal data. [⚠️ **Recompile Materials**]
+
+## v1.68.5
+
+- engine: "native" Streams are officially deprecated. Use "acquired" streams instead.
+- engine: add "engine.skip_frame_when_cpu_ahead_of_display" feature [b/474599530]
+
+## v1.68.4
+
+- gltfio: Add optional support for webp textures (EXT_texture_webp), controlled via FILAMENT_SUPPORTS_WEBP_TEXTURES cmake option
+
+## v1.68.3
+
+- materials: added support for the glTF `KHR_materials_dispersion` extension, which adds dispersion for refractive objects
+
+## v1.68.2
+
+- Support `setPresentationTime` with the Metal backend.
+
+## v1.68.1
+
+
+## v1.68.0
+
+- engine: add `View::getLastDynamicResolutionScale()` (b/457753622)
+- Metal: report GPU errors to the platform via `debugUpdateStat` (b/431665753).
+- materials: Make Material Instances' UBO descriptor use dynamic offsets. [⚠️ **Recompile Materials**]
+
+## v1.67.1
+
+- Metal: Add support for the `SwapChain::CONFIG_MSAA_4_SAMPLES` flag.
+- third_party: Optionally add libwebp to build
+  - controlled by cmake flag FILAMENT_SUPPORTS_WEBP_TEXTURES, defaults to OFF
+  - actual webp texture support for libs/gltfio coming in subsequent change
+
+## v1.67.0
+
+- materials: Add a new API getParameterTransformName that will return the value of the transformName field of a sampler
+parameter. [⚠️ **Recompile Materials**]
+
+## v1.66.2
+
+
+## v1.66.1
+
+- filamat: Removed a dependency on Glslang's deprecated SPIR-V remapper.
+  The functionality is already implemented by calling the CanonicalizeIds pass
+  in the SPIRV-Tools, and should be a non-functional change.
+
+## v1.66.0
+
+- materials: include default values of spec constants in material metadata [⚠️ **Recompile Materials**]
+
+## v1.65.4
+
+
+## v1.65.3
+
+
+## v1.65.2
+
+
 ## v1.65.1
 
 - `setFrameScheduledCallback` now works on all backends (frame presentation scheduling is still only

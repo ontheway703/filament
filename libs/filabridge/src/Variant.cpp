@@ -16,6 +16,8 @@
 
 #include <private/filament/Variant.h>
 
+#include <private/filament/EngineEnums.h>
+
 #include <filament/MaterialEnums.h>
 
 #include <utils/Slice.h>
@@ -30,41 +32,46 @@ namespace filament {
 Variant Variant::filterUserVariant(
         Variant variant, UserVariantFilterMask filterMask) noexcept {
     // these are easy to filter by just removing the corresponding bit
-    if (filterMask & (uint32_t)UserVariantFilterBit::DIRECTIONAL_LIGHTING) {
+    if (filterMask & uint32_t(UserVariantFilterBit::DIRECTIONAL_LIGHTING)) {
         variant.key &= ~DIR;
     }
-    if (filterMask & (uint32_t)UserVariantFilterBit::DYNAMIC_LIGHTING) {
+
+    if (filterMask & uint32_t(UserVariantFilterBit::DYNAMIC_LIGHTING)) {
         variant.key &= ~DYN;
     }
-    if (filterMask & (uint32_t)UserVariantFilterBit::SKINNING) {
+
+    if (filterMask & uint32_t(UserVariantFilterBit::SKINNING)) {
         variant.key &= ~SKN;
     }
-    if (filterMask & (uint32_t)UserVariantFilterBit::STE) {
+
+    if (filterMask & uint32_t(UserVariantFilterBit::STE)) {
         variant.key &= ~(filterMask & STE);
     }
-    if (!isValidDepthVariant(variant)) {
-        // we can't remove FOG from depth variants, this would, in fact, remove picking
-        if (filterMask & (uint32_t)UserVariantFilterBit::FOG) {
-            variant.key &= ~FOG;
+
+    if (isValidDepthVariant(variant)) {
+        // depth variants can have their MNT bit filtered
+        if (filterMask & uint32_t(UserVariantFilterBit::VSM)) {
+            variant.key &= ~MNT;
         }
     } else {
-        // depth variants can have their VSM bit filtered
-        if (filterMask & (uint32_t)UserVariantFilterBit::VSM) {
-            variant.key &= ~VSM;
+        // we can't remove FOG from depth variants, this would, in fact, remove picking
+        if (filterMask & uint32_t(UserVariantFilterBit::FOG)) {
+            variant.key &= ~FOG;
         }
     }
+
     if (!isSSRVariant(variant)) {
         // SSR variant needs to be handled separately
-        if (filterMask & (uint32_t)UserVariantFilterBit::SHADOW_RECEIVER) {
+        if (filterMask & uint32_t(UserVariantFilterBit::SHADOW_RECEIVER)) {
             variant.key &= ~SRE;
         }
-        if (filterMask & (uint32_t)UserVariantFilterBit::VSM) {
-            variant.key &= ~VSM;
+        if (filterMask & uint32_t(UserVariantFilterBit::VSM)) {
+            variant.key &= ~S2D;
         }
     } else {
         // see if we need to filter out the SSR variants
-        if (filterMask & (uint32_t)UserVariantFilterBit::SSR) {
-            variant.key &= ~SPECIAL_SSR;
+        if (filterMask & uint32_t(UserVariantFilterBit::SSR)) {
+            variant.key &= ~SPECIAL_SSR_VARIANT;
         }
     }
     return variant;
@@ -79,7 +86,7 @@ constexpr inline size_t variant_count(bool lit) noexcept {
     size_t count = 0;
     for (size_t i = 0; i < VARIANT_COUNT; i++) {
         Variant variant(i);
-        if (!Variant::isValid(variant)) {
+        if (!Variant::isValidStandardVariant(variant)) {
             continue;
         }
         variant = Variant::filterVariant(variant, lit);
@@ -108,7 +115,7 @@ constexpr auto get_variants() noexcept {
     size_t count = 0;
     for (size_t i = 0; i < VARIANT_COUNT; i++) {
         Variant variant(i);
-        if (Variant::isReserved(variant)) {
+        if (!Variant::isValidStandardVariant(variant)) {
             continue;
         }
         variant = Variant::filterVariant(variant, LIT);
@@ -127,6 +134,15 @@ constexpr auto get_depth_variants() noexcept {
         if (Variant::isValidDepthVariant(variant)) {
             variants[count++] = variant;
         }
+    }
+    return variants;
+}
+
+constexpr auto get_post_process_variants() noexcept {
+    std::array<Variant, POST_PROCESS_VARIANT_COUNT> variants;
+    for (size_t i = 0; i < POST_PROCESS_VARIANT_COUNT; i++) {
+        Variant const variant(i);
+        variants[i] = variant;
     }
     return variants;
 }
@@ -198,6 +214,7 @@ constexpr inline size_t fragment_variant_count() noexcept {
 static auto const gLitVariants{ details::get_variants<true>() };
 static auto const gUnlitVariants{ details::get_variants<false>() };
 static auto const gDepthVariants{ details::get_depth_variants() };
+static auto const gPostProcessVariants{ details::get_post_process_variants() };
 
 static_assert(reserved_is_not_valid());
 static_assert(reserved_variant_count() == 160);
@@ -210,16 +227,20 @@ static_assert(fragment_variant_count() == 33 - (2 + 2 + 8) + 4 - 1);    // 24
 
 namespace VariantUtils {
 
-utils::Slice<Variant> getLitVariants() noexcept {
+utils::Slice<const Variant> getLitVariants() noexcept {
     return { details::gLitVariants.data(), details::gLitVariants.size() };
 }
 
-utils::Slice<Variant> getUnlitVariants() noexcept {
+utils::Slice<const Variant> getUnlitVariants() noexcept {
     return { details::gUnlitVariants.data(), details::gUnlitVariants.size() };
 }
 
-utils::Slice<Variant> getDepthVariants() noexcept {
+utils::Slice<const Variant> getDepthVariants() noexcept {
     return { details::gDepthVariants.data(), details::gDepthVariants.size() };
+}
+
+utils::Slice<const Variant> getPostProcessVariants() noexcept {
+    return { details::gPostProcessVariants.data(), details::gPostProcessVariants.size() };
 }
 
 }; // VariantUtils

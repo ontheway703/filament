@@ -37,6 +37,7 @@
 #include <filament/Viewport.h>
 
 #include <private/filament/EngineEnums.h>
+#include <private/filament/Variant.h>
 
 #include <backend/DriverEnums.h>
 #include <backend/Handle.h>
@@ -52,6 +53,7 @@
 #include <array>
 #include <random>
 #include <string_view>
+#include <optional>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -65,6 +67,8 @@ class FMaterialInstance;
 class FrameGraph;
 class RenderPass;
 class RenderPassBuilder;
+class ShadowMapManager;
+class UboManager;
 struct CameraInfo;
 
 class PostProcessManager {
@@ -92,7 +96,7 @@ public:
     void init() noexcept;
     void terminate(backend::DriverApi& driver) noexcept;
 
-    void configureTemporalAntiAliasingMaterial(
+    void configureTemporalAntiAliasingMaterial(backend::DriverApi& driver,
             TemporalAntiAliasingOptions const& taaOptions) noexcept;
 
     // methods below are ordered relative to their position in the pipeline (as much as possible)
@@ -213,6 +217,17 @@ public:
     FrameGraphId<FrameGraphTexture> customResolveUncompressPass(FrameGraph& fg,
             FrameGraphId<FrameGraphTexture> inout) noexcept;
 
+    // clear depth buffer pass
+    void clearAncillaryBuffersPrepare(backend::DriverApi& driver,
+            Variant::type_t variant) noexcept;
+    void clearAncillaryBuffers(backend::DriverApi& driver,
+            backend::TargetBufferFlags attachments,
+            Variant::type_t variant) const noexcept;
+
+    // postfx fog
+    void fogPrepare(backend::DriverApi& driver) noexcept;
+    void fog(backend::DriverApi& driver) noexcept;
+
     // Anti-aliasing
     FrameGraphId<FrameGraphTexture> fxaa(FrameGraph& fg,
             FrameGraphId<FrameGraphTexture> input, Viewport const& vp,
@@ -229,6 +244,8 @@ public:
     FrameGraphId<FrameGraphTexture> taa(FrameGraph& fg,
             FrameGraphId<FrameGraphTexture> input,
             FrameGraphId<FrameGraphTexture> depth,
+            Viewport const& xvp,
+            Viewport const& vp,
             FrameHistory& frameHistory,
             FrameHistoryEntry::TemporalAA FrameHistoryEntry::*pTaa,
             TemporalAntiAliasingOptions const& taaOptions,
@@ -285,27 +302,28 @@ public:
 
     // Resolves base level of input and outputs a texture from outDesc.
     // outDesc with, height, format and samples will be overridden.
-    FrameGraphId<FrameGraphTexture> resolve(FrameGraph& fg,
-            const char* outputBufferName, FrameGraphId<FrameGraphTexture> input,
-            FrameGraphTexture::Descriptor outDesc) noexcept;
+    // customPassName is an optional parameter to override the default "resolve" pass name.
+    FrameGraphId<FrameGraphTexture> resolve(FrameGraph& fg, utils::StaticString outputBufferName,
+            FrameGraphId<FrameGraphTexture> input, FrameGraphTexture::Descriptor outDesc,
+            utils::CString customPassName = {}) noexcept;
 
-    // Resolves base level of input and outputs a texture from outDesc.
+    // Resolves base level of input and outputs a texture from outDesc using a shader instead of
+    // driver-implemented API.
     // outDesc with, height, format and samples will be overridden.
-    FrameGraphId<FrameGraphTexture> resolveDepth(FrameGraph& fg,
-            const char* outputBufferName, FrameGraphId<FrameGraphTexture> input,
-            FrameGraphTexture::Descriptor outDesc) noexcept;
-
-    // VSM shadow mipmap pass
-    FrameGraphId<FrameGraphTexture> vsmMipmapPass(FrameGraph& fg,
-            FrameGraphId<FrameGraphTexture> input, uint8_t layer, size_t level,
-            math::float4 clearColor) noexcept;
+    // customPassName is an optional parameter to override the default "resolveDepthWithShader" pass
+    // name.
+    FrameGraphId<FrameGraphTexture> resolveDepthWithShader(FrameGraph& fg,
+            utils::StaticString outputBufferName, FrameGraphId<FrameGraphTexture> input,
+            FrameGraphTexture::Descriptor outDesc, utils::CString customPassName = {}) noexcept;
 
     FrameGraphId<FrameGraphTexture> gaussianBlurPass(FrameGraph& fg,
             FrameGraphId<FrameGraphTexture> input,
             FrameGraphId<FrameGraphTexture> output,
-            bool reinhard, size_t kernelWidth, float sigma) noexcept;
+            bool reinhard, size_t kernelWidth, float sigma,
+            std::optional<backend::Viewport> scissor = {}) noexcept;
 
     FrameGraphId<FrameGraphTexture> debugShadowCascades(FrameGraph& fg,
+            ShadowMapManager const& smm,
             FrameGraphId<FrameGraphTexture> input,
             FrameGraphId<FrameGraphTexture> depth) noexcept;
 
@@ -342,8 +360,7 @@ public:
 
         void terminate(FEngine& engine) noexcept;
 
-        FMaterial* getMaterial(FEngine& engine,
-                PostProcessVariant variant = PostProcessVariant::OPAQUE) const noexcept;
+        FMaterial* getMaterial(FEngine& engine) const noexcept;
 
     private:
         void loadMaterial(FEngine& engine) const noexcept;
@@ -355,21 +372,28 @@ public:
         // mSize == 0 if mMaterial is valid, otherwise mSize > 0
         mutable uint32_t mSize{};
         // the objects' must outlive the Slice<>
-        utils::Slice<StaticMaterialInfo::ConstantInfo> mConstants{};
+        utils::Slice<const StaticMaterialInfo::ConstantInfo> mConstants{};
     };
 
     void registerPostProcessMaterial(std::string_view name, StaticMaterialInfo const& info);
 
-    PostProcessMaterial& getPostProcessMaterial(std::string_view name) noexcept;
+    PostProcessManager::PostProcessMaterial const& getPostProcessMaterial(
+            std::string_view name) const noexcept;
 
     void setFrameUniforms(backend::DriverApi& driver,
             TypedUniformBuffer<PerViewUib>& uniforms) noexcept;
 
     void bindPostProcessDescriptorSet(backend::DriverApi& driver) const noexcept;
 
-    backend::PipelineState getPipelineState(
-            FMaterial const* ma,
-            PostProcessVariant variant = PostProcessVariant::OPAQUE) const noexcept;
+    void bindPerRenderableDescriptorSet(backend::DriverApi& driver) const noexcept;
+
+    backend::PipelineState getPipelineState(FMaterialInstance const* mi,
+            Variant::type_t variant) const noexcept;
+
+    backend::PipelineState getPipelineState(FMaterialInstance const* mi,
+            PostProcessVariant variant = PostProcessVariant::OPAQUE) const noexcept {
+        return getPipelineState(mi, Variant::type_t(variant));
+    }
 
     void renderFullScreenQuad(FrameGraphResources::RenderPassInfo const& out,
             backend::PipelineState const& pipeline,
@@ -389,8 +413,8 @@ public:
 
     // Sets the necessary spec constants and uniforms common to both colorGrading.mat and
     // colorGradingAsSubpass.mat.
-    FMaterialInstance* configureColorGradingMaterial(
-            PostProcessMaterial& material, FColorGrading const* colorGrading,
+    FMaterialInstance* configureColorGradingMaterial(backend::DriverApi& driver,
+            PostProcessMaterial const& material, FColorGrading const* colorGrading,
             ColorGradingConfig const& colorGradingConfig, VignetteOptions const& vignetteOptions,
             uint32_t width, uint32_t height) noexcept;
 
@@ -398,23 +422,48 @@ public:
 
     void resetForRender();
 
-private:
+    MaterialInstanceManager& getMaterialInstanceManager() noexcept {
+            return mMaterialInstanceManager;
+    }
+
     static void unbindAllDescriptorSets(backend::DriverApi& driver) noexcept;
 
-    void bindPerRenderableDescriptorSet(backend::DriverApi& driver) noexcept;
+private:
 
-    // Helper to get a MaterialInstance from a FMaterial
-    // This currently just call FMaterial::getDefaultInstance().
-    FMaterialInstance* getMaterialInstance(FMaterial const* ma) {
-        return mMaterialInstanceManager.getMaterialInstance(ma);
+    // Helpers to get MaterialInstances.
+    //
+    // These funcions additionally ensure that the necessary shader programs are compiled via
+    // prepareProgram().
+    FMaterialInstance* getMaterialInstance(backend::DriverApi& driver, FMaterial const* ma,
+            Variant::type_t variant) const;
+
+    FMaterialInstance* getMaterialInstance(backend::DriverApi& driver, FMaterial const* ma,
+            PostProcessVariant variant = PostProcessVariant::OPAQUE) const {
+        return getMaterialInstance(driver, ma, Variant::type_t(variant));
     }
 
-    // Helper to get a MaterialInstance from a PostProcessMaterial.
-    FMaterialInstance* getMaterialInstance(FEngine& engine, PostProcessMaterial const& material,
-            PostProcessVariant variant = PostProcessVariant::OPAQUE) {
-        FMaterial const* ma = material.getMaterial(engine, variant);
-        return getMaterialInstance(ma);
+    FMaterialInstance* getMaterialInstance(FEngine& engine, backend::DriverApi& driver,
+            PostProcessMaterial const& material,
+            PostProcessVariant variant = PostProcessVariant::OPAQUE) const {
+        return getMaterialInstance(driver, material.getMaterial(engine), Variant::type_t(variant));
     }
+
+    FMaterialInstance* getMaterialInstanceWithTag(backend::DriverApi& driver, FMaterial const* ma,
+            uint32_t tag, Variant::type_t variant) const;
+
+    FMaterialInstance* getMaterialInstanceWithTag(backend::DriverApi& driver, FMaterial const* ma,
+            uint32_t tag, PostProcessVariant variant = PostProcessVariant::OPAQUE) const {
+        return getMaterialInstanceWithTag(driver, ma, tag, Variant::type_t(variant));
+    }
+
+    FMaterialInstance* getMaterialInstanceWithTag(FEngine& engine, backend::DriverApi& driver,
+            PostProcessMaterial const& material, uint32_t tag,
+            PostProcessVariant variant = PostProcessVariant::OPAQUE) const {
+        return getMaterialInstanceWithTag(driver, material.getMaterial(engine), tag,
+                Variant::type_t(variant));
+    }
+
+    UboManager* getUboManager() const noexcept;
 
     backend::RenderPrimitiveHandle mFullScreenQuadRph;
     backend::VertexBufferInfoHandle mFullScreenQuadVbih;
@@ -427,6 +476,9 @@ private:
 
     FEngine& mEngine;
 
+    backend::FeatureLevel mFeatureLevel;
+    bool mDepthStencilResolveSupported;
+    bool mDepthStencilBlitSupported;
     mutable SsrPassDescriptorSet mSsrPassDescriptorSet;
     mutable PostProcessDescriptorSet mPostProcessDescriptorSet;
     mutable StructureDescriptorSet mStructureDescriptorSet;
@@ -456,12 +508,6 @@ private:
     MaterialRegistryMap mMaterialRegistry;
 
     MaterialInstanceManager mMaterialInstanceManager;
-
-    struct {
-        int32_t colorGradingTranslucent = MaterialInstanceManager::INVALID_FIXED_INDEX;
-        int32_t colorGradingOpaque = MaterialInstanceManager::INVALID_FIXED_INDEX;
-        int32_t customResolve = MaterialInstanceManager::INVALID_FIXED_INDEX;
-    } mFixedMaterialInstanceIndex;
 
     backend::Handle<backend::HwTexture> mStarburstTexture;
 

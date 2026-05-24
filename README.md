@@ -2,15 +2,15 @@
 
 > XMuscle fork maintenance notes: see [XMUSCLE_README.md](XMUSCLE_README.md).
 
-[![Android Build Status](https://github.com/google/filament/workflows/Android/badge.svg)](https://github.com/google/filament/actions?query=workflow%3AAndroid)
-[![iOS Build Status](https://github.com/google/filament/workflows/iOS/badge.svg)](https://github.com/google/filament/actions?query=workflow%3AiOS)
-[![Linux Build Status](https://github.com/google/filament/workflows/Linux/badge.svg)](https://github.com/google/filament/actions?query=workflow%3ALinux)
-[![macOS Build Status](https://github.com/google/filament/workflows/macOS/badge.svg)](https://github.com/google/filament/actions?query=workflow%3AmacOS)
-[![Windows Build Status](https://github.com/google/filament/workflows/Windows/badge.svg)](https://github.com/google/filament/actions?query=workflow%3AWindows)
-[![Web Build Status](https://github.com/google/filament/workflows/Web/badge.svg)](https://github.com/google/filament/actions?query=workflow%3AWeb)
+[![Android Build Status](https://github.com/google/filament/actions/workflows/status-android.yml/badge.svg)](https://github.com/google/filament/actions/workflows/status-android.yml)
+[![iOS Build Status](https://github.com/google/filament/actions/workflows/status-ios.yml/badge.svg)](https://github.com/google/filament/actions/workflows/status-ios.yml)
+[![Linux Build Status](https://github.com/google/filament/actions/workflows/status-linux.yml/badge.svg)](https://github.com/google/filament/actions/workflows/status-linux.yml)
+[![macOS Build Status](https://github.com/google/filament/actions/workflows/status-macos.yml/badge.svg)](https://github.com/google/filament/actions/workflows/status-macos.yml)
+[![Windows Build Status](https://github.com/google/filament/actions/workflows/status-windows.yml/badge.svg)](https://github.com/google/filament/actions/workflows/status-windows.yml)
+[![Web Build Status](https://github.com/google/filament/actions/workflows/status-web.yml/badge.svg)](https://github.com/google/filament/actions/workflows/status-web.yml)
 
 Filament is a real-time physically based rendering engine for Android, iOS, Linux, macOS, Windows,
-and WebGL. It is designed to be as small as possible and as efficient as possible on Android.
+and WASM. It is designed to be as small as possible and as efficient as possible on Android.
 
 ## Download
 
@@ -33,7 +33,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'com.google.android.filament:filament-android:1.65.0'
+    implementation 'com.google.android.filament:filament-android:1.71.4'
 }
 ```
 
@@ -41,19 +41,18 @@ Here are all the libraries available in the group `com.google.android.filament`:
 
 | Artifact      | Description   |
 | ------------- | ------------- |
-| [![filament-android](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/filament-android/badge.svg?subject=filament-android)](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/filament-android)  | The Filament rendering engine itself. |
-| [![filament-android-debug](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/filament-android-debug/badge.svg?subject=filament-android-debug)](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/filament-android-debug)  | Debug version of `filament-android`. |
-| [![gltfio-android](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/gltfio-android/badge.svg?subject=gltfio-android)](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/gltfio-android) | A glTF 2.0 loader for Filament, depends on `filament-android`. |
-| [![filament-utils-android](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/filament-utils-android/badge.svg?subject=filament-utils-android)](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/filament-utils-android) | KTX loading, Kotlin math, and camera utilities, depends on `gltfio-android`. |
-| [![filamat-android](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/filamat-android/badge.svg?subject=filamat-android)](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/filamat-android) | A runtime material builder/compiler. This library is large but contains a full shader compiler/validator/optimizer and supports both OpenGL and Vulkan. |
-| [![filamat-android-lite](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/filamat-android-lite/badge.svg?subject=filamat-android-lite)](https://maven-badges.herokuapp.com/maven-central/com.google.android.filament/filamat-android-lite) | A much smaller alternative to `filamat-android` that can only generate OpenGL shaders. It does not provide validation or optimizations. |
+| [![filament-android](https://img.shields.io/maven-central/v/com.google.android.filament/filament-android?label=filament-android&color=green)](https://mvnrepository.com/artifact/com.google.android.filament/filament-android)  | The Filament rendering engine itself. |
+| [![filament-android-debug](https://img.shields.io/maven-central/v/com.google.android.filament/filament-android-debug?label=filament-android-debug&color=green)](https://mvnrepository.com/artifact/com.google.android.filament/filament-android-debug)  | Debug version of `filament-android`. |
+| [![gltfio-android](https://img.shields.io/maven-central/v/com.google.android.filament/gltfio-android?label=gltfio-android&color=green)](https://mvnrepository.com/artifact/com.google.android.filament/gltfio-android) | A glTF 2.0 loader for Filament, depends on `filament-android`. |
+| [![filament-utils-android](https://img.shields.io/maven-central/v/com.google.android.filament/filament-utils-android?label=filament-utils-android&color=green)](https://mvnrepository.com/artifact/com.google.android.filament/filament-utils-android) | KTX loading, Kotlin math, and camera utilities, depends on `gltfio-android`. |
+| [![filamat-android](https://img.shields.io/maven-central/v/com.google.android.filament/filamat-android?label=filamat-android&color=green)](https://mvnrepository.com/artifact/com.google.android.filament/filamat-android) | A runtime material builder/compiler. This library is large but contains a full shader compiler/validator/optimizer and supports both OpenGL and Vulkan. |
 
 ### iOS
 
 iOS projects can use CocoaPods to install the latest release:
 
 ```shell
-pod 'Filament', '~> 1.65.0'
+pod 'Filament', '~> 1.71.4'
 ```
 
 ## Documentation
@@ -91,7 +90,8 @@ pod 'Filament', '~> 1.65.0'
 - OpenGL ES 3.0+ for Android and iOS
 - Metal for macOS and iOS
 - Vulkan 1.0 for Android, Linux, macOS, and Windows
-- WebGL 2.0 for all platforms
+- WebGPU for Android, Linux, macOS, and Windows
+- WebGL 2.0 for all browsers supporting it
 
 ### Rendering
 
@@ -126,7 +126,7 @@ pod 'Filament', '~> 1.65.0'
 
 - HDR bloom
 - Depth of field bokeh
-- Multiple tone mappers: generic (customizable), ACES, filmic, etc.
+- Multiple tone mappers: PBR Neutral, AgX, generic (customizable), ACES, filmic, etc.
 - Color and tone management: luminance scaling, gamut mapping
 - Color grading: exposure, night adaptation, white balance, channel mixer,
   shadows/mid-tones/highlights, ASC CDL, contrast, saturation, etc.
@@ -160,15 +160,16 @@ pod 'Filament', '~> 1.65.0'
   - [x] KHR_draco_mesh_compression
   - [x] KHR_lights_punctual
   - [x] KHR_materials_clearcoat
+  - [x] KHR_materials_dispersion
   - [x] KHR_materials_emissive_strength
   - [x] KHR_materials_ior
   - [x] KHR_materials_pbrSpecularGlossiness
   - [x] KHR_materials_sheen
+  - [x] KHR_materials_specular
   - [x] KHR_materials_transmission
   - [x] KHR_materials_unlit
   - [x] KHR_materials_variants
   - [x] KHR_materials_volume
-  - [x] KHR_materials_specular
   - [x] KHR_mesh_quantization
   - [x] KHR_texture_basisu
   - [x] KHR_texture_transform
@@ -333,7 +334,7 @@ and tools.
   - `filamesh`:               Mesh converter
   - `glslminifier`:           Minifies GLSL source code
   - `matc`:                   Material compiler
-  - `filament-matp`:          Material parser
+  - `matedit`:                Material editor for compiled materials
   - `matinfo`                 Displays information about materials compiled with `matc`
   - `mipgen`                  Generates a series of miplevels from a source image
   - `normal-blending`:        Tool to blend normal maps

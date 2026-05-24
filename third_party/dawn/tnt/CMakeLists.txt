@@ -17,9 +17,19 @@ set(DAWN_BUILD_MONOLITHIC_LIBRARY STATIC)
 set(TINT_BUILD_CMD_TOOLS OFF)
 set(DAWN_ENABLE_VULKAN ON)
 
+set(DAWN_BUILD_PROTOBUF OFF)
+set(DAWN_ENABLE_DESKTOP_GL OFF)
+set(DAWN_ENABLE_OPENGLES OFF)
+set(DAWN_USE_GLFW OFF)
+
 if (FILAMENT_BUILD_FILAMAT)
     set(TINT_BUILD_SPV_READER ON)
 endif ()
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "AppleClang|Clang")
+    # Workaround for AppleClang 17 optimizer bug causing RTTI cast failures in Tint.
+    add_compile_options(-DTINT_APPLECLANG_17_WORKAROUND=1)
+endif()
 
 add_subdirectory(../  ${PROJECT_BINARY_DIR}/third_party/dawn)
 
@@ -42,8 +52,6 @@ if (ANDROID AND FILAMENT_BUILD_FILAMAT)
         tint_lang_spirv_intrinsic
         tint_lang_spirv_ir
         tint_lang_spirv_reader
-        tint_lang_spirv_reader_ast_lower
-        tint_lang_spirv_reader_ast_parser
         tint_lang_spirv_reader_common
         tint_lang_spirv_reader_lower
         tint_lang_spirv_reader_parser
@@ -52,9 +60,6 @@ if (ANDROID AND FILAMENT_BUILD_FILAMAT)
         tint_lang_spirv_writer
         tint_lang_wgsl
         tint_lang_wgsl_ast
-        tint_lang_wgsl_ast_transform
-        tint_lang_wgsl_common
-        tint_lang_wgsl_features
         tint_lang_wgsl_intrinsic
         tint_lang_wgsl_ir
         tint_lang_wgsl_program
@@ -64,14 +69,13 @@ if (ANDROID AND FILAMENT_BUILD_FILAMAT)
         tint_lang_wgsl_writer_ast_printer
         tint_lang_wgsl_writer_ir_to_program
         tint_lang_wgsl_writer_raise
-        tint_results
         tint_utils
         tint_utils_diagnostic
         tint_utils_ice
-        tint_utils_result
         tint_utils_rtti
         tint_utils_strconv
         tint_utils_symbol
+        tint_utils_system
         tint_utils_text
         tint_utils_text_generator
     )

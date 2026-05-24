@@ -52,7 +52,13 @@ enum class ResourceType : uint8_t {
     VULKAN_BUFFER = 14,
     STAGE_SEGMENT = 15,
     STAGE_IMAGE = 16,
-    UNDEFINED_TYPE = 17,    // Must be the last enum because we use it for iterating over the enums.
+    SYNC = 17,
+    MEMORY_MAPPED_BUFFER = 18,
+    SEMAPHORE = 19,
+    STREAM = 20,
+    FRAMEBUFFER = 21,
+    RENDER_PASS = 22,
+    UNDEFINED_TYPE = 23,    // Must be the last enum because we use it for iterating over the enums.
 };
 
 template<typename D>
@@ -61,7 +67,10 @@ ResourceType getTypeEnum() noexcept;
 std::string_view getTypeStr(ResourceType type);
 
 inline bool isThreadSafeType(ResourceType type) {
-    return type == ResourceType::FENCE || type == ResourceType::TIMER_QUERY;
+    return type == ResourceType::PROGRAM ||
+           type == ResourceType::FENCE ||
+           type == ResourceType::TIMER_QUERY ||
+           type == ResourceType::SYNC;
 }
 
 struct Resource {
@@ -76,6 +85,8 @@ struct Resource {
     bool isType() const {
         return getTypeEnum<D>() == restype;
     }
+
+    uint32_t getCount() const { return mCount; }
 
 private:
     inline void inc() noexcept {

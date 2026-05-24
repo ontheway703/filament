@@ -259,7 +259,7 @@ TEST_F(AnimationCacheTest, LoadMultipleSources) {
     EXPECT_TRUE(animator->hasSource("source2"));
 
     auto stats = animator->getAnimationCacheStats();
-    EXPECT_EQ(stats.cachedCount, 6);  // 3 + 3
+    EXPECT_EQ(stats.cachedCount, getAnimCount() * 2);
     EXPECT_EQ(stats.sourceCount, 2);
 
 }
@@ -269,7 +269,7 @@ TEST_F(AnimationCacheTest, UnloadSource) {
     ASSERT_NE(animAsset, nullptr);
 
     animator->loadAnimationsFromSource("test_source", animAsset.get());
-    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 3);
+    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, getAnimCount());
 
     animator->unloadAnimationsFromSource("test_source");
 
@@ -286,7 +286,7 @@ TEST_F(AnimationCacheTest, ClearCache) {
 
     animator->loadAnimationsFromSource("source1", asset1.get());
     animator->loadAnimationsFromSource("source2", asset2.get());
-    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 6);
+    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, getAnimCount() * 2);
 
     animator->clearAnimationCache();
 
@@ -440,8 +440,11 @@ TEST_F(AnimationCacheTest, GetAnimationDuration) {
 // ========================================
 
 TEST_F(AnimationCacheTest, LRUEvictionWhenFull) {
-    // 设置小缓存（容量 5）
-    animator->setAnimationCacheSize(5);
+    ASSERT_GT(getAnimCount(), 1) << "Test requires at least 2 animations";
+    const size_t cacheSize = getAnimCount() + 1;
+
+    // 设置小缓存：能完整容纳一个源，但不能完整容纳两个源
+    animator->setAnimationCacheSize(cacheSize);
 
     auto asset1 = loadTestAnimationAsset("source1");
     auto asset2 = loadTestAnimationAsset("source2");
@@ -449,11 +452,11 @@ TEST_F(AnimationCacheTest, LRUEvictionWhenFull) {
     ASSERT_NE(asset2, nullptr);
 
     animator->loadAnimationsFromSource("source1", asset1.get());
-    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 3);
+    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, getAnimCount());
 
-    // 加载第二个源（6 > 5，应该淘汰 2 个最早的）
+    // 加载第二个源，应该淘汰最早访问的动画，为新源留出空间
     animator->loadAnimationsFromSource("source2", asset2.get());
-    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 5);
+    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, cacheSize);
 
     // source1 的部分动画应该被淘汰
     EXPECT_TRUE(animator->hasSource("source2"));  // source2 完整保留
@@ -461,7 +464,8 @@ TEST_F(AnimationCacheTest, LRUEvictionWhenFull) {
 }
 
 TEST_F(AnimationCacheTest, AccessOrderUpdatesOnPlayback) {
-    animator->setAnimationCacheSize(5);
+    ASSERT_GT(getAnimCount(), 1) << "Test requires at least 2 animations";
+    animator->setAnimationCacheSize(getAnimCount() + 1);
 
     auto asset1 = loadTestAnimationAsset("source1");
     ASSERT_NE(asset1, nullptr);
@@ -485,7 +489,7 @@ TEST_F(AnimationCacheTest, AccessOrderUpdatesOnPlayback) {
 
 TEST_F(AnimationCacheTest, LeastRecentlyAccessedEvictedFirst) {
     ASSERT_GE(getAnimCount(), 3) << "Test requires at least 3 animations";
-    animator->setAnimationCacheSize(3);
+    animator->setAnimationCacheSize(getAnimCount());
 
     auto asset = loadTestAnimationAsset("test");
     ASSERT_NE(asset, nullptr);
@@ -507,6 +511,8 @@ TEST_F(AnimationCacheTest, LeastRecentlyAccessedEvictedFirst) {
 }
 
 TEST_F(AnimationCacheTest, EvictionWithSetCacheSize) {
+    const size_t animCount = getAnimCount();
+
     auto asset1 = loadTestAnimationAsset("source1");
     auto asset2 = loadTestAnimationAsset("source2");
     ASSERT_NE(asset1, nullptr);
@@ -514,20 +520,21 @@ TEST_F(AnimationCacheTest, EvictionWithSetCacheSize) {
 
     animator->loadAnimationsFromSource("source1", asset1.get());
     animator->loadAnimationsFromSource("source2", asset2.get());
-    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 6);
+    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, animCount * 2);
 
-    // 缩小缓存到 3
-    animator->setAnimationCacheSize(3);
+    // 缩小缓存到刚好容纳一个完整源
+    animator->setAnimationCacheSize(animCount);
     auto stats = animator->getAnimationCacheStats();
-    EXPECT_EQ(stats.cachedCount, 3);
-    EXPECT_EQ(stats.maxSize, 3) << "maxSize should reflect new cache size";
+    EXPECT_EQ(stats.cachedCount, animCount);
+    EXPECT_EQ(stats.maxSize, animCount) << "maxSize should reflect new cache size";
     EXPECT_LE(stats.cachedCount, animator->getAnimationCacheSize());
 
-    // 扩大缓存到 10
-    animator->setAnimationCacheSize(10);
+    // 扩大缓存
+    const size_t expandedSize = animCount * 2 + 2;
+    animator->setAnimationCacheSize(expandedSize);
     stats = animator->getAnimationCacheStats();
-    EXPECT_EQ(stats.cachedCount, 3) << "Cached count should remain unchanged when expanding";
-    EXPECT_EQ(stats.maxSize, 10) << "maxSize should reflect new cache size";
+    EXPECT_EQ(stats.cachedCount, animCount) << "Cached count should remain unchanged when expanding";
+    EXPECT_EQ(stats.maxSize, expandedSize) << "maxSize should reflect new cache size";
 
     // 缩小到 2
     animator->setAnimationCacheSize(2);
@@ -539,7 +546,7 @@ TEST_F(AnimationCacheTest, EvictionWithSetCacheSize) {
 
 TEST_F(AnimationCacheTest, QueryDoesNotUpdateAccessOrder) {
     ASSERT_GE(getAnimCount(), 3) << "Test requires at least 3 animations";
-    animator->setAnimationCacheSize(3);
+    animator->setAnimationCacheSize(getAnimCount());
 
     auto asset = loadTestAnimationAsset("test");
     ASSERT_NE(asset, nullptr);
@@ -653,7 +660,7 @@ TEST_F(AnimationCacheTest, RapidLoadUnloadCycles) {
     // 快速加载/卸载 10 次
     for (int i = 0; i < 10; i++) {
         animator->loadAnimationsFromSource("test", asset.get());
-        EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 3);
+        EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, getAnimCount());
 
         animator->unloadAnimationsFromSource("test");
         EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 0);
@@ -688,7 +695,7 @@ TEST_F(AnimationCacheTest, ChannelPointersValidAfterMove) {
 }
 
 TEST_F(AnimationCacheTest, NoMemoryLeaksAfterEviction) {
-    animator->setAnimationCacheSize(3);
+    animator->setAnimationCacheSize(getAnimCount());
 
     // 加载多个源，触发淘汰
     auto asset1 = loadTestAnimationAsset("source1");
@@ -703,7 +710,7 @@ TEST_F(AnimationCacheTest, NoMemoryLeaksAfterEviction) {
     animator->loadAnimationsFromSource("source3", asset3.get());  // 淘汰 source2
 
     // 验证缓存状态
-    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, 3);
+    EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, getAnimCount());
     EXPECT_TRUE(animator->hasSource("source3"));
 
     // 清空缓存
@@ -832,7 +839,7 @@ TEST_F(AnimationCacheTest, LoadWithNullAsset) {
  * 这个测试验证实现对零动画的健壮性
  */
 TEST_F(AnimationCacheTest, LoadEmptyAnimationAsset) {
-    // 当前 ecorche_animation_only.glb 包含 3 个动画
+    // 当前 ecorche_animation_only.glb 包含多个动画
     // 我们无法构造真正的空AnimationAsset（需要私有构造函数）
     // 因此这个测试验证逻辑：如果未来支持空资产，应该正确处理
 
@@ -975,7 +982,7 @@ TEST_F(AnimationCacheTest, SetCacheSizeToZero) {
     auto asset = loadTestAnimationAsset("test");
     ASSERT_NE(asset, nullptr);
 
-    // 加载 3 个动画
+    // 加载测试资产中的全部动画
     size_t count = animator->loadAnimationsFromSource("test", asset.get());
     ASSERT_GT(count, 0);
     EXPECT_EQ(animator->getAnimationCacheStats().cachedCount, count);

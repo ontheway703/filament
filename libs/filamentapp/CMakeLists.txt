@@ -37,7 +37,12 @@ set(SRCS
         src/IcoSphere.cpp
         src/MeshAssimp.cpp
         src/Sphere.cpp
+        src/KeyInputConversion.h
 )
+
+if (FILAMENT_SUPPORTS_VULKAN)
+    list(APPEND SRCS src/VulkanPlatformHelper.cpp)
+endif()
 
 set(LIBS
         assimp
@@ -47,7 +52,7 @@ set(LIBS
         filament
         filament-iblprefilter
         geometry
-        getopt
+        
         image
         imageio
         imgui
@@ -67,23 +72,40 @@ set(MATERIAL_SRCS
 
 if (APPLE)
     list(APPEND SRCS src/NativeWindowHelperCocoa.mm)
+    if (FILAMENT_SUPPORTS_VULKAN)
+        list(APPEND SRCS src/VulkanPlatformHelperApple.mm)
+    endif()
     list(APPEND LIBS "-framework Cocoa -framework QuartzCore")
 endif()
 
 if (LINUX)
     list(APPEND SRCS src/NativeWindowHelperLinux.cpp)
+    if (FILAMENT_SUPPORTS_VULKAN)
+        list(APPEND SRCS src/VulkanPlatformHelperLinux.cpp)
+    endif()
 endif()
 
 if (WIN32)
     list(APPEND SRCS src/NativeWindowHelperWindows.cpp)
+
+    if (FILAMENT_SUPPORTS_VULKAN)
+        list(APPEND SRCS src/VulkanPlatformHelperWindows.cpp)
+    endif()
+
     list(APPEND LIBS sdl2main)
+endif()
+
+if (ANDROID)
+    if (FILAMENT_SUPPORTS_VULKAN)
+        list(APPEND SRCS src/VulkanPlatformHelperAndroid.cpp)
+    endif()
 endif()
 
 # ==================================================================================================
 # Compile resources
 # ==================================================================================================
 
-if (CMAKE_CROSSCOMPILING)
+if (CMAKE_CROSSCOMPILING OR FILAMENT_IMPORT_PREBUILT_EXECUTABLES)
     include(${IMPORT_EXECUTABLES})
 endif()
 

@@ -1,4 +1,14 @@
-add_subdirectory(../ "${CMAKE_CURRENT_BINARY_DIR}/abseil")
+option(FILAMENT_USE_EXTERNAL_ABSL "Use find_package to locate an external Abseil dependency" OFF)
+
+if (FILAMENT_USE_EXTERNAL_ABSL)
+  find_package(absl CONFIG QUIET)
+else()
+  # This will skip checks that sometimes fail due to enviornment incompatibility on Linxu. Abseil can
+  # still be built without this.
+  set(ABSL_INTERNAL_AT_LEAST_CXX17 TRUE CACHE BOOL "Forced in wrapper")
+  set(ABSL_INTERNAL_AT_LEAST_CXX20 TRUE CACHE BOOL "Forced in wrapper")
+  add_subdirectory(../ "${CMAKE_CURRENT_BINARY_DIR}/abseil")
+endif()
 
 # To make Abseil easy for clients to link against, we create a dummy target just for installation
 # purposes and combine all of Abseil's libraries into a single, easy to link against static library.

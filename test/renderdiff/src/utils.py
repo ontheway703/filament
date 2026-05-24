@@ -14,9 +14,11 @@
 
 import subprocess
 import os
+import shutil
 import argparse
 import sys
 import pathlib
+import shlex
 
 def execute(cmd,
             cwd=None,
@@ -24,7 +26,7 @@ def execute(cmd,
             stdin=None,
             env=None,
             raise_errors=False):
-  in_env = os.environ
+  in_env = os.environ.copy()
   in_env.update(env if env else {})
   home = os.environ['HOME']
   if f'{home}/bin' not in in_env['PATH']:
@@ -44,11 +46,11 @@ def execute(cmd,
       'universal_newlines': True
   }
   if capture_output:
-    process = subprocess.Popen(cmd.split(' '), **kwargs)
+    process = subprocess.Popen(shlex.split(cmd), **kwargs)
     output, err_output = process.communicate()
     return_code = process.returncode
   else:
-    return_code = subprocess.call(cmd.split(' '), **kwargs)
+    return_code = subprocess.call(shlex.split(cmd), **kwargs)
 
   if return_code:
     # Error
@@ -104,8 +106,7 @@ def mkdir_p(path_str):
   pathlib.Path(path_str).mkdir(parents=True, exist_ok=True)
 
 def mv_f(src_str, dst_str):
-  src = pathlib.Path(src_str)
-  src.replace(dst_str)
+  shutil.move(src_str, dst_str)
 
 def important_print(msg):
   lines = msg.split('\n')

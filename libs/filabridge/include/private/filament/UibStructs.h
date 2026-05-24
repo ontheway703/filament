@@ -17,11 +17,13 @@
 #ifndef TNT_FILABRIDGE_UIBSTRUCTS_H
 #define TNT_FILABRIDGE_UIBSTRUCTS_H
 
+#include <math/mat3.h>
 #include <math/mat4.h>
 #include <math/vec4.h>
 
 #include <private/filament/EngineEnums.h>
 
+#include <array>
 #include <string_view>
 
 /*
@@ -38,7 +40,8 @@ struct alignas(16) vec3 : public std::array<float, 3> {};
 struct alignas(16) vec4 : public std::array<float, 4> {};
 
 struct mat33 : public std::array<vec3, 3> {
-    mat33& operator=(math::mat3f const& rhs) noexcept {
+    // passing by value informs the compiler that rhs != *this
+    mat33& operator=(math::mat3f const rhs) noexcept {
         for (int i = 0; i < 3; i++) {
             (*this)[i][0] = rhs[i][0];
             (*this)[i][1] = rhs[i][1];
@@ -49,7 +52,8 @@ struct mat33 : public std::array<vec3, 3> {
 };
 
 struct mat44 : public std::array<vec4, 4> {
-    mat44& operator=(math::mat4f const& rhs) noexcept {
+    // passing by value informs the compiler that rhs != *this
+    mat44& operator=(math::mat4f const rhs) noexcept {
         for (int i = 0; i < 4; i++) {
             (*this)[i][0] = rhs[i][0];
             (*this)[i][1] = rhs[i][1];
@@ -149,20 +153,24 @@ struct PerViewUib { // NOLINT(cppcoreguidelines-pro-type-member-init)
     int32_t directionalShadows;
     float ssContactShadowDistance;
 
+    math::float2 shadowAtlasResolution;         // dim, 1/dim
+    float shadowReserved0;
+    float shadowReserved1;
+
     // position of cascade splits, in world space (not including the near plane)
     // -Inf stored in unused components
     math::float4 cascadeSplits;
     // bit 0-3: cascade count
     // bit 8-11: cascade has visible shadows
     int32_t cascades;
-    float shadowPenumbraRatioScale;     // For DPCF or PCSS, scale penumbra ratio for artistic use
+    float shadowPenumbraRatioScale;             // For DPCF or PCSS, scale penumbra ratio for artistic use
     math::float2 lightFarAttenuationParams;     // a, a/far (a=1/pct-of-far)
 
     // --------------------------------------------------------------------------------------------
     // VSM shadows [variant: VSM]
     // --------------------------------------------------------------------------------------------
     float vsmExponent;
-    float vsmDepthScale;
+    float vsmMaxMoment;
     float vsmLightBleedReduction;
     uint32_t shadowSamplingType;                // 0: vsm, 1: dpcf
 
@@ -209,7 +217,7 @@ struct PerViewUib { // NOLINT(cppcoreguidelines-pro-type-member-init)
     float es2Reserved2;
 
     // bring PerViewUib to 2 KiB
-    math::float4 reserved[22];
+    math::float4 reserved[21];
 };
 
 // 2 KiB == 128 float4s
@@ -231,12 +239,14 @@ struct PerRenderableData {
     math::float4 reserved[8];
 
     static uint32_t packFlagsChannels(
-            bool skinning, bool morphing, bool contactShadows, bool hasInstanceBuffer,
+            bool skinning, uint8_t morphing, bool contactShadows, bool hasInstanceBuffer,
             uint8_t channels) noexcept {
+        const uint32_t morphingFlags = uint32_t(morphing) << 9;
+
         return (skinning              ? 0x100 : 0) |
-               (morphing              ? 0x200 : 0) |
-               (contactShadows        ? 0x400 : 0) |
-               (hasInstanceBuffer     ? 0x800 : 0) |
+               morphingFlags                       |
+               (contactShadows        ? 0x1000 : 0) |
+               (hasInstanceBuffer     ? 0x2000 : 0) |
                channels;
     }
 };
@@ -293,13 +303,12 @@ struct ShadowUib { // NOLINT(cppcoreguidelines-pro-type-member-init)
         math::mat4f lightFromWorldMatrix;       // 64
         math::float4 lightFromWorldZ;           // 16
         math::float4 scissorNormalized;         // 16
-        float texelSizeAtOneMeter;              //  4
         float bulbRadiusLs;                     //  4
         float nearOverFarMinusNear;             //  4
-        float normalBias;                       //  4
-        bool elvsm;                             //  4
-        uint32_t layer;                         //  4
-        uint32_t reserved1;                     //  4
+        math::float2 normalBias;                //  4
+        bool elvsm;                             //  4   // could be 1 bit
+        uint32_t layer;                         //  4   // could be 8 bits
+        float vsmExponent;                      //  4   // could be fp16
         uint32_t reserved2;                     //  4
     };
     ShadowData shadows[CONFIG_MAX_SHADOWMAPS];

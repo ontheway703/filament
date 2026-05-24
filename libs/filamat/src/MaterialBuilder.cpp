@@ -17,13 +17,11 @@
 #include "filamat/MaterialBuilder.h"
 
 #include <filamat/Enums.h>
-#include <filamat/IncludeCallback.h>
 #include <filamat/Package.h>
 
-#include "Includes.h"
+#include "GLSLPostProcessor.h"
 #include "MaterialVariants.h"
 #include "PushConstantDefinitions.h"
-#include "GLSLPostProcessor.h"
 
 #include "sca/GLSLTools.h"
 
@@ -33,6 +31,7 @@
 
 #include "eiff/BlobDictionary.h"
 #include "eiff/ChunkContainer.h"
+#include "eiff/CompressedStringChunk.h"
 #include "eiff/DictionarySpirvChunk.h"
 #include "eiff/DictionaryTextChunk.h"
 #include "eiff/LineDictionary.h"
@@ -58,7 +57,7 @@
 #include <utils/FixedCapacityVector.h>
 #include <utils/Hash.h>
 #include <utils/JobSystem.h>
-#include <utils/Log.h>
+#include <utils/Logger.h>
 #include <utils/Mutex.h>
 #include <utils/Panic.h>
 #include <utils/compiler.h>
@@ -71,7 +70,6 @@
 #include <atomic>
 #include <fstream>
 #include <functional>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -133,7 +131,7 @@ void MaterialBuilderBase::prepare(bool const vulkanSemantics,
     // OpenGL is a special case. If we're doing any optimization, then we need to go to Spir-V.
     TargetLanguage glTargetLanguage = mOptimization > Optimization::PREPROCESSOR ?
                                       TargetLanguage::SPIRV : TargetLanguage::GLSL;
-    if (vulkanSemantics) {
+    if (vulkanSemantics || featureLevel == backend::FeatureLevel::FEATURE_LEVEL_0) {
         // Currently GLSLPostProcessor.cpp is incapable of compiling SPIRV to GLSL without
         // running the optimizer. For now we just activate the optimizer in that case.
         mOptimization = Optimization::PERFORMANCE;
@@ -169,7 +167,7 @@ void MaterialBuilderBase::prepare(bool const vulkanSemantics,
                     && featureLevel == backend::FeatureLevel::FEATURE_LEVEL_0
                     && shaderModel == ShaderModel::MOBILE) {
                 mCodeGenPermutations.push_back({
-                    shaderModel,
+                    ShaderModel::MOBILE,
                     TargetApi::OPENGL,
                     glTargetLanguage,
                     backend::FeatureLevel::FEATURE_LEVEL_0
@@ -227,29 +225,19 @@ MaterialBuilder& MaterialBuilder::name(const char* name) noexcept {
     return *this;
 }
 
-MaterialBuilder& MaterialBuilder::fileName(const char* name) noexcept {
-    mFileName = CString(name);
-    return *this;
-}
-
 MaterialBuilder& MaterialBuilder::compilationParameters(const char* params) noexcept {
     mCompilationParameters = CString(params);
     return *this;
 }
 
 MaterialBuilder& MaterialBuilder::material(const char* code, size_t const line) noexcept {
-    mMaterialFragmentCode.setUnresolved(CString(code));
+    mMaterialFragmentCode.setCode(CString(code));
     mMaterialFragmentCode.setLineOffset(line);
     return *this;
 }
 
-MaterialBuilder& MaterialBuilder::includeCallback(IncludeCallback callback) noexcept {
-    mIncludeCallback = std::move(callback);
-    return *this;
-}
-
 MaterialBuilder& MaterialBuilder::materialVertex(const char* code, size_t const line) noexcept {
-    mMaterialVertexCode.setUnresolved(CString(code));
+    mMaterialVertexCode.setCode(CString(code));
     mMaterialVertexCode.setLineOffset(line);
     return *this;
 }
@@ -295,8 +283,7 @@ MaterialBuilder& MaterialBuilder::variable(Variable v,
 
 MaterialBuilder& MaterialBuilder::parameter(const char* name, size_t size, UniformType type,
         ParameterPrecision precision) {
-    FILAMENT_CHECK_POSTCONDITION(mParameterCount < MAX_PARAMETERS_COUNT) << "Too many parameters";
-    mParameters[mParameterCount++] = { name, type, size, precision };
+    mParameters.emplace_back(name, type, size, precision );
     return *this;
 }
 
@@ -315,16 +302,15 @@ MaterialBuilder& MaterialBuilder::parameter(const char* name, SamplerType sample
             << "multisample samplers only possible with SAMPLER_2D or SAMPLER_2D_ARRAY,"
                " as long as type is not SHADOW";
 
-    FILAMENT_CHECK_POSTCONDITION(mParameterCount < MAX_PARAMETERS_COUNT) << "Too many parameters";
-    mParameters[mParameterCount++] = { name, samplerType, format, precision, filterable,
-        multisample, transformName, stages };
+    mParameters.emplace_back( name, samplerType, format, precision, filterable,
+        multisample, transformName, stages );
     return *this;
 }
 
 template<typename T, typename>
 MaterialBuilder& MaterialBuilder::constant(const char* name, ConstantType const type, T defaultValue) {
     auto result = std::find_if(mConstants.begin(), mConstants.end(), [name](const Constant& c) {
-        return c.name == CString(name);
+        return !strcmp(c.name.c_str(), name);
     });
     FILAMENT_CHECK_POSTCONDITION(result == mConstants.end())
             << "There is already a constant parameter present with the name " << name << ".";
@@ -359,7 +345,7 @@ MaterialBuilder& MaterialBuilder::constant(const char* name, ConstantType const 
         assert_invariant(false);
     }
 
-    mConstants.push_back(constant);
+    mConstants.push_back(std::move(constant));
     return *this;
 }
 template MaterialBuilder& MaterialBuilder::constant<int32_t>(
@@ -641,7 +627,7 @@ MaterialBuilder& MaterialBuilder::shaderDefine(const char* name, const char* val
 }
 
 bool MaterialBuilder::hasSamplerType(SamplerType const samplerType) const noexcept {
-    for (size_t i = 0, c = mParameterCount; i < c; i++) {
+    for (size_t i = 0, c = mParameters.size(); i < c; i++) {
         auto const& param = mParameters[i];
         if (param.isSampler() && param.samplerType == samplerType) {
             return  true;
@@ -653,7 +639,7 @@ bool MaterialBuilder::hasSamplerType(SamplerType const samplerType) const noexce
 void MaterialBuilder::prepareToBuild(MaterialInfo& info) noexcept {
     prepare(mEnableFramebufferFetch, mFeatureLevel);
 
-    const bool hasEmptyVertexCode = mMaterialVertexCode.getResolved().empty();
+    const bool hasEmptyVertexCode = mMaterialVertexCode.getCode().empty();
     const bool isPostProcessMaterial = mMaterialDomain == MaterialDomain::POST_PROCESS;
     // TODO: Currently, for surface materials, we rely on the presence of a custom vertex shader to
     // infer the default shader stages. We could do better by analyzing the AST of the vertex shader
@@ -668,14 +654,14 @@ void MaterialBuilder::prepareToBuild(MaterialInfo& info) noexcept {
     BufferInterfaceBlock::Builder ibb;
     // sampler bindings start at 1, 0 is the ubo
     uint16_t binding = 1;
-    for (size_t i = 0, c = mParameterCount; i < c; i++) {
+    for (size_t i = 0, c = mParameters.size(); i < c; i++) {
         auto const& param = mParameters[i];
         assert_invariant(!param.isSubpass());
         if (param.isSampler()) {
             ShaderStageFlags stages = param.stages.value_or(defaultShaderStages);
             sbb.add({ param.name.data(), param.name.size() }, binding, param.samplerType,
                     param.format, param.precision, param.filterable, param.multisample,
-                    stages);
+                    { param.transformName.data(), param.transformName.size() }, stages);
             if (!param.transformName.empty()) {
                 ibb.add({ { { param.transformName.data(), param.transformName.size() },
                     uint8_t(binding), 0, UniformType::MAT3, Precision::DEFAULT,
@@ -785,7 +771,7 @@ bool MaterialBuilder::findProperties(backend::ShaderStage const type,
             semanticCodeGenParams.targetLanguage,
             semanticCodeGenParams.shaderModel)) {
         if (mPrintShaders) {
-            slog.e << shaderCodeAllProperties << io::endl;
+            LOG(ERROR) << shaderCodeAllProperties;
         }
         return false;
     }
@@ -848,32 +834,9 @@ bool MaterialBuilder::runSemanticAnalysis(MaterialInfo* inOutInfo,
         }
     }
     if (!success && mPrintShaders) {
-        slog.e << shaderCode << io::endl;
+        LOG(ERROR) << shaderCode;
     }
     return success;
-}
-
-bool MaterialBuilder::ShaderCode::resolveIncludes(IncludeCallback callback,
-        const CString& fileName) noexcept {
-    if (!mCode.empty()) {
-        ResolveOptions const options {
-                .insertLineDirectives = true,
-                .insertLineDirectiveCheck = true
-        };
-        IncludeResult source {
-                .includeName = fileName,
-                .text = mCode,
-                .lineNumberOffset = getLineOffset(),
-                .name = CString("")
-        };
-        if (!filamat::resolveIncludes(source, std::move(callback), options)) {
-            return false;
-        }
-        mCode = source.text;
-    }
-
-    mIncludesResolved = true;
-    return true;
 }
 
 static void showErrorMessage(const char* materialName, filament::Variant const variant,
@@ -886,17 +849,16 @@ static void showErrorMessage(const char* materialName, filament::Variant const v
     const char* targetApiString = "unknown";
     switch (targetApi) {
         case TargetApi::OPENGL:
-            targetApiString = (featureLevel == MaterialBuilder::FeatureLevel::FEATURE_LEVEL_0)
-                              ? "GLES 2.0.\n" : "OpenGL.\n";
+            targetApiString = (featureLevel == MaterialBuilder::FeatureLevel::FEATURE_LEVEL_0) ? "GLES 2.0" : "OpenGL";
             break;
         case TargetApi::VULKAN:
-            targetApiString = "Vulkan.\n";
+            targetApiString = "Vulkan";
             break;
         case TargetApi::METAL:
-            targetApiString = "Metal.\n";
+            targetApiString = "Metal";
             break;
         case TargetApi::WEBGPU:
-            targetApiString = "WebGPU.\n";
+            targetApiString = "WebGPU";
             break;
         case TargetApi::ALL:
             assert_invariant(false); // Unreachable.
@@ -906,24 +868,20 @@ static void showErrorMessage(const char* materialName, filament::Variant const v
     const char* shaderStageString = "unknown";
     switch (shaderType) {
         case ShaderStage::VERTEX:
-            shaderStageString = "Vertex Shader\n";
+            shaderStageString = "Vertex Shader";
             break;
         case ShaderStage::FRAGMENT:
-            shaderStageString = "Fragment Shader\n";
+            shaderStageString = "Fragment Shader";
             break;
         case ShaderStage::COMPUTE:
-            shaderStageString = "Compute Shader\n";
+            shaderStageString = "Compute Shader";
             break;
     }
 
-    slog.e
+    LOG(ERROR)
             << "Error in \"" << materialName << "\""
-            << ", Variant 0x" << io::hex << +variant.key
-            << ", " << targetApiString
-            << "=========================\n"
-            << "Generated " << shaderStageString
-            << "=========================\n"
-            << shaderCode;
+            << ", " << shaderStageString
+            << ", Variant " << io::hex << +variant.key;
 }
 
 bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Variant>& variants,
@@ -947,8 +905,8 @@ bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Va
     // End: must be protected by lock
 
     ShaderGenerator sg(mProperties, mVariables, mOutputs, mDefines, mConstants, mPushConstants,
-            mMaterialFragmentCode.getResolved(), mMaterialFragmentCode.getLineOffset(),
-            mMaterialVertexCode.getResolved(), mMaterialVertexCode.getLineOffset(),
+            mMaterialFragmentCode.getCode(), mMaterialFragmentCode.getLineOffset(),
+            mMaterialVertexCode.getCode(), mMaterialVertexCode.getLineOffset(),
             mMaterialDomain);
 
     container.emplace<bool>(MaterialHasCustomDepthShader,
@@ -980,6 +938,35 @@ bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Va
         JobSystem::Job* parent = jobSystem.createJob();
 
         for (const auto& v : variants) {
+            if (params.featureLevel == FeatureLevel::FEATURE_LEVEL_0) {
+                assert_invariant(params.shaderModel == ShaderModel::MOBILE);
+                assert_invariant(params.targetApi == TargetApi::OPENGL);
+                // skip all variants that can't be used with ESSL1
+                if (filament::Variant::isValidStandardVariant(v.variant)) {
+                    if (v.variant.hasDirectionalLighting()) {
+                        continue;
+                    }
+                    if (v.variant.hasDynamicLighting()) {
+                        continue;
+                    }
+                }
+                if (filament::Variant::isShadowReceiverVariant(v.variant)) {
+                    continue;
+                }
+                if (filament::Variant::isStereoVariant(v.variant)) {
+                    continue;
+                }
+                if (filament::Variant::isDepthMomentsVariant(v.variant)) {
+                    continue;
+                }
+                if (filament::Variant::isShadowSampler2DVariant(v.variant)) {
+                    continue;
+                }
+                if (filament::Variant::isSSRVariant(v.variant)) {
+                    continue;
+                }
+            }
+
             JobSystem::Job* job = jobs::createJob(jobSystem, parent, [&]() {
                 if (cancelJobs.load()) {
                     return;
@@ -1017,15 +1004,15 @@ bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Va
                 if (v.stage == ShaderStage::VERTEX) {
                     shader = sg.createSurfaceVertexProgram(
                             shaderModel, targetApi, targetLanguage, featureLevel,
-                            info, v.variant, mInterpolation, mVertexDomain);
+                            info, v.variant, mInterpolation, mVertexDomain, mApiLevel);
                 } else if (v.stage == ShaderStage::FRAGMENT) {
                     shader = sg.createSurfaceFragmentProgram(
                             shaderModel, targetApi, targetLanguage, featureLevel,
-                            info, v.variant, mInterpolation, mVariantFilter);
+                            info, v.variant, mInterpolation, mVariantFilter, mApiLevel);
                 } else if (v.stage == ShaderStage::COMPUTE) {
                     shader = sg.createSurfaceComputeProgram(
                             shaderModel, targetApi, targetLanguage, featureLevel,
-                            info);
+                            info, mApiLevel);
                 }
 
                 // Write the variant to a file.
@@ -1043,8 +1030,9 @@ bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Va
                         return "unknown";
                     };
                     char filename[256];
-                    snprintf(filename, sizeof(filename), "%s_0x%02x.%s", mMaterialName.c_str_safe(),
-                            variantKey, getExtension(v.stage));
+                    snprintf(filename, sizeof(filename), "%s_0x%02x_fl%d.%s",
+                            mMaterialName.c_str_safe(), variantKey, (int) featureLevel,
+                            getExtension(v.stage));
                     printf("Writing variant 0x%02x to %s\n", variantKey, filename);
                     std::ofstream file(filename);
                     if (file.is_open()) {
@@ -1084,7 +1072,7 @@ bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Va
                                      featureLevel, shader);
                     cancelJobs = true;
                     if (mPrintShaders) {
-                        slog.e << shader << io::endl;
+                        LOG(ERROR) << shader;
                     }
                     return;
                 }
@@ -1177,21 +1165,23 @@ bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Va
 
     // Generate the dictionaries.
     for (const auto& s : glslEntries) {
-        textDictionary.addText(s.shader);
+        textDictionary.addText(s.stage, s.shader);
     }
     for (const auto& s : essl1Entries) {
-        textDictionary.addText(s.shader);
+        textDictionary.addText(s.stage, s.shader);
     }
     for (auto& s : spirvEntries) {
         std::vector const spirv{ std::move(s.data) };
         s.dictionaryIndex = spirvDictionary.addBlob(spirv);
     }
     for (const auto& s : metalEntries) {
-        textDictionary.addText(s.shader);
+        textDictionary.addText(s.stage, s.shader);
     }
     for (const auto& s : wgslEntries) {
-        textDictionary.addText(s.shader);
+        textDictionary.addText(s.stage, s.shader);
     }
+
+    textDictionary.resolve();
 
     // Emit dictionary chunk (TextDictionaryReader and DictionaryTextChunk)
     const auto& dictionaryChunk = container.push<DictionaryTextChunk>(
@@ -1289,9 +1279,19 @@ MaterialBuilder& MaterialBuilder::useLegacyMorphing() noexcept {
     return *this;
 }
 
+MaterialBuilder& MaterialBuilder::materialSource(std::string_view source) noexcept {
+    mMaterialSource = source;
+    return *this;
+}
+
+MaterialBuilder& MaterialBuilder::setApiLevel(uint32_t apiLevel) noexcept {
+    mApiLevel = apiLevel;
+    return *this;
+}
+
 Package MaterialBuilder::build(JobSystem& jobSystem) {
     if (materialBuilderClients == 0) {
-        slog.e << "Error: MaterialBuilder::init() must be called before build()." << io::endl;
+        LOG(ERROR) << "Error: MaterialBuilder::init() must be called before build().";
         // Return an empty package to signal a failure to build the material.
 error:
         return Package::invalidPackage();
@@ -1301,6 +1301,25 @@ error:
     // data, code, and expectations for materials which do not need them.
     if (mMaterialDomain == MaterialDomain::POST_PROCESS) {
         mShading = Shading::UNLIT;
+    }
+
+    if (mMaterialDomain == MaterialDomain::SURFACE && !mOutputs.empty()) {
+        if (mFeatureLevel == FeatureLevel::FEATURE_LEVEL_0) {
+            LOG(ERROR) << "Error: feature level 0 does not support custom outputs.";
+            goto error;
+        }
+        if (mOutputs.size() > 1) {
+            LOG(ERROR) << "Error: surface materials only support a maximum of 1 custom output.";
+            goto error;
+        }
+        if (mShading != Shading::UNLIT) {
+            LOG(ERROR) << "Error: custom outputs are only supported for unlit surface materials.";
+            goto error;
+        }
+        if (mBlendingMode != BlendingMode::OPAQUE) {
+            LOG(ERROR) << "Error: surface materials with custom outputs must use opaque blending.";
+            goto error;
+        }
     }
 
     // Add a default color output.
@@ -1313,21 +1332,21 @@ error:
         if (mRequiredAttributes[COLOR] &&
             !mVariables[int(Variable::CUSTOM4)].name.empty()) {
             // both the color attribute and the custom4 variable are present, that's not supported
-            slog.e << "Error: when the 'color' attribute is required 'Variable::CUSTOM4' is not supported." << io::endl;
+            LOG(ERROR) << "Error: when the 'color' attribute is required 'Variable::CUSTOM4' is not supported.";
             goto error;
         }
     }
 
     // TODO: maybe check MaterialDomain::COMPUTE has outputs
 
-    // Resolve all the #include directives within user code.
-    if (!mMaterialFragmentCode.resolveIncludes(mIncludeCallback, mFileName) ||
-        !mMaterialVertexCode.resolveIncludes(mIncludeCallback, mFileName)) {
+    if (mCustomSurfaceShading && mShading != Shading::LIT) {
+        LOG(ERROR) << "Error: customSurfaceShading can only be used with lit materials.";
         goto error;
     }
 
-    if (mCustomSurfaceShading && mShading != Shading::LIT) {
-        slog.e << "Error: customSurfaceShading can only be used with lit materials." << io::endl;
+    if (mApiLevel < 1 || mApiLevel > filament::UNSTABLE_MATERIAL_API_LEVEL) {
+        LOG(ERROR) << "Error: api level can't be set below 1 or above unstable material level(" <<
+                filament::UNSTABLE_MATERIAL_API_LEVEL << ")";
         goto error;
     }
 
@@ -1349,8 +1368,7 @@ error:
     CodeGenParams const semanticCodeGenParams = {
             .shaderModel = ShaderModel::MOBILE,
             .targetApi = TargetApi::OPENGL,
-            .targetLanguage = (info.featureLevel == FeatureLevel::FEATURE_LEVEL_0) ?
-                              TargetLanguage::GLSL : TargetLanguage::SPIRV,
+            .targetLanguage = TargetLanguage::SPIRV,
             .featureLevel = info.featureLevel,
     };
 
@@ -1360,16 +1378,6 @@ error:
 
     if (!runSemanticAnalysis(&info, semanticCodeGenParams)) {
         goto error;
-    }
-
-    // adjust variant-filter for feature level *before* we start writing into the container
-    if (mFeatureLevel == FeatureLevel::FEATURE_LEVEL_0) {
-        // at feature level 0, many variants are not supported
-        mVariantFilter |= uint32_t(UserVariantFilterBit::DIRECTIONAL_LIGHTING);
-        mVariantFilter |= uint32_t(UserVariantFilterBit::DYNAMIC_LIGHTING);
-        mVariantFilter |= uint32_t(UserVariantFilterBit::SHADOW_RECEIVER);
-        mVariantFilter |= uint32_t(UserVariantFilterBit::VSM);
-        mVariantFilter |= uint32_t(UserVariantFilterBit::SSR);
     }
 
     // Create chunk tree.
@@ -1443,10 +1451,9 @@ bool MaterialBuilder::checkMaterialLevelFeatures(MaterialInfo const& info) const
         auto const& samplers = sib.getSamplerInfoList();
         auto const* stage = to_string(sib.getStageFlags());
         for (auto const& sampler: samplers) {
-            slog.e << "\"" << sampler.name.c_str() << "\" "
-                   << Enums::toString(sampler.type).c_str() << " " << stage << '\n';
+            LOG(ERROR) << "\"" << sampler.name.c_str() << "\" "
+                   << Enums::toString(sampler.type) << " " << stage << '\n';
         }
-        flush(slog.e);
     };
 
     auto userSamplerCount = info.sib.getSize();
@@ -1460,9 +1467,9 @@ bool MaterialBuilder::checkMaterialLevelFeatures(MaterialInfo const& info) const
         case FeatureLevel::FEATURE_LEVEL_0:
             // TODO: check FEATURE_LEVEL_0 features (e.g. unlit only, no texture arrays, etc...)
             if (info.isLit) {
-                slog.e << "Error: material \"" << mMaterialName.c_str()
+                LOG(ERROR) << "Error: material \"" << mMaterialName.c_str()
                        << "\" has feature level " << +info.featureLevel
-                       << " and is not 'unlit'." << io::endl;
+                       << " and is not 'unlit'.";
                 return false;
             }
             return true;
@@ -1489,10 +1496,10 @@ bool MaterialBuilder::checkMaterialLevelFeatures(MaterialInfo const& info) const
             }
 
             if (userSamplerCount > maxTextureCount - textureUsedByFilamentCount) {
-                slog.e << "Error: material \"" << mMaterialName.c_str()
+                LOG(ERROR) << "Error: material \"" << mMaterialName.c_str()
                        << "\" has feature level " << +info.featureLevel
                        << " and is using more than " << maxTextureCount - textureUsedByFilamentCount
-                       << " samplers." << io::endl;
+                       << " samplers.";
                 logSamplerOverflow(info.sib);
                 return false;
             }
@@ -1502,9 +1509,9 @@ bool MaterialBuilder::checkMaterialLevelFeatures(MaterialInfo const& info) const
                     [](const SamplerInfo& sampler) {
                         return sampler.type == SamplerType::SAMPLER_CUBEMAP_ARRAY;
                     })) {
-                slog.e << "Error: material \"" << mMaterialName.c_str()
+                LOG(ERROR) << "Error: material \"" << mMaterialName.c_str()
                        << "\" has feature level " << +info.featureLevel
-                       << " and uses a samplerCubemapArray." << io::endl;
+                       << " and uses a samplerCubemapArray.";
                 logSamplerOverflow(info.sib);
                 return false;
             }
@@ -1514,9 +1521,9 @@ bool MaterialBuilder::checkMaterialLevelFeatures(MaterialInfo const& info) const
             // TODO: we need constants somewhere for these values
             // TODO: 16 is artificially low for now, until we have a better idea of what we want
             if (userSamplerCount > 16) {
-                slog.e << "Error: material \"" << mMaterialName.c_str()
+                LOG(ERROR) << "Error: material \"" << mMaterialName.c_str()
                        << "\" has feature level " << +info.featureLevel
-                       << " and is using more than 16 samplers" << io::endl;
+                       << " and is using more than 16 samplers";
                 logSamplerOverflow(info.sib);
                 return false;
             }
@@ -1536,7 +1543,7 @@ bool MaterialBuilder::hasCustomVaryings() const noexcept {
 }
 
 bool MaterialBuilder::needsStandardDepthProgram() const noexcept {
-    const bool hasEmptyVertexCode = mMaterialVertexCode.getResolved().empty();
+    const bool hasEmptyVertexCode = mMaterialVertexCode.getCode().empty();
     return !hasEmptyVertexCode ||
            hasCustomVaryings() ||
            mBlendingMode == BlendingMode::MASKED ||
@@ -1549,8 +1556,8 @@ std::string MaterialBuilder::peek(backend::ShaderStage const stage,
         const CodeGenParams& params, const PropertyList& properties) noexcept {
 
     ShaderGenerator const sg(properties, mVariables, mOutputs, mDefines, mConstants, mPushConstants,
-            mMaterialFragmentCode.getResolved(), mMaterialFragmentCode.getLineOffset(),
-            mMaterialVertexCode.getResolved(), mMaterialVertexCode.getLineOffset(),
+            mMaterialFragmentCode.getCode(), mMaterialFragmentCode.getLineOffset(),
+            mMaterialVertexCode.getCode(), mMaterialVertexCode.getLineOffset(),
             mMaterialDomain);
 
     MaterialInfo info;
@@ -1560,15 +1567,15 @@ std::string MaterialBuilder::peek(backend::ShaderStage const stage,
         case ShaderStage::VERTEX:
             return sg.createSurfaceVertexProgram(
                     params.shaderModel, params.targetApi, params.targetLanguage,
-                    params.featureLevel, info, {}, mInterpolation, mVertexDomain);
+                    params.featureLevel, info, {}, mInterpolation, mVertexDomain, mApiLevel);
         case ShaderStage::FRAGMENT:
             return sg.createSurfaceFragmentProgram(
                     params.shaderModel, params.targetApi, params.targetLanguage,
-                    params.featureLevel, info, {}, mInterpolation, mVariantFilter);
+                    params.featureLevel, info, {}, mInterpolation, mVariantFilter, mApiLevel);
         case ShaderStage::COMPUTE:
             return sg.createSurfaceComputeProgram(
                     params.shaderModel, params.targetApi, params.targetLanguage,
-                    params.featureLevel, info);
+                    params.featureLevel, info, mApiLevel);
     }
     return {};
 }
@@ -1676,7 +1683,7 @@ void MaterialBuilder::writeCommonChunks(ChunkContainer& container, MaterialInfo&
     // User constant parameters
     FixedCapacityVector<MaterialConstant> constantsEntry(mConstants.size());
     std::transform(mConstants.begin(), mConstants.end(), constantsEntry.begin(),
-            [](Constant const& c) { return MaterialConstant(c.name.c_str(), c.type); });
+            [](Constant const& c) { return MaterialConstant(c.name, c.type, c.defaultValue); });
     container.push<MaterialConstantParametersChunk>(std::move(constantsEntry));
 
     FixedCapacityVector<MaterialPushConstant> pushConstantsEntry(mPushConstants.size());
@@ -1735,8 +1742,8 @@ void MaterialBuilder::writeCommonChunks(ChunkContainer& container, MaterialInfo&
     }
 
     // create a unique material id
-    auto const& vert = mMaterialVertexCode.getResolved();
-    auto const& frag = mMaterialFragmentCode.getResolved();
+    auto const& vert = mMaterialVertexCode.getCode();
+    auto const& frag = mMaterialFragmentCode.getCode();
     std::hash<std::string_view> const hasher;
     size_t const materialId = hash::combine(
             MATERIAL_VERSION,
@@ -1745,6 +1752,11 @@ void MaterialBuilder::writeCommonChunks(ChunkContainer& container, MaterialInfo&
                     hasher({ frag.data(), frag.size() })));
 
     container.emplace<uint64_t>(MaterialCacheId, materialId);
+    if (!mMaterialSource.empty()) {
+        container.push<CompressedStringChunk>(
+                MaterialSource, mMaterialSource,
+                CompressedStringChunk::CompressionLevel::MAX);
+    }
 }
 
 void MaterialBuilder::writeSurfaceChunks(ChunkContainer& container) const noexcept {

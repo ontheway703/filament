@@ -82,8 +82,8 @@ class JobSystem;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #elif defined(_MSC_VER)
-#pragma warning push
-#pragma warning disable : 4996
+#pragma warning(push)
+#pragma warning(disable : 4996)
 #endif
 
 namespace filament {
@@ -125,6 +125,10 @@ public:
         return mViewport;
     }
 
+    void setGridSize(double size) noexcept { mGridSize = size; }
+    double getGridSize() const noexcept { return mGridSize; }
+    double getEffectiveGridSize() const noexcept { return mEffectiveGridSize; }
+
     bool getClearTargetColor() const noexcept {
         // don't clear the color buffer if we have a skybox
         return !isSkyboxVisible();
@@ -163,8 +167,8 @@ public:
             const Viewport& physicalViewport,
             const Viewport& logicalViewport) const noexcept;
 
-    void prepareShadowing(FEngine& engine, FScene::RenderableSoa& renderableData,
-            FScene::LightSoa const& lightData, CameraInfo const& cameraInfo) noexcept;
+    void prepareShadowing(FEngine& engine, backend::DriverApi& driver,
+            FScene::RenderableSoa& renderableData, FScene::LightSoa const& lightData, CameraInfo const& cameraInfo) noexcept;
     void prepareLighting(FEngine& engine, CameraInfo const& cameraInfo) noexcept;
 
     void prepareSSAO(backend::Handle<backend::HwTexture> ssao) const noexcept;
@@ -205,6 +209,16 @@ public:
     bool hasStereo() const noexcept {
         return mIsStereoSupported && mStereoscopicOptions.enabled;
     }
+
+    void setChannelDepthClearEnabled(uint8_t const channel, bool const enabled) noexcept {
+        mChannelDepthClearMask.set(channel, enabled);
+    }
+
+    bool isChannelDepthClearEnabled(uint8_t channel) const noexcept {
+        return mChannelDepthClearMask[channel];
+    }
+
+    utils::bitset32 getChannelDepthClearMask() const noexcept { return mChannelDepthClearMask; }
 
     FrameGraphId<FrameGraphTexture> renderShadowMaps(FEngine& engine, FrameGraph& fg,
             CameraInfo const& cameraInfo, math::float4 const& userTime,
@@ -252,9 +266,12 @@ public:
     }
 
     void setSampleCount(uint8_t count) noexcept {
-        count = uint8_t(count < 1u ? 1u : count);
-        mMultiSampleAntiAliasingOptions.sampleCount = count;
-        mMultiSampleAntiAliasingOptions.enabled = count > 1u;
+        // MSAA is a post-process effect, and post-processing is disabled at FL0
+        if (mFeatureLevel >= backend::FeatureLevel::FEATURE_LEVEL_1) {
+            count = uint8_t(count < 1u ? 1u : count);
+            mMultiSampleAntiAliasingOptions.sampleCount = count;
+            mMultiSampleAntiAliasingOptions.enabled = count > 1u;
+        }
     }
 
     uint8_t getSampleCount() const noexcept {
@@ -326,6 +343,10 @@ public:
 
     DynamicResolutionOptions getDynamicResolutionOptions() const noexcept {
         return mDynamicResolution;
+    }
+
+    math::float2 getLastDynamicResolutionScale() const noexcept {
+        return mScale;
     }
 
     void setRenderQuality(RenderQuality const& renderQuality) noexcept {
@@ -443,8 +464,12 @@ public:
     static void cullRenderables(utils::JobSystem& js, FScene::RenderableSoa& renderableData,
             Frustum const& frustum, size_t bit) noexcept;
 
+    ColorPassDescriptorSet& getColorPassDescriptorSet(ShadowType type) const noexcept {
+        return mColorPassDescriptorSet[type == ShadowType::PCF ? 0 : 1];
+    }
+
     ColorPassDescriptorSet& getColorPassDescriptorSet() const noexcept {
-            return mColorPassDescriptorSet[mShadowType == ShadowType::PCF ? 0 : 1];
+        return getColorPassDescriptorSet(mShadowType);
     }
 
     // Returns the frame history FIFO. This is typically used by the FrameGraph to access
@@ -488,6 +513,8 @@ public:
 
     MaterialGlobals getMaterialGlobals() const { return mMaterialGlobals; }
 
+    ShadowMapManager const& getShadowMapManager() const noexcept { return *mShadowMapManager; }
+
 private:
     struct FPickingQuery : public PickingQuery {
     private:
@@ -517,6 +544,9 @@ private:
 
     void prepareVisibleRenderables(utils::JobSystem& js,
             Frustum const& frustum, FScene::RenderableSoa& renderableData) const noexcept;
+
+    math::double3 computeGridOrigin(math::double3 cameraPosition, double currentGridSize, double newGridSize, double hysteresisRatio, bool forceSnap = false) const noexcept;
+    double calculateAutomaticGridSize(const FCamera* camera) const noexcept;
 
     void updateUBOs(backend::DriverApi& driver,
             FScene::RenderableSoa& renderableData,
@@ -560,9 +590,13 @@ private:
     uint32_t mFroxelConfigurationAge = 0;
 
     Viewport mViewport;
+    double mGridSize = 0.0;
+    mutable double mEffectiveGridSize = 0.0;
+    mutable math::double3 mGridOrigin{ 0.0 };
     bool mCulling = true;
     bool mFrontFaceWindingInverted = false;
     bool mIsTransparentPickingEnabled = false;
+    bool mIsHighPrecisionEvsmSupported = true;
 
     FRenderTarget* mRenderTarget = nullptr;
 
@@ -591,6 +625,7 @@ private:
     const FColorGrading* mDefaultColorGrading = nullptr;
     utils::Entity mFogEntity{};
     bool mIsStereoSupported : 1;
+    utils::bitset32 mChannelDepthClearMask{};
 
     PIDController mPidController;
     DynamicResolutionOptions mDynamicResolution;
@@ -607,6 +642,8 @@ private:
     FPickingQuery* mActivePickingQueriesList = nullptr;
 
     utils::CString mName;
+
+    backend::FeatureLevel mFeatureLevel = backend::FeatureLevel::FEATURE_LEVEL_1;
 
     // the following values are set by prepare()
     Range mVisibleRenderables;
@@ -652,7 +689,7 @@ FILAMENT_DOWNCAST(View)
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #elif defined(_MSC_VER)
-#pragma warning pop
+#pragma warning(pop)
 #endif
 
 #endif // TNT_FILAMENT_DETAILS_VIEW_H

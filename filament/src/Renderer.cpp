@@ -16,7 +16,7 @@
 
 #include <filament/Renderer.h>
 
-#include "ResourceAllocator.h"
+#include "TextureCache.h"
 
 #include "details/Engine.h"
 #include "details/Renderer.h"
@@ -85,6 +85,14 @@ double Renderer::getUserTime() const {
 
 void Renderer::resetUserTime() {
     downcast(this)->resetUserTime();
+}
+
+void Renderer::skipNextFrames(size_t frameCount) noexcept {
+    downcast(this)->skipNextFrames(frameCount);
+}
+
+size_t Renderer::getFrameToSkipCount() const noexcept {
+    return downcast(this)->getFrameToSkipCount();
 }
 
 void Renderer::setDisplayInfo(const DisplayInfo& info) noexcept {

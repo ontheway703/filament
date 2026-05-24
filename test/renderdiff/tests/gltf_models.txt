@@ -1,12 +1,14 @@
 AlphaBlendModeTest
 AttenuationTest
-Box
 BoomBoxWithAxes
+Box
 BoxInterleaved
 BoxTextured
 BoxTexturedNonPowerOfTwo
 Duck
+Fox
 IridescenceSuzanne
+IridescentDishWithOlives
 Lantern
 MetalRoughSpheres
 NegativeScaleTest
@@ -17,4 +19,5 @@ Sponza
 Suzanne
 TextureCoordinateTest
 TextureSettingsTest
+TransmissionRoughnessTest
 TwoSidedPlane

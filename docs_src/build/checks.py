@@ -34,8 +34,11 @@ DOCS_SRC_DIR = os.path.abspath(os.path.join(CUR_DIR, '../'))
 MARKDEEP_SRC_DIR = os.path.join(DOCS_SRC_DIR, 'src_markdeep')
 MDBOOK_SRC_DIR = os.path.join(DOCS_SRC_DIR, 'src_mdbook')
 RAW_SRC_DIR = os.path.join(DOCS_SRC_DIR, 'src_raw')
+# Web samples and tutorials are processed and embedded into the docs output,
+# so edits to the web directory must trigger a docs update.
+WEB_SRC_DIR = os.path.abspath(os.path.join(CUR_DIR, '../../web/'))
 
-SRC_SRC_DIRS = [MARKDEEP_SRC_DIR, MDBOOK_SRC_DIR, RAW_SRC_DIR]
+SRC_SRC_DIRS = [MARKDEEP_SRC_DIR, MDBOOK_SRC_DIR, RAW_SRC_DIR, WEB_SRC_DIR]
 
 def get_edited_files(commit_hash):
   INSERT = '#####?????'
@@ -77,11 +80,11 @@ def check_has_source_edits(commit_hash, printing=True):
 
 # Returns true in a given TAG is found in the commit msg
 def commit_msg_has_tag(commit_hash, tag, printing=True):
-  res, ret = execute(f'git log --pretty=%B {commit_hash}', cwd=ROOT_DIR)
+  res, ret = execute(f'git log -n1 --pretty=%B {commit_hash}', cwd=ROOT_DIR)
   for l in ret.split('\n'):
     if tag == l.strip():
       if printing:
-        print(f'Found tag={tag} in commit message')
+        print(f'Found tag={tag} in commit={commit_hash}')
       return True
   return False
 

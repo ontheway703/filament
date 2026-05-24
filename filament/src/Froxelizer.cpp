@@ -226,6 +226,7 @@ bool Froxelizer::prepare(
         filament::Viewport const& viewport,
         const mat4f& projection, float const projectionNear, float const projectionFar,
         float4 const& clipTransform) noexcept {
+    assert_invariant(projectionFar > projectionNear);
     setViewport(viewport);
     setProjection(projection, projectionNear, projectionFar);
 
@@ -243,29 +244,28 @@ bool Froxelizer::prepare(
      */
 
     // froxel buffer (16 KiB with 4096 froxels)
-    mFroxelBufferUser = {
+    mFroxelBufferUser.set(
             driverApi.allocatePod<FroxelEntry>(mFroxelBufferEntryCount),
-            mFroxelBufferEntryCount };
+            mFroxelBufferEntryCount);
 
     // record buffer (64 KiB max)
-    mRecordBufferUser = {
+    mRecordBufferUser.set(
             driverApi.allocatePod<RecordBufferType>(mFroxelRecordBufferEntryCount),
-            mFroxelRecordBufferEntryCount };
+            mFroxelRecordBufferEntryCount);
 
     /*
      * Temporary allocations for processing all froxel data
      */
 
     // light records per froxel (~256 KiB with 4096 froxels)
-    mLightRecords = {
+    mLightRecords.set(
             rootArenaScope.allocate<LightRecord>(getFroxelBufferEntryCount(), CACHELINE_SIZE),
-            getFroxelBufferEntryCount() };
+            getFroxelBufferEntryCount());
 
     // froxel thread data (~256KiB with 8192 max froxels and 256 lights)
-    mFroxelShardedData = {
+    mFroxelShardedData.set(
             rootArenaScope.allocate<FroxelThreadData>(GROUP_COUNT, CACHELINE_SIZE),
-            uint32_t(GROUP_COUNT)
-    };
+            uint32_t(GROUP_COUNT));
 
     assert_invariant(mFroxelBufferUser.begin());
     assert_invariant(mRecordBufferUser.begin());
@@ -384,8 +384,28 @@ bool Froxelizer::update() noexcept {
     bool uniformsNeedUpdating = false;
 
     if (UTILS_UNLIKELY(mDirtyFlags & (OPTIONS_CHANGED|PROJECTION_CHANGED))) {
-        float const zLightFar  = clamp(mUserZLightFar, mNear, mFar);
-        float zLightNear = clamp(mUserZLightNear, mNear, mFar);
+
+        // sanitize the user's near/far
+        float zLightNear = mUserZLightNear;
+        float zLightFar = mUserZLightFar;
+        if (zLightFar == zLightNear) {
+            zLightNear = mNear;
+            zLightFar = mFar;
+        }
+        if (zLightFar < zLightNear) {
+            std::swap(zLightFar, zLightNear);
+        }
+        if (zLightNear < mNear || zLightNear >= mFar) {
+            zLightNear = mNear;
+        }
+        if (zLightFar > mFar || zLightFar <= mNear) {
+            zLightFar = mFar;
+        }
+
+        assert_invariant(zLightNear < zLightFar);
+        assert_invariant(zLightNear >= mNear && zLightNear <= mFar);
+        assert_invariant(zLightFar <= mFar && zLightNear >= mNear);
+
         zLightNear = std::min(zLightNear, zLightFar);
         if (zLightFar != mZLightFar || zLightNear != mZLightNear) {
             mDirtyFlags |= VIEWPORT_CHANGED;
@@ -703,7 +723,7 @@ void Froxelizer::froxelizeLoop(FEngine& engine,
 void Froxelizer::froxelizeAssignRecordsCompress() noexcept {
     FILAMENT_TRACING_CALL(FILAMENT_TRACING_CATEGORY_FILAMENT);
 
-    Slice<FroxelThreadData> const froxelThreadData = mFroxelShardedData;
+    Slice<const FroxelThreadData> froxelThreadData = mFroxelShardedData;
 
     // Convert froxel data from N groups of M bits to LightRecord::bitset, so we can
     // easily compare adjacent froxels, for compaction. The conversion loops below get
@@ -716,7 +736,7 @@ void Froxelizer::froxelizeAssignRecordsCompress() noexcept {
         using container_type = LightRecord::bitset::container_type;
         constexpr size_t r = sizeof(container_type) / sizeof(LightGroupType);
         UTILS_UNROLL
-        for (size_t i = 0; i < LightRecord::bitset::WORLD_COUNT; i++) {
+        for (size_t i = 0; i < LightRecord::bitset::WORD_COUNT; i++) {
             container_type b = froxelThreadData[i * r][j];
             UTILS_UNROLL
             for (size_t k = 0; k < r; k++) {
@@ -986,7 +1006,7 @@ void Froxelizer::froxelizePointAndSpotLight(
  */
 void Froxelizer::computeLightTree(
         LightTreeNode* lightTree,
-        Slice<RecordBufferType> const& lightList,
+        Slice<const RecordBufferType> lightList,
         const FScene::LightSoa& lightData,
         size_t lightRecordsOffset) noexcept {
 

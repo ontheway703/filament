@@ -40,14 +40,20 @@
 //   - Build and upload artifacts with ./gradlew publish
 //   - Close and release staging repo on Nexus with ./gradlew closeAndReleaseStagingRepository
 //
-// The following is needed in ~/gradle/gradle.properties:
+// The following properties need to be set (either in ~/gradle/gradle.properties, on the command
+// line, or as environment variables, e.g.: ORG_GRADLE_PROJECT_property=value):
 //
 //     sonatypeUsername=nexus_user
 //     sonatypePassword=nexus_password
 //
+//     To sign with a key ring file:
 //     signing.keyId=pgp_key_id
 //     signing.password=pgp_key_password
 //     signing.secretKeyRingFile=/Users/user/.gnupg/maven_signing.key
+//
+//     To sign with in-memory keys (useful for CI):,
+//     signingKey=ASCII armored key (begins with -----BEGIN PGP PRIVATE KEY BLOCK-----)
+//     signingPassword=key password
 //
 
 buildscript {
@@ -100,7 +106,7 @@ buildscript {
         'kotlin': '2.0.21',
         'kotlin_coroutines': '1.9.0',
         'buildTools': '35.0.0',
-        'ndk': '27.0.11718014',
+        'ndk': '29.0.14206865',
         'androidx_core': '1.13.1',
         'androidx_annotations': '1.9.0'
     ]
@@ -124,6 +130,7 @@ buildscript {
 
     ext.cmakeArgs = [
         "--no-warn-unused-cli",
+        "-DANDROID_WEAK_API_DEFS=ON",
         "-DANDROID_PIE=ON",
         "-DANDROID_PLATFORM=21",
         "-DANDROID_STL=c++_static",
@@ -138,7 +145,6 @@ buildscript {
     ext.cppFlags = [
         "-std=c++17",
         "-fno-stack-protector",
-        "-fno-exceptions",
         "-fno-unwind-tables",
         "-fno-asynchronous-unwind-tables",
         "-fno-rtti",
@@ -178,6 +184,8 @@ nexusPublishing {
     repositories {
         sonatype {
             stagingProfileId = '9a75a224a4f17b'
+            nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
+            snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
         }
     }
 }
@@ -191,7 +199,7 @@ subprojects {
         google()
     }
 
-    if (!name.startsWith("sample")) {
+    if (!name.startsWith("sample") && name != "filament-tools" && name != "gradle-plugin") {
         apply plugin: 'com.android.library'
 
         android {

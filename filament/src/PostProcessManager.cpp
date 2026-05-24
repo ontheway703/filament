@@ -29,7 +29,9 @@
 #include "materials/bloom/bloom.h"
 #include "materials/colorGrading/colorGrading.h"
 #include "materials/dof/dof.h"
+#include "materials/evsm/evsm.h"
 #include "materials/flare/flare.h"
+#include "materials/fog/fog.h"
 #include "materials/fsr/fsr.h"
 #include "materials/sgsr/sgsr.h"
 #include "materials/ssao/ssao.h"
@@ -48,6 +50,7 @@
 #include "fsr.h"
 #include "FrameHistory.h"
 #include "RenderPass.h"
+#include "ShadowMapManager.h"
 
 #include "details/Camera.h"
 #include "details/ColorGrading.h"
@@ -65,6 +68,7 @@
 
 #include <private/filament/EngineEnums.h>
 #include <private/filament/UibStructs.h>
+#include <private/filament/Variant.h>
 
 #include <backend/DriverEnums.h>
 #include <backend/DriverApiForward.h>
@@ -126,17 +130,6 @@ constexpr float halton(unsigned int i, unsigned int const b) noexcept {
     return r;
 }
 
-template <typename ValueType>
-void setConstantParameter(FMaterial* const material, std::string_view const name,
-        ValueType value, bool& dirty) noexcept {
-    auto id = material->getSpecializationConstantId(name);
-    if (id.has_value()) {
-        if (material->setConstant(id.value(), value)) {
-            dirty = true;
-        }
-    }
-}
-
 } // anonymous
 
 // ------------------------------------------------------------------------------------------------
@@ -193,13 +186,10 @@ void PostProcessManager::PostProcessMaterial::loadMaterial(FEngine& engine) cons
 }
 
 UTILS_NOINLINE
-FMaterial* PostProcessManager::PostProcessMaterial::getMaterial(FEngine& engine,
-        PostProcessVariant variant) const noexcept {
+FMaterial* PostProcessManager::PostProcessMaterial::getMaterial(FEngine& engine) const noexcept {
     if (UTILS_UNLIKELY(mSize)) {
         loadMaterial(engine);
     }
-    mMaterial->prepareProgram(Variant{ Variant::type_t(variant) },
-            CompilerPriorityQueue::CRITICAL);
     return mMaterial;
 }
 
@@ -235,7 +225,6 @@ const PostProcessManager::JitterSequence<32>
 
 PostProcessManager::PostProcessManager(FEngine& engine) noexcept
         : mEngine(engine),
-          mFixedMaterialInstanceIndex {},
           mWorkaroundSplitEasu(false),
           mWorkaroundAllowReadOnlyAncillaryFeedbackLoop(false) {
     // don't use Engine here, it's not fully initialized yet
@@ -253,9 +242,27 @@ void PostProcessManager::bindPostProcessDescriptorSet(DriverApi& driver) const n
     mPostProcessDescriptorSet.bind(driver);
 }
 
-void PostProcessManager::bindPerRenderableDescriptorSet(DriverApi& driver) noexcept {
+void PostProcessManager::bindPerRenderableDescriptorSet(DriverApi& driver) const noexcept {
     driver.bindDescriptorSet(mDummyPerRenderableDsh, +DescriptorSetBindingPoints::PER_RENDERABLE,
             { { 0, 0 }, driver });
+}
+
+FMaterialInstance* PostProcessManager::getMaterialInstance(backend::DriverApi& driver,
+        FMaterial const* ma, Variant::type_t variant) const {
+    FMaterialInstance* mi = mMaterialInstanceManager.getMaterialInstance(ma);
+    mi->prepareProgram(driver, Variant{ variant }, backend::CompilerPriorityQueue::CRITICAL);
+    return mi;
+}
+
+FMaterialInstance* PostProcessManager::getMaterialInstanceWithTag(backend::DriverApi& driver,
+        FMaterial const* ma, uint32_t tag, Variant::type_t variant) const {
+    FMaterialInstance* mi = mMaterialInstanceManager.getMaterialInstance(ma, tag);
+    mi->prepareProgram(driver, Variant { variant }, backend::CompilerPriorityQueue::CRITICAL);
+    return mi;
+}
+
+UboManager* PostProcessManager::getUboManager() const noexcept {
+    return mEngine.getUboManager();
 }
 
 UTILS_NOINLINE
@@ -265,14 +272,15 @@ void PostProcessManager::registerPostProcessMaterial(std::string_view const name
 }
 
 UTILS_NOINLINE
-PostProcessManager::PostProcessMaterial& PostProcessManager::getPostProcessMaterial(
-        std::string_view const name) noexcept {
+
+PostProcessManager::PostProcessMaterial const& PostProcessManager::getPostProcessMaterial(
+        std::string_view const name) const noexcept {
     auto pos = mMaterialRegistry.find(name);
     assert_invariant(pos != mMaterialRegistry.end());
     return pos.value();
 }
 
-// StaticMaterialInfo::ConstantInfo destructor is called during shut-down, to avoid side-effect
+// StaticMaterialInfo::ConstantInfo destructor is called during shut-down, to avoid side effect
 // we ensure it's trivially destructible
 static_assert(std::is_trivially_destructible_v<PostProcessManager::StaticMaterialInfo::ConstantInfo>);
 
@@ -285,6 +293,7 @@ static const PostProcessManager::StaticMaterialInfo sMaterialListFeatureLevel0[]
 static const PostProcessManager::StaticMaterialInfo sMaterialList[] = {
         { "blitArray",                  MATERIAL(MATERIALS, BLITARRAY) },
         { "blitDepth",                  MATERIAL(MATERIALS, BLITDEPTH) },
+        { "clearDepth",                 MATERIAL(MATERIALS, CLEARDEPTH) },
         { "separableGaussianBlur1",     MATERIAL(MATERIALS, SEPARABLEGAUSSIANBLUR),
                 { {"arraySampler", false}, {"componentCount", 1} } },
         { "separableGaussianBlur1L",    MATERIAL(MATERIALS, SEPARABLEGAUSSIANBLUR),
@@ -301,7 +310,6 @@ static const PostProcessManager::StaticMaterialInfo sMaterialList[] = {
                 { {"arraySampler", false}, {"componentCount", 4} } },
         { "separableGaussianBlur4L",    MATERIAL(MATERIALS, SEPARABLEGAUSSIANBLUR),
                 { {"arraySampler", true }, {"componentCount", 4} } },
-        { "vsmMipmap",                  MATERIAL(MATERIALS, VSMMIPMAP) },
         { "debugShadowCascades",        MATERIAL(MATERIALS, DEBUGSHADOWCASCADES) },
         { "resolveDepth",               MATERIAL(MATERIALS, RESOLVEDEPTH) },
         { "shadowmap",                  MATERIAL(MATERIALS, SHADOWMAP) },
@@ -321,7 +329,7 @@ void PostProcessManager::init() noexcept {
     mFullScreenQuadVbih = engine.getFullScreenVertexBuffer()->getVertexBufferInfoHandle();
     mPerRenderableDslh = engine.getPerRenderableDescriptorSetLayout().getHandle();
 
-    mDummyPerRenderableDsh = driver.createDescriptorSet(mPerRenderableDslh);
+    mDummyPerRenderableDsh = driver.createDescriptorSet(mPerRenderableDslh, "mDummyPerRenderableDsh");
 
     driver.updateDescriptorSetBuffer(mDummyPerRenderableDsh,
             +PerRenderableBindingPoints::OBJECT_UNIFORMS, engine.getDummyUniformBuffer(), 0,
@@ -356,14 +364,24 @@ void PostProcessManager::init() noexcept {
     mWorkaroundAllowReadOnlyAncillaryFeedbackLoop =
             driver.isWorkaroundNeeded(Workaround::ALLOW_READ_ONLY_ANCILLARY_FEEDBACK_LOOP);
 
+    mFeatureLevel = driver.getFeatureLevel();
+    mDepthStencilResolveSupported = driver.isDepthStencilResolveSupported();
+    mDepthStencilBlitSupported = driver.isDepthStencilBlitSupported(TextureFormat::DEPTH32F);
+
     UTILS_NOUNROLL
     for (auto const& info: sMaterialListFeatureLevel0) {
+        registerPostProcessMaterial(info.name, info);
+    }
+    for (auto const& info: getFogMaterialList()) {
         registerPostProcessMaterial(info.name, info);
     }
 
     if (mEngine.getActiveFeatureLevel() >= FeatureLevel::FEATURE_LEVEL_1) {
         UTILS_NOUNROLL
         for (auto const& info: sMaterialList) {
+            registerPostProcessMaterial(info.name, info);
+        }
+        for (auto const& info: getEvsmMaterialList()) {
             registerPostProcessMaterial(info.name, info);
         }
         for (auto const& info: getBloomMaterialList()) {
@@ -452,7 +470,6 @@ Handle<HwTexture> PostProcessManager::getZeroTextureArray() const {
 
 void PostProcessManager::resetForRender() {
     mMaterialInstanceManager.reset();
-    mFixedMaterialInstanceIndex = {};
 }
 
 void PostProcessManager::unbindAllDescriptorSets(DriverApi& driver) noexcept {
@@ -463,9 +480,10 @@ void PostProcessManager::unbindAllDescriptorSets(DriverApi& driver) noexcept {
 
 UTILS_NOINLINE
 PipelineState PostProcessManager::getPipelineState(
-        FMaterial const* const ma, PostProcessVariant variant) const noexcept {
+        FMaterialInstance const* const mi, Variant::type_t const variant) const noexcept {
+    FMaterial const* const ma = mi->getMaterial();
     return {
-            .program = ma->getProgram(Variant{ Variant::type_t(variant) }),
+            .program = mi->getProgram(Variant{ variant }),
             .vertexBufferInfo = mFullScreenQuadVbih,
             .pipelineLayout = {
                     .setLayout = {
@@ -473,7 +491,7 @@ PipelineState PostProcessManager::getPipelineState(
                             mPerRenderableDslh,
                             ma->getDescriptorSetLayout().getHandle()
                     }},
-            .rasterState = ma->getRasterState()
+            .rasterState = mi->getRasterState()
     };
 }
 
@@ -511,10 +529,9 @@ UTILS_NOINLINE
 void PostProcessManager::commitAndRenderFullScreenQuad(DriverApi& driver,
         FrameGraphResources::RenderPassInfo const& out, FMaterialInstance const* mi,
         PostProcessVariant const variant) const noexcept {
-    mi->commit(driver);
+    mi->commit(driver, getUboManager());
     mi->use(driver);
-    FMaterial const* const ma = mi->getMaterial();
-    PipelineState const pipeline = getPipelineState(ma, variant);
+    PipelineState const pipeline = getPipelineState(mi, variant);
 
     assert_invariant(
             ((out.params.readOnlyDepthStencil & RenderPassParams::READONLY_DEPTH)
@@ -556,7 +573,7 @@ PostProcessManager::StructurePassOutput PostProcessManager::structure(FrameGraph
     // generate depth pass at the requested resolution
     auto const& structurePass = fg.addPass<StructurePassData>("Structure Pass",
             [&](FrameGraph::Builder& builder, auto& data) {
-                bool const isES2 = mEngine.getDriverApi().getFeatureLevel() == FeatureLevel::FEATURE_LEVEL_0;
+                bool const isES2 = mFeatureLevel == FeatureLevel::FEATURE_LEVEL_0;
                 data.depth = builder.createTexture("Structure Buffer", {
                         .width = width, .height = height,
                         .levels = uint8_t(levelCount),
@@ -569,7 +586,7 @@ PostProcessManager::StructurePassOutput PostProcessManager::structure(FrameGraph
                     // FIXME: the DescriptorSetLayout must specify SAMPLER_FLOAT
                     data.picking = builder.createTexture("Picking Buffer", {
                             .width = width, .height = height,
-                            .format = isES2 ? TextureFormat::RGBA8 : TextureFormat::RG32F });
+                            .format = isES2 ? TextureFormat::RGBA8 : TextureFormat::RG32UI });
 
                     data.picking = builder.write(data.picking,
                             FrameGraphTexture::Usage::COLOR_ATTACHMENT);
@@ -593,7 +610,8 @@ PostProcessManager::StructurePassOutput PostProcessManager::structure(FrameGraph
                 passBuilder.variant(structureVariant);
                 passBuilder.commandTypeFlags(RenderPass::CommandTypeFlags::SSAO);
 
-                RenderPass const pass{ passBuilder.build(mEngine, driver) };
+                RenderPass pass{ passBuilder.build(mEngine, driver) };
+                pass.finalize(mEngine, driver);
                 auto const out = resources.getRenderPassInfo();
                 driver.beginRenderPass(out.target, out.params);
                 pass.getExecutor().execute(mEngine, driver);
@@ -631,19 +649,19 @@ PostProcessManager::StructurePassOutput PostProcessManager::structure(FrameGraph
                 auto in = resources.getTexture(data.depth);
                 auto& material = getPostProcessMaterial("mipmapDepth");
                 FMaterial const* const ma = material.getMaterial(mEngine);
-                FMaterialInstance* const mi = getMaterialInstance(ma);
+                FMaterialInstance* const mi = getMaterialInstance(driver, ma);
                 // Only the depth texture is changing in the material instance (no UBO updates),
                 // we do not move getMaterialInstance() inside the loop.
 
-                auto pipeline = getPipelineState(ma);
+                auto pipeline = getPipelineState(mi);
 
                 // The first mip already exists, so we process n-1 lods
                 for (size_t level = 0; level < levelCount - 1; level++) {
                     auto out = resources.getRenderPassInfo(level);
                     auto th = driver.createTextureView(in, level, 1);
-                    mi->setParameter("depth", th, {
+                    mi->setParameter("depth", th, SamplerParams{
                         .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
-                    mi->commit(driver);
+                    mi->commit(driver, getUboManager());
                     mi->use(driver);
                     renderFullScreenQuad(out, pipeline, driver);
                     DescriptorSet::unbind(driver, DescriptorSetBindingPoints::PER_MATERIAL);
@@ -665,7 +683,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::transparentPicking(FrameGrap
             };
             auto const& pickingRenderPass = fg.addPass<PickingRenderPassData>("Picking Render Pass",
                 [&](FrameGraph::Builder& builder, auto& data) {
-                    bool const isFL0 = mEngine.getDriverApi().getFeatureLevel() ==
+                    bool const isFL0 = mFeatureLevel ==
                         FeatureLevel::FEATURE_LEVEL_0;
 
                     // TODO: Specify the precision for picking pass
@@ -680,7 +698,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::transparentPicking(FrameGrap
 
                     data.picking = builder.createTexture("Picking Buffer", {
                             .width = width, .height = height,
-                            .format = isFL0 ? TextureFormat::RGBA8 : TextureFormat::RG32F });
+                            .format = isFL0 ? TextureFormat::RGBA8 : TextureFormat::RG32UI });
 
                     data.picking = builder.write(data.picking,
                         FrameGraphTexture::Usage::COLOR_ATTACHMENT);
@@ -704,7 +722,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::transparentPicking(FrameGrap
                         passBuilder.variant(pickingVariant);
                         passBuilder.commandTypeFlags(RenderPass::CommandTypeFlags::DEPTH);
 
-                        RenderPass const pass{ passBuilder.build(mEngine, driver) };
+                        RenderPass pass{ passBuilder.build(mEngine, driver) };
+                        pass.finalize(mEngine, driver);
                         driver.beginRenderPass(target, params);
                         pass.getExecutor().execute(mEngine, driver);
                         driver.endRenderPass();
@@ -797,12 +816,13 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::ssr(FrameGraph& fg,
 
                 // use our special SSR variant, it can only be applied to object that have
                 // the SCREEN_SPACE ReflectionMode.
-                passBuilder.variant(Variant{ Variant::SPECIAL_SSR });
+                passBuilder.variant(Variant{ Variant::SPECIAL_SSR_VARIANT });
 
                 // generate all our drawing commands, except blended objects.
                 passBuilder.commandTypeFlags(RenderPass::CommandTypeFlags::SCREEN_SPACE_REFLECTIONS);
 
-                RenderPass const pass{ passBuilder.build(mEngine, driver) };
+                RenderPass pass{ passBuilder.build(mEngine, driver) };
+                pass.finalize(mEngine, driver);
                 driver.beginRenderPass(out.target, out.params);
                 pass.getExecutor().execute(mEngine, driver);
                 driver.endRenderPass();
@@ -994,17 +1014,12 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::screenSpaceAmbientOcclusion(
                 auto& material = getPostProcessMaterial(materialName);
 
                 FMaterial* ma = material.getMaterial(mEngine);
-                bool dirty = false;
-                setConstantParameter(ma, "useVisibilityBitmasks", options.gtao.useVisibilityBitmasks, dirty);
-                setConstantParameter(ma, "linearThickness", options.gtao.linearThickness, dirty);
-                if (dirty) {
-                   ma->invalidate();
-                   // TODO: call Material::compile(), we can't do that now because it works only
-                   //       with surface materials
-                }
+                ma->getPrograms().setConstants({
+                    { "useVisibilityBitmasks", options.gtao.useVisibilityBitmasks },
+                    { "linearThickness", options.gtao.linearThickness },
+                });
 
-                ma = material.getMaterial(mEngine);
-                FMaterialInstance* const mi = getMaterialInstance(ma);
+                FMaterialInstance* const mi = getMaterialInstance(driver, ma);
 
                 // Set AO type specific material parameters
                 switch (aoType) {
@@ -1046,8 +1061,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::screenSpaceAmbientOcclusion(
 
                 // Set common material parameters
                 mi->setParameter("invRadiusSquared", 1.0f / (options.radius * options.radius));
-                mi->setParameter("depth", depth,
-                        { .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
+                mi->setParameter("depth", depth, SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
                 mi->setParameter("screenFromViewMatrix",
                         mat4f(screenFromClipMatrix * cameraInfo.projection));
                 mi->setParameter("resolution",
@@ -1077,10 +1092,10 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::screenSpaceAmbientOcclusion(
                 mi->setParameter("ssctRayCount",
                         float2{ options.ssct.rayCount, 1.0f / float(options.ssct.rayCount) });
 
-                mi->commit(driver);
+                mi->commit(driver, getUboManager());
                 mi->use(driver);
 
-                auto pipeline = getPipelineState(ma);
+                auto pipeline = getPipelineState(mi);
                 pipeline.rasterState.depthFunc = RasterState::DepthFunc::L;
                 assert_invariant(ssao.params.readOnlyDepthStencil & RenderPassParams::READONLY_DEPTH);
                 renderFullScreenQuad(ssao, pipeline, driver);
@@ -1191,17 +1206,17 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::bilateralBlurPass(FrameGraph
                         getPostProcessMaterial("bilateralBlurBentNormals") :
                         getPostProcessMaterial("bilateralBlur");
                 FMaterial const* const ma = material.getMaterial(mEngine);
-                FMaterialInstance* const mi = getMaterialInstance(ma);
+                FMaterialInstance* const mi = getMaterialInstance(driver, ma);
                 mi->setParameter("ssao", ssao, { /* only reads level 0 */ });
                 mi->setParameter("axis", axis / float2{desc.width, desc.height});
                 mi->setParameter("kernel", kGaussianSamples, kGaussianCount);
                 mi->setParameter("sampleCount", kGaussianCount);
                 mi->setParameter("farPlaneOverEdgeDistance", -zf / config.bilateralThreshold);
 
-                mi->commit(driver);
+                mi->commit(driver, getUboManager());
                 mi->use(driver);
 
-                auto pipeline = getPipelineState(ma);
+                auto pipeline = getPipelineState(mi);
                 pipeline.rasterState.depthFunc = RasterState::DepthFunc::L;
                 renderFullScreenQuad(blurred, pipeline, driver);
                 unbindAllDescriptorSets(driver);
@@ -1248,7 +1263,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::generateGaussianMipmap(Frame
 FrameGraphId<FrameGraphTexture> PostProcessManager::gaussianBlurPass(FrameGraph& fg,
         FrameGraphId<FrameGraphTexture> const input,
         FrameGraphId<FrameGraphTexture> output,
-        bool const reinhard, size_t kernelWidth, const float sigma) noexcept {
+        bool const reinhard, size_t kernelWidth, const float sigma,
+        std::optional<backend::Viewport> scissor) noexcept {
 
     auto computeGaussianCoefficients =
             [kernelWidth, sigma](float2* kernel, size_t const size) -> size_t {
@@ -1370,11 +1386,11 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::gaussianBlurPass(FrameGraph&
                 auto setCommonParams = [&](FMaterialInstance* const mi) {
                     // Initialize the samplers with dummy textures because vulkan requires a sampler to
                     // be bound to a texture even if sampler might be unused.
-                    mi->setParameter("sourceArray"sv, getZeroTextureArray(), {
+                    mi->setParameter("sourceArray"sv, getZeroTextureArray(), SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR,
                         .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
                     });
-                    mi->setParameter("source"sv, getZeroTexture(), {
+                    mi->setParameter("source"sv, getZeroTexture(), SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR,
                         .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
                     });
@@ -1385,10 +1401,13 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::gaussianBlurPass(FrameGraph&
 
                 {
                     // horizontal pass
-                    auto mi = getMaterialInstance(mEngine, separableGaussianBlur);
+                    auto mi = getMaterialInstance(mEngine, driver, separableGaussianBlur);
+                    if (scissor.has_value()) {
+                        mi->setScissor(scissor.value());
+                    }
+
                     setCommonParams(mi);
-                    mi->setParameter(sourceParameterName, hwIn,
-                            {
+                    mi->setParameter(sourceParameterName, hwIn, SamplerParams{
                                 .filterMag = SamplerMagFilter::LINEAR,
                                 .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST,
                             });
@@ -1404,15 +1423,17 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::gaussianBlurPass(FrameGraph&
 
                 {
                     // vertical pass
-                    auto mi = getMaterialInstance(mEngine, separableGaussianBlur);
+                    auto mi = getMaterialInstance(mEngine, driver, separableGaussianBlur);
+                    if (scissor.has_value()) {
+                        mi->setScissor(scissor.value());
+                    }
                     setCommonParams(mi);
                     UTILS_UNUSED_IN_RELEASE auto width = outDesc.width;
                     UTILS_UNUSED_IN_RELEASE auto height = outDesc.height;
                     assert_invariant(width == hwOutRT.params.viewport.width);
                     assert_invariant(height == hwOutRT.params.viewport.height);
 
-                    mi->setParameter(sourceParameterName, hwTemp,
-                            {
+                    mi->setParameter(sourceParameterName, hwTemp, SamplerParams{
                                 .filterMag = SamplerMagFilter::LINEAR,
                                 .filterMin = SamplerMinFilter::LINEAR, /* level is always 0 */
                             });
@@ -1815,10 +1836,12 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::dof(FrameGraph& fg,
                 auto const& material = (dofResolution == 1) ?
                         getPostProcessMaterial("dofCoc") :
                         getPostProcessMaterial("dofDownsample");
-                FMaterialInstance* const mi = getMaterialInstance(mEngine, material);
+                FMaterialInstance* const mi = getMaterialInstance(mEngine, driver, material);
 
-                mi->setParameter("color", color, { .filterMin = SamplerMinFilter::NEAREST });
-                mi->setParameter("depth", depth, { .filterMin = SamplerMinFilter::NEAREST });
+                mi->setParameter("color", color, SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST });
+                mi->setParameter("depth", depth, SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST });
                 mi->setParameter("cocParams", cocParams);
                 mi->setParameter("cocClamp", float2{
                     -(dofOptions.maxForegroundCOC ? dofOptions.maxForegroundCOC : DOF_DEFAULT_MAX_COC),
@@ -1876,8 +1899,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::dof(FrameGraph& fg,
 
                 auto const& material = getPostProcessMaterial("dofMipmap");
                 FMaterial const* const ma = material.getMaterial(mEngine);
+                FMaterialInstance* const mi = getMaterialInstance(driver, ma);
 
-                auto const pipeline = getPipelineState(ma, variant);
+                auto const pipeline = getPipelineState(mi, variant);
 
                 for (size_t level = 0 ; level < mipmapCount - 1u ; level++) {
                     const float w = FTexture::valueForLevel(level, desc.width);
@@ -1885,13 +1909,16 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::dof(FrameGraph& fg,
                     auto const& out = resources.getRenderPassInfo(data.rp[level]);
                     auto inColor = driver.createTextureView(inOutColor, level, 1);
                     auto inCoc = driver.createTextureView(inOutCoc, level, 1);
-                    FMaterialInstance* const mi = getMaterialInstance(ma);
+                    // FIXME: is this necessary?
+                    FMaterialInstance* const mi = getMaterialInstance(driver, ma);
 
-                    mi->setParameter("color", inColor, { .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
-                    mi->setParameter("coc",   inCoc,   { .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
+                    mi->setParameter("color", inColor, SamplerParams{
+                            .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
+                    mi->setParameter("coc",   inCoc,   SamplerParams{
+                            .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
                     mi->setParameter("weightScale", 0.5f / float(1u << level));   // FIXME: halfres?
                     mi->setParameter("texelSize", float2{ 1.0f / w, 1.0f / h });
-                    mi->commit(driver);
+                    mi->commit(driver, getUboManager());
                     mi->use(driver);
 
                     renderFullScreenQuad(out, pipeline, driver);
@@ -1953,8 +1980,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::dof(FrameGraph& fg,
                     auto const& material = (!textureSwizzleSupported && (i == 0)) ?
                             getPostProcessMaterial("dofTilesSwizzle") :
                             getPostProcessMaterial("dofTiles");
-                    FMaterialInstance* const mi = getMaterialInstance(mEngine, material);
-                    mi->setParameter("cocMinMax", inCocMinMax, { .filterMin = SamplerMinFilter::NEAREST });
+                    FMaterialInstance* const mi = getMaterialInstance(mEngine, driver, material);
+                    mi->setParameter("cocMinMax", inCocMinMax, SamplerParams{
+                            .filterMin = SamplerMinFilter::NEAREST });
                     mi->setParameter("texelSize", float2{ 1.0f / inputDesc.width, 1.0f / inputDesc.height });
                     commitAndRenderFullScreenQuad(driver, out, mi);
                     unbindAllDescriptorSets(driver);
@@ -1989,8 +2017,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::dof(FrameGraph& fg,
                     auto const& out = resources.getRenderPassInfo();
                     auto inTilesCocMinMax = resources.getTexture(data.inTilesCocMinMax);
                     auto const& material = getPostProcessMaterial("dofDilate");
-                    FMaterialInstance* const mi = getMaterialInstance(mEngine, material);
-                    mi->setParameter("tiles", inTilesCocMinMax, { .filterMin = SamplerMinFilter::NEAREST });
+                    FMaterialInstance* const mi = getMaterialInstance(mEngine, driver, material);
+                    mi->setParameter("tiles", inTilesCocMinMax, SamplerParams{
+                            .filterMin = SamplerMinFilter::NEAREST });
                     commitAndRenderFullScreenQuad(driver, out, mi);
                     unbindAllDescriptorSets(driver);
                 });
@@ -2051,16 +2080,16 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::dof(FrameGraph& fg,
                 auto const& inputDesc = resources.getDescriptor(data.coc);
 
                 auto const& material = getPostProcessMaterial("dof");
-                FMaterialInstance* const mi = getMaterialInstance(mEngine, material);
+                FMaterialInstance* const mi = getMaterialInstance(mEngine, driver, material);
                 // it's not safe to use bilinear filtering in the general case (causes artifacts around edges)
-                mi->setParameter("color", color,
-                        { .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
-                mi->setParameter("colorLinear", color,
-                        { .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST });
-                mi->setParameter("coc", coc,
-                        { .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
-                mi->setParameter("tiles", tilesCocMinMax,
-                        { .filterMin = SamplerMinFilter::NEAREST });
+                mi->setParameter("color", color, SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
+                mi->setParameter("colorLinear", color, SamplerParams{
+                        .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST });
+                mi->setParameter("coc", coc, SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
+                mi->setParameter("tiles", tilesCocMinMax, SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST });
                 mi->setParameter("cocToTexelScale", float2{
                         bokehScale.x / (inputDesc.width * dofResolution),
                         bokehScale.y / (inputDesc.height * dofResolution)
@@ -2115,10 +2144,13 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::dof(FrameGraph& fg,
                 auto tilesCocMinMax = resources.getTexture(data.tilesCocMinMax);
 
                 auto const& material = getPostProcessMaterial("dofMedian");
-                FMaterialInstance* const mi = getMaterialInstance(mEngine, material);
-                mi->setParameter("dof",   inColor,        { .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
-                mi->setParameter("alpha", inAlpha,        { .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
-                mi->setParameter("tiles", tilesCocMinMax, { .filterMin = SamplerMinFilter::NEAREST });
+                FMaterialInstance* const mi = getMaterialInstance(mEngine, driver, material);
+                mi->setParameter("dof",   inColor,        SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
+                mi->setParameter("alpha", inAlpha,        SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
+                mi->setParameter("tiles", tilesCocMinMax, SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST });
                 commitAndRenderFullScreenQuad(driver, out, mi);
                 unbindAllDescriptorSets(driver);
             });
@@ -2166,11 +2198,15 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::dof(FrameGraph& fg,
                 auto tilesCocMinMax = resources.getTexture(data.tilesCocMinMax);
 
                 auto const& material = getPostProcessMaterial("dofCombine");
-                FMaterialInstance* const mi = getMaterialInstance(mEngine, material);
-                mi->setParameter("color", color, { .filterMin = SamplerMinFilter::NEAREST });
-                mi->setParameter("dof",   dof,   { .filterMag = SamplerMagFilter::NEAREST });
-                mi->setParameter("alpha", alpha, { .filterMag = SamplerMagFilter::NEAREST });
-                mi->setParameter("tiles", tilesCocMinMax, { .filterMin = SamplerMinFilter::NEAREST });
+                FMaterialInstance* const mi = getMaterialInstance(mEngine, driver, material);
+                mi->setParameter("color", color, SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST });
+                mi->setParameter("dof",   dof,   SamplerParams{
+                        .filterMag = SamplerMagFilter::NEAREST });
+                mi->setParameter("alpha", alpha, SamplerParams{
+                        .filterMag = SamplerMagFilter::NEAREST });
+                mi->setParameter("tiles", tilesCocMinMax, SamplerParams{
+                        .filterMin = SamplerMinFilter::NEAREST });
                 commitAndRenderFullScreenQuad(driver, out, mi);
                 unbindAllDescriptorSets(driver);
             });
@@ -2199,8 +2235,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::downscalePass(FrameGraph& fg
 
                 auto const& out = resources.getRenderPassInfo();
                 auto const& material = getPostProcessMaterial("bloomDownsample2x");
-                FMaterialInstance* const mi = getMaterialInstance(mEngine, material);
-                mi->setParameter("source", resources.getTexture(data.input), {
+                FMaterialInstance* const mi = getMaterialInstance(mEngine, driver, material);
+                mi->setParameter("source", resources.getTexture(data.input), SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR,
                         .filterMin = SamplerMinFilter::LINEAR
                 });
@@ -2235,6 +2271,18 @@ PostProcessManager::BloomPassOutput PostProcessManager::bloom(FrameGraph& fg,
     // compute the desired bloom buffer size
     float bloomHeight = float(inoutBloomOptions.resolution);
     float bloomWidth  = bloomHeight * aspect;
+
+    // With extreme aspect ratios the major axis can exceed the GPU's maximum
+    // texture dimension. Scale both axes down proportionally so that the larger
+    // one stays within the hardware limit.
+    const float maxDimension = float(
+            FTexture::getMaxTextureSize(mEngine, SamplerType::SAMPLER_2D));
+    const float bloomMajor = std::max(bloomWidth, bloomHeight);
+    if (bloomMajor > maxDimension) {
+        const float clampScale = maxDimension / bloomMajor;
+        bloomWidth  *= clampScale;
+        bloomHeight *= clampScale;
+    }
 
     // we might need to adjust the max # of levels
     const uint32_t major = uint32_t(std::max(bloomWidth,  bloomHeight));
@@ -2343,10 +2391,10 @@ PostProcessManager::BloomPassOutput PostProcessManager::bloom(FrameGraph& fg,
                 auto hwOut = resources.getTexture(data.out);
 
                 auto const& material9 = getPostProcessMaterial("bloomDownsample9");
-                auto* mi9 = getMaterialInstance(mEngine, material9);
+                auto* mi9 = getMaterialInstance(mEngine, driver, material9);
 
                 auto const& material13 = getPostProcessMaterial("bloomDownsample");
-                auto* mi13 = getMaterialInstance(mEngine, material13);
+                auto* mi13 = getMaterialInstance(mEngine, driver, material13);
                 // These material instances have no UBO updates in the loop, so we do not move
                 // getMaterialInstance() inside the loop.
 
@@ -2360,7 +2408,7 @@ PostProcessManager::BloomPassOutput PostProcessManager::bloom(FrameGraph& fg,
                     auto vp = resources.getRenderPassInfo(data.outRT[i-1]).params.viewport;
                     auto* const mi = (vp.width & 1 || vp.height & 1) ? mi13 : mi9;
                     auto hwOutView = driver.createTextureView(hwOut, i - 1, 1);
-                    mi->setParameter("source", hwOutView, {
+                    mi->setParameter("source", hwOutView, SamplerParams{
                             .filterMag = SamplerMagFilter::LINEAR,
                             .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST });
                     commitAndRenderFullScreenQuad(driver, hwDstRT, mi);
@@ -2393,7 +2441,7 @@ PostProcessManager::BloomPassOutput PostProcessManager::bloom(FrameGraph& fg,
                 auto const& material = getPostProcessMaterial("bloomUpsample");
                 FMaterial const* const ma = material.getMaterial(mEngine);
 
-                auto pipeline = getPipelineState(ma);
+                auto pipeline = getPipelineState(getMaterialInstance(driver, ma));
                 pipeline.rasterState.blendFunctionSrcRGB = BlendFunction::ONE;
                 pipeline.rasterState.blendFunctionDstRGB = BlendFunction::ONE;
 
@@ -2401,7 +2449,7 @@ PostProcessManager::BloomPassOutput PostProcessManager::bloom(FrameGraph& fg,
                     // Note that we wouldn't want to use the same instance for each pass since that
                     // would imply using the same UBOs, which implies synchronization across the
                     // passes.
-                    FMaterialInstance* mi = getMaterialInstance(ma);
+                    FMaterialInstance* mi = getMaterialInstance(driver, ma);
                     auto hwDstRT = resources.getRenderPassInfo(data.outRT[i - 1]);
                     hwDstRT.params.flags.discardStart = TargetBufferFlags::NONE; // b/c we'll blend
                     hwDstRT.params.flags.discardEnd = TargetBufferFlags::NONE;
@@ -2409,10 +2457,10 @@ PostProcessManager::BloomPassOutput PostProcessManager::bloom(FrameGraph& fg,
                     auto h = FTexture::valueForLevel(i - 1, outDesc.height);
                     auto hwOutView = driver.createTextureView(hwOut, i, 1);
                     mi->setParameter("resolution", float4{ w, h, 1.0f / w, 1.0f / h });
-                    mi->setParameter("source", hwOutView, {
+                    mi->setParameter("source", hwOutView, SamplerParams{
                             .filterMag = SamplerMagFilter::LINEAR,
                             .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST});
-                    mi->commit(driver);
+                    mi->commit(driver, getUboManager());
                     mi->use(driver);
                     renderFullScreenQuad(hwDstRT, pipeline, driver);
                     DescriptorSet::unbind(driver, DescriptorSetBindingPoints::PER_MATERIAL);
@@ -2455,9 +2503,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::flarePass(FrameGraph& fg,
 
                 auto const& material = getPostProcessMaterial("flare");
                 FMaterialInstance* const mi =
-                        getMaterialInstance(mEngine, material);
+                        getMaterialInstance(mEngine, driver, material);
 
-                mi->setParameter("color", in, {
+                mi->setParameter("color", in, SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR,
                         .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
                 });
@@ -2513,14 +2561,15 @@ static float4 getVignetteParameters(VignetteOptions const& options,
 }
 
 void PostProcessManager::colorGradingPrepareSubpass(DriverApi& driver,
-        const FColorGrading* colorGrading, ColorGradingConfig const& colorGradingConfig,
-        VignetteOptions const& vignetteOptions, uint32_t const width, uint32_t const height) noexcept {
-
+        FColorGrading const* colorGrading,
+        ColorGradingConfig const& colorGradingConfig,
+        VignetteOptions const& vignetteOptions,
+        uint32_t const width, uint32_t const height) noexcept {
     auto& material = getPostProcessMaterial("colorGradingAsSubpass");
-    FMaterialInstance* const mi =
-            configureColorGradingMaterial(material, colorGrading, colorGradingConfig,
+    FMaterialInstance const* const mi =
+            configureColorGradingMaterial(driver, material, colorGrading, colorGradingConfig,
                     vignetteOptions, width, height);
-    mi->commit(driver);
+    mi->commit(driver, getUboManager());
 }
 
 void PostProcessManager::colorGradingSubpass(DriverApi& driver,
@@ -2533,15 +2582,12 @@ void PostProcessManager::colorGradingSubpass(DriverApi& driver,
             PostProcessVariant::TRANSLUCENT : PostProcessVariant::OPAQUE;
 
     auto const& material = getPostProcessMaterial("colorGradingAsSubpass");
-    FMaterial const* const ma = material.getMaterial(mEngine, variant);
+    FMaterial const* const ma = material.getMaterial(mEngine);
     // the UBO has been set and committed in colorGradingPrepareSubpass()
-    int32_t const fixedIndex = colorGradingConfig.translucent
-                                       ? mFixedMaterialInstanceIndex.colorGradingTranslucent
-                                       : mFixedMaterialInstanceIndex.colorGradingOpaque;
-
-    FMaterialInstance const* mi = mMaterialInstanceManager.getMaterialInstance(ma, fixedIndex);
+    FMaterialInstance const* mi =
+            getMaterialInstanceWithTag(driver, ma, colorGradingConfig.translucent, variant);
     mi->use(driver);
-    auto const pipeline = getPipelineState(ma, variant);
+    auto const pipeline = getPipelineState(mi, variant);
     driver.nextSubpass();
     driver.scissor(mi->getScissor());
     driver.draw(pipeline, mFullScreenQuadRph, 0, 3, 1);
@@ -2549,31 +2595,26 @@ void PostProcessManager::colorGradingSubpass(DriverApi& driver,
 
 void PostProcessManager::customResolvePrepareSubpass(DriverApi& driver, CustomResolveOp const op) noexcept {
     auto const& material = getPostProcessMaterial("customResolveAsSubpass");
-    auto ma = material.getMaterial(mEngine, PostProcessVariant::OPAQUE);
-    auto [mi, fixedIndex] = mMaterialInstanceManager.getFixedMaterialInstance(ma);
-    mFixedMaterialInstanceIndex.customResolve = fixedIndex;
+    auto const ma = material.getMaterial(mEngine);
+    auto* const mi = getMaterialInstance(driver, ma, 0);
     mi->setParameter("direction", op == CustomResolveOp::COMPRESS ? 1.0f : -1.0f),
-    mi->commit(driver);
-    material.getMaterial(mEngine);
+    mi->commit(driver, getUboManager());
 }
 
 void PostProcessManager::customResolveSubpass(DriverApi& driver) noexcept {
     bindPostProcessDescriptorSet(driver);
     bindPerRenderableDescriptorSet(driver);
 
-    FEngine const& engine = mEngine;
-    Handle<HwRenderPrimitive> const& fullScreenRenderPrimitive = engine.getFullScreenRenderPrimitive();
     auto const& material = getPostProcessMaterial("customResolveAsSubpass");
     FMaterial const* const ma = material.getMaterial(mEngine);
     // the UBO has been set and committed in customResolvePrepareSubpass()
-    FMaterialInstance const* mi = mMaterialInstanceManager.getMaterialInstance(ma,
-            mFixedMaterialInstanceIndex.customResolve);
+    FMaterialInstance const* mi = getMaterialInstance(driver, ma, 0);
     mi->use(driver);
 
-    auto const pipeline = getPipelineState(ma);
+    auto const pipeline = getPipelineState(mi);
     driver.nextSubpass();
     driver.scissor(mi->getScissor());
-    driver.draw(pipeline, fullScreenRenderPrimitive, 0, 3, 1);
+    driver.draw(pipeline, mFullScreenQuadRph, 0, 3, 1);
 }
 
 FrameGraphId<FrameGraphTexture> PostProcessManager::customResolveUncompressPass(FrameGraph& fg,
@@ -2600,6 +2641,62 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::customResolveUncompressPass(
                 driver.endRenderPass();
             });
     return detonemapPass->inout;
+}
+
+
+void PostProcessManager::clearAncillaryBuffersPrepare(DriverApi& driver,
+        Variant::type_t variant) noexcept {
+    auto const& material = getPostProcessMaterial("clearDepth");
+    auto const ma = material.getMaterial(mEngine);
+    auto const mi = getMaterialInstanceWithTag(driver, ma, 0, variant);
+    mi->commit(driver, getUboManager());
+}
+
+void PostProcessManager::clearAncillaryBuffers(DriverApi& driver,
+        TargetBufferFlags attachments, Variant::type_t variant) const noexcept {
+    // in the future we might allow STENCIL as well
+    attachments &= TargetBufferFlags::DEPTH;
+    if (none(attachments & TargetBufferFlags::DEPTH)) {
+        return;
+    }
+
+    bindPerRenderableDescriptorSet(driver);
+
+    auto const& material = getPostProcessMaterial("clearDepth");
+    FMaterial const* const ma = material.getMaterial(mEngine);
+
+    // the UBO has been set and committed in clearAncillaryBuffersPrepare()
+    FMaterialInstance const* const mi = getMaterialInstanceWithTag(driver, ma, 0, variant);
+    mi->use(driver);
+
+    auto pipeline = getPipelineState(mi, variant);
+    pipeline.rasterState.depthFunc = RasterState::DepthFunc::A;
+
+    driver.scissor(mi->getScissor());
+    driver.draw(pipeline, mFullScreenQuadRph, 0, 3, 1);
+}
+
+void PostProcessManager::fogPrepare(DriverApi& driver) noexcept {
+    // ensures the material is loaded and material instance created
+    auto const& material = getPostProcessMaterial("fog");
+    FMaterial const* const ma = material.getMaterial(mEngine);
+    FMaterialInstance const* mi = ma->getDefaultInstance();
+    mi->commit(driver, getUboManager());
+}
+
+void PostProcessManager::fog(DriverApi& driver) noexcept {
+    // note the per-view descriptor set is assumed to be already set
+
+    bindPerRenderableDescriptorSet(driver);
+
+    auto const& material = getPostProcessMaterial("fog");
+    FMaterial const* const ma = material.getMaterial(mEngine);
+    FMaterialInstance const* mi = ma->getDefaultInstance();
+    mi->use(driver);
+
+    auto pipeline = getPipelineState(mi, Variant::NO_VARIANT);
+    driver.scissor(mi->getScissor());
+    driver.draw(pipeline, mFullScreenQuadRph, 0, 3, 1);
 }
 
 FrameGraphId<FrameGraphTexture> PostProcessManager::colorGrading(FrameGraph& fg,
@@ -2691,23 +2788,23 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::colorGrading(FrameGraph& fg,
 
                 auto& material = getPostProcessMaterial("colorGrading");
                 FMaterialInstance* const mi =
-                        configureColorGradingMaterial(material, colorGrading, colorGradingConfig,
+                        configureColorGradingMaterial(driver, material, colorGrading, colorGradingConfig,
                                 vignetteOptions, output.width, output.height);
 
                 mi->setParameter("colorBuffer", colorTexture, { /* shader uses texelFetch */ });
-                mi->setParameter("bloomBuffer", bloomTexture, {
+                mi->setParameter("bloomBuffer", bloomTexture, SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR,
                         .filterMin = SamplerMinFilter::LINEAR /* always read base level in shader */
                 });
-                mi->setParameter("flareBuffer", flareTexture, {
+                mi->setParameter("flareBuffer", flareTexture, SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR,
                         .filterMin = SamplerMinFilter::LINEAR
                 });
-                mi->setParameter("dirtBuffer", dirtTexture, {
+                mi->setParameter("dirtBuffer", dirtTexture, SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR,
                         .filterMin = SamplerMinFilter::LINEAR
                 });
-                mi->setParameter("starburstBuffer", starburstTexture, {
+                mi->setParameter("starburstBuffer", starburstTexture, SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR,
                         .filterMin = SamplerMinFilter::LINEAR,
                         .wrapS = SamplerWrapMode::REPEAT,
@@ -2776,9 +2873,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::fxaa(FrameGraph& fg,
                         PostProcessVariant::TRANSLUCENT : PostProcessVariant::OPAQUE;
 
                 FMaterialInstance* const mi =
-                        getMaterialInstance(mEngine, material, variant);
+                        getMaterialInstance(mEngine, driver, material, variant);
 
-                mi->setParameter("colorBuffer", texture, {
+                mi->setParameter("colorBuffer", texture, SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR,
                         .filterMin = SamplerMinFilter::LINEAR
                 });
@@ -2851,55 +2948,42 @@ void PostProcessManager::TaaJitterCamera(
     inoutCameraInfo->clipTransform.zw -= jitterInClipSpace;
 }
 
-void PostProcessManager::configureTemporalAntiAliasingMaterial(
+void PostProcessManager::configureTemporalAntiAliasingMaterial(backend::DriverApi& driver,
         TemporalAntiAliasingOptions const& taaOptions) noexcept {
 
     FMaterial* const ma = getPostProcessMaterial("taa").getMaterial(mEngine);
-    bool dirty = false;
-
-    setConstantParameter(ma, "upscaling", taaOptions.upscaling, dirty);
-    setConstantParameter(ma, "historyReprojection", taaOptions.historyReprojection, dirty);
-    setConstantParameter(ma, "filterHistory", taaOptions.filterHistory, dirty);
-    setConstantParameter(ma, "filterInput", taaOptions.filterInput, dirty);
-    setConstantParameter(ma, "useYCoCg", taaOptions.useYCoCg, dirty);
-    setConstantParameter(ma, "preventFlickering", taaOptions.preventFlickering, dirty);
-    setConstantParameter(ma, "boxType", int32_t(taaOptions.boxType), dirty);
-    setConstantParameter(ma, "boxClipping", int32_t(taaOptions.boxClipping), dirty);
-    setConstantParameter(ma, "varianceGamma", taaOptions.varianceGamma, dirty);
-    if (dirty) {
-        ma->invalidate();
-        // TODO: call Material::compile(), we can't do that now because it works only
-        //       with surface materials
-    }
+    ma->getPrograms().setConstants({
+        { "upscaling", taaOptions.upscaling > 1.0f },
+        { "historyReprojection", taaOptions.historyReprojection },
+        { "filterHistory", taaOptions.filterHistory },
+        { "filterInput", taaOptions.filterInput },
+        { "useYCoCg", taaOptions.useYCoCg },
+        { "hdr", taaOptions.hdr },
+        { "preventFlickering", taaOptions.preventFlickering },
+        { "boxType", int32_t(taaOptions.boxType) },
+        { "boxClipping", int32_t(taaOptions.boxClipping) },
+        { "varianceGamma", taaOptions.varianceGamma },
+    });
 }
 
-FMaterialInstance* PostProcessManager::configureColorGradingMaterial(
-        PostProcessMaterial& material, FColorGrading const* colorGrading,
+FMaterialInstance* PostProcessManager::configureColorGradingMaterial(backend::DriverApi& driver,
+        PostProcessMaterial const& material, FColorGrading const* colorGrading,
         ColorGradingConfig const& colorGradingConfig, VignetteOptions const& vignetteOptions,
         uint32_t const width, uint32_t const height) noexcept {
     FMaterial* ma = material.getMaterial(mEngine);
-    bool dirty = false;
-
-    setConstantParameter(ma, "isOneDimensional", colorGrading->isOneDimensional(), dirty);
-    setConstantParameter(ma, "isLDR", colorGrading->isLDR(), dirty);
-
-    if (dirty) {
-        ma->invalidate();
-        // TODO: call Material::compile(), we can't do that now because it works only
-        //       with surface materials
-    }
+    ma->getPrograms().setConstants({
+        { "isOneDimensional", colorGrading->isOneDimensional() },
+        { "isLDR", colorGrading->isLDR() },
+    });
 
     PostProcessVariant const variant = colorGradingConfig.translucent
                                                ? PostProcessVariant::TRANSLUCENT
                                                : PostProcessVariant::OPAQUE;
-    ma = material.getMaterial(mEngine, variant);
-    FMaterialInstance* mi = nullptr;
-    int32_t& fixedIndex = colorGradingConfig.translucent
-                                  ? mFixedMaterialInstanceIndex.colorGradingTranslucent
-                                  : mFixedMaterialInstanceIndex.colorGradingOpaque;
-    std::tie(mi, fixedIndex) = mMaterialInstanceManager.getFixedMaterialInstance(ma);
+    ma = material.getMaterial(mEngine);
+    FMaterialInstance* mi =
+            getMaterialInstanceWithTag(driver, ma, colorGradingConfig.translucent, variant);
 
-    const SamplerParams params = {
+    const SamplerParams params = SamplerParams{
             .filterMag = SamplerMagFilter::LINEAR,
             .filterMin = SamplerMinFilter::LINEAR,
             .wrapS = SamplerWrapMode::CLAMP_TO_EDGE,
@@ -2930,6 +3014,8 @@ FMaterialInstance* PostProcessManager::configureColorGradingMaterial(
 FrameGraphId<FrameGraphTexture> PostProcessManager::taa(FrameGraph& fg,
         FrameGraphId<FrameGraphTexture> input,
         FrameGraphId<FrameGraphTexture> const depth,
+        filament::Viewport const& xvp,
+        filament::Viewport const& vp,
         FrameHistory& frameHistory,
         FrameHistoryEntry::TemporalAA FrameHistoryEntry::*pTaa,
         TemporalAntiAliasingOptions const& taaOptions,
@@ -2959,9 +3045,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::taa(FrameGraph& fg,
     auto const& taaPass = fg.addPass<TAAData>("TAA",
             [&](FrameGraph::Builder& builder, auto& data) {
                 auto desc = fg.getDescriptor(input);
-                if (taaOptions.upscaling) {
-                    desc.width *= 2;
-                    desc.height *= 2;
+                if (taaOptions.upscaling > 1.0f) {
+                    desc.width  *= taaOptions.upscaling;
+                    desc.height *= taaOptions.upscaling;
                 }
                 data.color = builder.sample(input);
                 data.depth = builder.sample(depth);
@@ -2993,83 +3079,63 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::taa(FrameGraph& fg,
                         0, 0, 0,  1
                 }};
 
-                constexpr float2 sampleOffsets[9] = {
-                        { -1.0f, -1.0f }, {  0.0f, -1.0f }, {  1.0f, -1.0f }, { -1.0f,  0.0f },
-                        {  0.0f,  0.0f },
-                        {  1.0f,  0.0f }, { -1.0f,  1.0f }, {  0.0f,  1.0f }, {  1.0f,  1.0f },
-                };
-
-                constexpr float2 subSampleOffsets[4] = {
-                        { -0.25f,  0.25f },
-                        {  0.25f,  0.25f },
-                        {  0.25f, -0.25f },
-                        { -0.25f, -0.25f }
-                };
-
-                UTILS_UNUSED
-                auto const lanczos = [](float const x, float const a) -> float {
-                    if (x <= std::numeric_limits<float>::epsilon()) {
-                        return 1.0f;
-                    }
-                    if (std::abs(x) <= a) {
-                        return (a * std::sin(f::PI * x) * std::sin(f::PI * x / a))
-                               / ((f::PI * f::PI) * (x * x));
-                    }
-                    return 0.0f;
-                };
-
-                float const filterWidth = std::clamp(taaOptions.filterWidth, 1.0f, 2.0f);
-                float4 sum = 0.0;
-                float4 weights[9];
-
-                // this doesn't get vectorized (probably because of exp()), so don't bother
-                // unrolling it.
-                UTILS_NOUNROLL
-                for (size_t i = 0; i < 9; i++) {
-                    float2 const o = sampleOffsets[i];
-                    for (size_t j = 0; j < 4; j++) {
-                        float2 const subPixelOffset = taaOptions.upscaling ? subSampleOffsets[j] : float2{ 0 };
-                        float2 const d = (o - (current.jitter - subPixelOffset)) / filterWidth;
-                        weights[i][j] = lanczos(length(d), filterWidth);
-                    }
-                    sum += weights[i];
-                }
-                for (auto& w : weights) {
-                    w /= sum;
-                }
-
                 auto out = resources.getRenderPassInfo();
-                auto color = resources.getTexture(data.color);
-                auto depth = resources.getTexture(data.depth);
-                auto history = resources.getTexture(data.history);
+
+                auto const color = resources.getTexture(data.color);
+                auto const depth = resources.getTexture(data.depth);
+                auto const history = resources.getTexture(data.history);
+
+                auto const& colorDesc = resources.getDescriptor(data.color);
+                auto const& historyDesc = resources.getDescriptor(data.history);
+
                 auto const& material = getPostProcessMaterial("taa");
 
                 PostProcessVariant const variant = colorGradingConfig.translucent ?
                         PostProcessVariant::TRANSLUCENT : PostProcessVariant::OPAQUE;
 
-                FMaterial const* const ma = material.getMaterial(mEngine, variant);
+                FMaterial const* const ma = material.getMaterial(mEngine);
 
-                FMaterialInstance* mi = getMaterialInstance(ma);
-                mi->setParameter("color",  color, {});  // nearest
-                mi->setParameter("depth",  depth, {});  // nearest
-                mi->setParameter("alpha", taaOptions.feedback);
-                mi->setParameter("history", history, {
+                FMaterialInstance* mi = getMaterialInstance(driver, ma);
+                mi->setParameter("color",  color, SamplerParams{});  // nearest
+                mi->setParameter("depth",  depth, SamplerParams{});  // nearest
+                mi->setParameter("history", history, SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR,
                         .filterMin = SamplerMinFilter::LINEAR
                 });
-                mi->setParameter("filterWeights",  weights, 9);
-                mi->setParameter("jitter",  current.jitter);
+                mi->setParameter("alpha", taaOptions.feedback);
+
+                // jitter is negated here because the material wants the sample jitter offset
+                // not the projection matrix offset
+                mi->setParameter("jitter",  -current.jitter);
+                mi->setParameter("scale",  taaOptions.upscaling);
+
                 mi->setParameter("reprojection",
                         mat4f{ historyProjection * inverse(current.projection) } *
                         normalizedToClip);
 
-                mi->commit(driver);
+                mi->setParameter("colorViewport",
+                        float4{
+                            float(xvp.left)     / colorDesc.width,
+                            float(xvp.bottom)   / colorDesc.height,
+                            float(xvp.width)    / colorDesc.width,
+                            float(xvp.height)   / colorDesc.height,
+                        });
+
+                mi->setParameter("colorResolution",
+                        float4{ colorDesc.width, colorDesc.height,
+                        1.0f / colorDesc.width, 1.0f / colorDesc.height });
+
+                mi->setParameter("historyResolution",
+                        float4{ historyDesc.width, historyDesc.height,
+                        1.0f / historyDesc.width, 1.0f / historyDesc.height });
+
+                mi->commit(driver, getUboManager());
                 mi->use(driver);
 
                 if (colorGradingConfig.asSubpass) {
                     out.params.subpassMask = 1;
                 }
-                auto const pipeline = getPipelineState(ma, variant);
+                auto const pipeline = getPipelineState(mi, variant);
 
                 driver.beginRenderPass(out.target, out.params);
                 driver.draw(pipeline, mFullScreenQuadRph, 0, 3, 1);
@@ -3100,7 +3166,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::taa(FrameGraph& fg,
                 // an "import".
                 builder.sideEffect();
                 data.color = builder.sample(history); // FIXME: an access must be declared for detach(), why?
-            }, [&current](FrameGraphResources const& resources, auto const& data, auto&) {
+            }, [&current](FrameGraphResources const& resources, auto const& data) {
                 resources.detach(data.color, &current.color, &current.desc);
             });
 
@@ -3139,19 +3205,19 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::rcas(
 
                 auto const& material = getPostProcessMaterial("fsr_rcas");
                 FMaterialInstance* const mi =
-                        getMaterialInstance(mEngine, material, variant);
+                        getMaterialInstance(mEngine, driver, material, variant);
 
                 FSRUniforms uniforms;
                 FSR_SharpeningSetup(&uniforms, { .sharpness = 2.0f - 2.0f * sharpness });
                 mi->setParameter("RcasCon", uniforms.RcasCon);
-                mi->setParameter("color", input, {}); // uses texelFetch
+                mi->setParameter("color", input, SamplerParams{}); // uses texelFetch
                 mi->setParameter("resolution", float4{
                         outputDesc.width, outputDesc.height,
                         1.0f / outputDesc.width, 1.0f / outputDesc.height });
-                mi->commit(driver);
+                mi->commit(driver, getUboManager());
                 mi->use(driver);
 
-                auto pipeline = getPipelineState(material.getMaterial(mEngine), variant);
+                auto pipeline = getPipelineState(mi, variant);
                 if (mode == RcasMode::BLENDED) {
                     pipeline.rasterState.blendFunctionSrcRGB = BlendFunction::ONE;
                     pipeline.rasterState.blendFunctionSrcAlpha = BlendFunction::ONE;
@@ -3226,8 +3292,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph& 
 
                 auto& material = getPostProcessMaterial("blitLow");
                 FMaterialInstance* const mi =
-                        getMaterialInstance(mEngine, material);
-                mi->setParameter("color", color, {
+                        getMaterialInstance(mEngine, driver, material);
+                mi->setParameter("color", color, SamplerParams{
                     .filterMag = filter
                 });
 
@@ -3239,12 +3305,12 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleBilinear(FrameGraph& 
                         float(vp.width)  / inputDesc.width,
                         float(vp.height) / inputDesc.height
                 });
-                mi->commit(driver);
+                mi->commit(driver, getUboManager());
                 mi->use(driver);
 
                 auto out = resources.getRenderPassInfo();
 
-                auto pipeline = getPipelineState(material.getMaterial(mEngine));
+                auto pipeline = getPipelineState(mi);
                 if (blended) {
                     pipeline.rasterState.blendFunctionSrcRGB = BlendFunction::ONE;
                     pipeline.rasterState.blendFunctionSrcAlpha = BlendFunction::ONE;
@@ -3303,9 +3369,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleSGSR1(FrameGraph& fg,
                         PostProcessVariant::TRANSLUCENT : PostProcessVariant::OPAQUE;
 
                 FMaterialInstance* const mi =
-                        getMaterialInstance(mEngine, material, variant);
+                        getMaterialInstance(mEngine, driver, material, variant);
 
-                mi->setParameter("color", color, {
+                mi->setParameter("color", color, SamplerParams{
                     // The SGSR documentation doesn't clarify if LINEAR or NEAREST should be used. The
                     // sample code uses NEAREST, but that doesn't seem right, since it would mean the
                     // LERP mode would not be a LERP, and the non-edges would be sampled as NEAREST.
@@ -3326,7 +3392,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleSGSR1(FrameGraph& fg,
                         float(inputDesc.height)
                 });
 
-                mi->commit(driver);
+                mi->commit(driver, getUboManager());
                 mi->use(driver);
 
                 auto const out = resources.getRenderPassInfo();
@@ -3407,21 +3473,21 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleFSR1(FrameGraph& fg,
                 // --------------------------------------------------------------------------------
                 // set uniforms
 
-                PostProcessMaterial* splitEasuMaterial = nullptr;
-                PostProcessMaterial* easuMaterial = nullptr;
+                PostProcessMaterial const* splitEasuMaterial = nullptr;
+                PostProcessMaterial const* easuMaterial = nullptr;
 
                 if (twoPassesEASU) {
                     splitEasuMaterial = &getPostProcessMaterial("fsr_easu_mobileF");
                     FMaterialInstance* const mi =
-                            getMaterialInstance(mEngine, *splitEasuMaterial);
+                            getMaterialInstance(mEngine, driver, *splitEasuMaterial);
                     setEasuUniforms(mi, inputDesc, outputDesc);
-                    mi->setParameter("color", color, {
+                    mi->setParameter("color", color, SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR
                     });
                     mi->setParameter("resolution",
                             float4{ outputDesc.width, outputDesc.height,
                                     1.0f / outputDesc.width, 1.0f / outputDesc.height });
-                    mi->commit(driver);
+                    mi->commit(driver, getUboManager());
                     mi->use(driver);
                 }
 
@@ -3430,11 +3496,11 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleFSR1(FrameGraph& fg,
                     unsigned const index = std::min(1u, unsigned(dsrOptions.quality) - 2);
                     easuMaterial = &getPostProcessMaterial(blitterNames[index]);
                     FMaterialInstance* const mi =
-                            getMaterialInstance(mEngine, *easuMaterial);
+                            getMaterialInstance(mEngine, driver, *easuMaterial);
 
                     setEasuUniforms(mi, inputDesc, outputDesc);
 
-                    mi->setParameter("color", color, {
+                    mi->setParameter("color", color, SamplerParams{
                         .filterMag = SamplerMagFilter::LINEAR
                     });
 
@@ -3448,7 +3514,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleFSR1(FrameGraph& fg,
                             float(vp.width)  / inputDesc.width,
                             float(vp.height) / inputDesc.height
                     });
-                    mi->commit(driver);
+                    mi->commit(driver, getUboManager());
                     mi->use(driver);
                 }
 
@@ -3458,15 +3524,15 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::upscaleFSR1(FrameGraph& fg,
                 auto out = resources.getRenderPassInfo();
 
                 if (UTILS_UNLIKELY(twoPassesEASU)) {
-                    auto pipeline0 = getPipelineState(splitEasuMaterial->getMaterial(mEngine));
-                    auto pipeline1 = getPipelineState(easuMaterial->getMaterial(mEngine));
+                    auto pipeline0 = getPipelineState(getMaterialInstance(mEngine, driver, *splitEasuMaterial));
+                    auto pipeline1 = getPipelineState(getMaterialInstance(mEngine, driver, *easuMaterial));
                     pipeline1.rasterState.depthFunc = SamplerCompareFunc::NE;
                     driver.beginRenderPass(out.target, out.params);
                     driver.draw(pipeline0, mFullScreenQuadRph, 0, 3, 1);
                     driver.draw(pipeline1, mFullScreenQuadRph, 0, 3, 1);
                     driver.endRenderPass();
                 } else {
-                    auto pipeline = getPipelineState(easuMaterial->getMaterial(mEngine));
+                    auto pipeline = getPipelineState(getMaterialInstance(mEngine, driver, *easuMaterial));
                     renderFullScreenQuad(out, pipeline, driver);
                 }
                 unbindAllDescriptorSets(driver);
@@ -3519,8 +3585,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blit(FrameGraph& fg, bool co
                 PostProcessMaterial const& material =
                         getPostProcessMaterial(layer ? "blitArray" : "blitLow");
                 FMaterial const* const ma = material.getMaterial(mEngine);
-                auto* mi = getMaterialInstance(ma);
-                mi->setParameter("color", color, {
+                auto* mi = getMaterialInstance(driver, ma);
+                mi->setParameter("color", color, SamplerParams{
                         .filterMag = filterMag,
                         .filterMin = filterMin
                 });
@@ -3534,10 +3600,10 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blit(FrameGraph& fg, bool co
                 if (layer) {
                     mi->setParameter("layerIndex", layer);
                 }
-                mi->commit(driver);
+                mi->commit(driver, getUboManager());
                 mi->use(driver);
 
-                auto pipeline = getPipelineState(ma);
+                auto pipeline = getPipelineState(mi);
                 if (translucent) {
                     pipeline.rasterState.blendFunctionSrcRGB = BlendFunction::ONE;
                     pipeline.rasterState.blendFunctionSrcAlpha = BlendFunction::ONE;
@@ -3555,8 +3621,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blitDepth(FrameGraph& fg,
         FrameGraphId<FrameGraphTexture> const input) noexcept {
     auto const& inputDesc = fg.getDescriptor(input);
     filament::Viewport const vp = {0, 0, inputDesc.width, inputDesc.height};
-    bool const hardwareBlitSupported =
-            mEngine.getDriverApi().isDepthStencilBlitSupported(inputDesc.format);
+    bool const hardwareBlitSupported = mDepthStencilBlitSupported;
 
     struct BlitData {
         FrameGraphId<FrameGraphTexture> input;
@@ -3619,9 +3684,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blitDepth(FrameGraph& fg,
                 // set uniforms
                 PostProcessMaterial const& material = getPostProcessMaterial("blitDepth");
                 FMaterialInstance* const mi =
-                        getMaterialInstance(mEngine, material);
-                mi->setParameter("depth", depth,
-                        {
+                        getMaterialInstance(mEngine, driver, material);
+                mi->setParameter("depth", depth, SamplerParams {
                             .filterMag = SamplerMagFilter::NEAREST,
                             .filterMin = SamplerMinFilter::NEAREST,
                         });
@@ -3637,8 +3701,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::blitDepth(FrameGraph& fg,
 }
 
 FrameGraphId<FrameGraphTexture> PostProcessManager::resolve(FrameGraph& fg,
-        const char* outputBufferName, FrameGraphId<FrameGraphTexture> const input,
-        FrameGraphTexture::Descriptor outDesc) noexcept {
+        utils::StaticString outputBufferName, FrameGraphId<FrameGraphTexture> const input,
+        FrameGraphTexture::Descriptor outDesc, utils::CString customPassName) noexcept {
 
     // Don't do anything if we're not a MSAA buffer
     auto const& inDesc = fg.getDescriptor(input);
@@ -3647,8 +3711,13 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::resolve(FrameGraph& fg,
     }
 
     // The Metal / Vulkan backends currently don't support depth/stencil resolve.
-    if (isDepthFormat(inDesc.format) && (!mEngine.getDriverApi().isDepthStencilResolveSupported())) {
-        return resolveDepth(fg, outputBufferName, input, outDesc);
+    // TODO: Stencil resolve is actually *not* supported. Trying to resolve a stencil texture will
+    //     trigger an assert on debug builds. We need to investigate how this can be accomplished
+    //     through shaders or some other manipulation.
+    if ((isDepthFormat(inDesc.format) || isStencilFormat(inDesc.format)) &&
+            (!mDepthStencilResolveSupported)) {
+        return resolveDepthWithShader(fg, outputBufferName, input, outDesc,
+                std::move(customPassName));
     }
 
     outDesc.width = inDesc.width;
@@ -3661,11 +3730,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::resolve(FrameGraph& fg,
         FrameGraphId<FrameGraphTexture> output;
     };
 
-    auto const& ppResolve = fg.addPass<ResolveData>("resolve",
+    auto const& ppResolve = fg.addPass<ResolveData>(
+            customPassName.empty() ? "resolve" : customPassName.c_str(),
             [&](FrameGraph::Builder& builder, auto& data) {
-                // we currently don't support stencil resolve.
-                assert_invariant(!isStencilFormat(inDesc.format));
-
                 data.input = builder.read(input, FrameGraphTexture::Usage::BLIT_SRC);
                 data.output = builder.createTexture(outputBufferName, outDesc);
                 data.output = builder.write(data.output, FrameGraphTexture::Usage::BLIT_DST);
@@ -3690,9 +3757,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::resolve(FrameGraph& fg,
     return ppResolve->output;
 }
 
-FrameGraphId<FrameGraphTexture> PostProcessManager::resolveDepth(FrameGraph& fg,
-        const char* outputBufferName, FrameGraphId<FrameGraphTexture> const input,
-        FrameGraphTexture::Descriptor outDesc) noexcept {
+FrameGraphId<FrameGraphTexture> PostProcessManager::resolveDepthWithShader(FrameGraph& fg,
+        utils::StaticString outputBufferName, FrameGraphId<FrameGraphTexture> const input,
+        FrameGraphTexture::Descriptor outDesc, utils::CString customPassName) noexcept {
 
     // Don't do anything if we're not a MSAA buffer
     auto const& inDesc = fg.getDescriptor(input);
@@ -3715,11 +3782,9 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::resolveDepth(FrameGraph& fg,
         FrameGraphId<FrameGraphTexture> output;
     };
 
-    auto const& ppResolve = fg.addPass<ResolveData>("resolveDepth",
+    auto const& ppResolve = fg.addPass<ResolveData>(
+            customPassName.empty() ? "resolveDepthWithShader" : customPassName.c_str(),
             [&](FrameGraph::Builder& builder, auto& data) {
-                // we currently don't support stencil resolve
-                assert_invariant(!isStencilFormat(inDesc.format));
-
                 data.input = builder.sample(input);
                 data.output = builder.createTexture(outputBufferName, outDesc);
                 data.output = builder.write(data.output, FrameGraphTexture::Usage::DEPTH_ATTACHMENT);
@@ -3728,13 +3793,16 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::resolveDepth(FrameGraph& fg,
                         .clearFlags = TargetBufferFlags::DEPTH });
             },
             [=, this](FrameGraphResources const& resources, auto const& data, DriverApi& driver) {
+                // we currently don't support stencil resolve
+                assert_invariant(!isStencilFormat(inDesc.format));
+
                 bindPostProcessDescriptorSet(driver);
                 bindPerRenderableDescriptorSet(driver);
                 auto const& input = resources.getTexture(data.input);
                 auto const& material = getPostProcessMaterial("resolveDepth");
                 FMaterialInstance* const mi =
-                        getMaterialInstance(mEngine, material);
-                mi->setParameter("depth", input, {}); // NEAREST
+                        getMaterialInstance(mEngine, driver, material);
+                mi->setParameter("depth", input, SamplerParams{}); // NEAREST
                 commitAndRenderFullScreenQuad(driver, resources.getRenderPassInfo(), mi);
                 unbindAllDescriptorSets(driver);
             });
@@ -3742,70 +3810,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::resolveDepth(FrameGraph& fg,
     return ppResolve->output;
 }
 
-FrameGraphId<FrameGraphTexture> PostProcessManager::vsmMipmapPass(FrameGraph& fg,
-        FrameGraphId<FrameGraphTexture> const input, uint8_t layer, size_t const level,
-        float4 clearColor) noexcept {
-
-    struct VsmMipData {
-        FrameGraphId<FrameGraphTexture> in;
-    };
-
-    auto const& depthMipmapPass = fg.addPass<VsmMipData>("VSM Generate Mipmap Pass",
-            [&](FrameGraph::Builder& builder, auto& data) {
-                const char* name = builder.getName(input);
-                data.in = builder.sample(input);
-
-                auto out = builder.createSubresource(data.in, "Mip level", {
-                        .level = uint8_t(level + 1), .layer = layer });
-
-                out = builder.write(out, FrameGraphTexture::Usage::COLOR_ATTACHMENT);
-                builder.declareRenderPass(name, {
-                    .attachments = { .color = { out }},
-                    .clearColor = clearColor,
-                    .clearFlags = TargetBufferFlags::COLOR
-                });
-            },
-            [=, this](FrameGraphResources const& resources,
-                    auto const& data, DriverApi& driver) {
-                bindPostProcessDescriptorSet(driver);
-                bindPerRenderableDescriptorSet(driver);
-
-                auto in = driver.createTextureView(resources.getTexture(data.in), level, 1);
-                auto out = resources.getRenderPassInfo();
-
-                auto const& inDesc = resources.getDescriptor(data.in);
-                auto width = inDesc.width;
-                assert_invariant(width == inDesc.height);
-                int const dim = width >> (level + 1);
-
-                auto& material = getPostProcessMaterial("vsmMipmap");
-                FMaterial const* const ma = material.getMaterial(mEngine);
-
-                // When generating shadow map mip levels, we want to preserve the 1 texel border.
-                // (note clearing never respects the scissor in Filament)
-                auto const pipeline = getPipelineState(ma);
-                backend::Viewport const scissor = { 1u, 1u, dim - 2u, dim - 2u };
-
-                FMaterialInstance* const mi = getMaterialInstance(ma);
-                mi->setParameter("color", in, {
-                        .filterMag = SamplerMagFilter::LINEAR,
-                        .filterMin = SamplerMinFilter::LINEAR_MIPMAP_NEAREST
-                });
-                mi->setParameter("layer", uint32_t(layer));
-                mi->setParameter("uvscale", 1.0f / float(dim));
-                mi->commit(driver);
-                mi->use(driver);
-
-                renderFullScreenQuadWithScissor(out, pipeline, scissor, driver);
-                unbindAllDescriptorSets(driver);
-
-                driver.destroyTexture(in); // `in` is just a view on `data.in`
-            });
-
-    return depthMipmapPass->in;
-}
-
 FrameGraphId<FrameGraphTexture> PostProcessManager::debugShadowCascades(FrameGraph& fg,
+        ShadowMapManager const& smm,
         FrameGraphId<FrameGraphTexture> const input,
         FrameGraphId<FrameGraphTexture> const depth) noexcept {
 
@@ -3823,17 +3829,31 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::debugShadowCascades(FrameGra
                 data.output = builder.createTexture("Shadow Cascade Debug", desc);
                 builder.declareRenderPass(data.output);
             },
-            [=, this](FrameGraphResources const& resources, auto const& data, DriverApi& driver) {
+            [=, &smm, this](FrameGraphResources const& resources, auto const& data, DriverApi& driver) {
                 bindPostProcessDescriptorSet(driver);
                 bindPerRenderableDescriptorSet(driver);
                 auto color = resources.getTexture(data.color);
                 auto depth = resources.getTexture(data.depth);
                 auto const out = resources.getRenderPassInfo();
+
+                auto const& smu = smm.getShadowMappingUniforms();
+                mat4f lightFromWorldMatrix[4] = {};
+                float4 scissorNormalized[4] = {};
+                for (size_t i = 0, c = std::max(4u, (smu.cascades & 0xF)) ; i < c; i++) {
+                    auto const& csp = smm.getCascadeShaderParameters(i);
+                    lightFromWorldMatrix[i] = csp.lightSpace;
+                    scissorNormalized[i] = csp.scissorNormalized;
+                }
+
                 auto const& material = getPostProcessMaterial("debugShadowCascades");
-                FMaterialInstance* const mi =
-                        getMaterialInstance(mEngine, material);
-                mi->setParameter("color",  color, {});  // nearest
-                mi->setParameter("depth",  depth, {});  // nearest
+                FMaterialInstance* const mi = getMaterialInstance(mEngine, driver, material);
+                mi->setParameter("color",  color, SamplerParams{});  // nearest
+                mi->setParameter("depth",  depth, SamplerParams{});  // nearest
+                mi->setParameter("cascadeSplits",  smu.cascadeSplits);
+                mi->setParameter("cascadeCount",  smu.cascades & 0xF);
+                mi->setParameter("shadowAtlasResolution",  smu.atlasResolution);
+                mi->setParameter("lightFromWorldMatrix",  lightFromWorldMatrix, 4);
+                mi->setParameter("scissorNormalized",  scissorNormalized, 4);
                 commitAndRenderFullScreenQuad(driver, out, mi);
                 unbindAllDescriptorSets(driver);
             });
@@ -3884,8 +3904,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::debugCombineArrayTexture(Fra
                 FMaterial const* const ma = material.getMaterial(mEngine);
                 // It should be ok to not move this getMaterialInstance to inside the loop, since
                 // this is a pass meant for debug.
-                auto* mi = getMaterialInstance(ma);
-                mi->setParameter("color", color, {
+                auto* mi = getMaterialInstance(driver, ma);
+                mi->setParameter("color", color, SamplerParams{
                         .filterMag = filterMag,
                         .filterMin = filterMin
                     });
@@ -3895,10 +3915,10 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::debugCombineArrayTexture(Fra
                         float(vp.width) / inputDesc.width,
                         float(vp.height) / inputDesc.height
                     });
-                mi->commit(driver);
+                mi->commit(driver, getUboManager());
                 mi->use(driver);
 
-                auto pipeline = getPipelineState(ma);
+                auto pipeline = getPipelineState(mi);
                 if (translucent) {
                     pipeline.rasterState.blendFunctionSrcRGB = BlendFunction::ONE;
                     pipeline.rasterState.blendFunctionSrcAlpha = BlendFunction::ONE;
@@ -3912,7 +3932,7 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::debugCombineArrayTexture(Fra
                 // Render all layers of the texture to the screen side-by-side.
                 for (uint32_t i = 0; i < inputTextureDesc.depth; ++i) {
                     mi->setParameter("layerIndex", i);
-                    mi->commit(driver);
+                    mi->commit(driver, getUboManager());
                     renderFullScreenQuad(out, pipeline, driver);
                     DescriptorSet::unbind(driver, DescriptorSetBindingPoints::PER_MATERIAL);
                     // From the second draw, don't clear the targetbuffer.
@@ -3959,8 +3979,8 @@ FrameGraphId<FrameGraphTexture> PostProcessManager::debugDisplayShadowTexture(
                     auto const out = resources.getRenderPassInfo();
                     auto in = resources.getTexture(data.depth);
                     auto const& material = getPostProcessMaterial("shadowmap");
-                    FMaterialInstance* const mi = getMaterialInstance(mEngine, material);
-                    mi->setParameter("shadowmap", in, {
+                    FMaterialInstance* const mi = getMaterialInstance(mEngine, driver, material);
+                    mi->setParameter("shadowmap", in, SamplerParams{
                         .filterMin = SamplerMinFilter::NEAREST_MIPMAP_NEAREST });
                     mi->setParameter("scale", s);
                     mi->setParameter("layer", (uint32_t)layer);
