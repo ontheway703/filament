@@ -21,6 +21,8 @@ if(PLATFORM_NAME STREQUAL "iphonesimulator")
     add_definitions(-DFILAMENT_IOS_SIMULATOR)
     # The simulator only supports iOS >= 13.0
     set(IOS_MIN_TARGET "13.0")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -target ${IOS_ARCH}-apple-ios${IOS_MIN_TARGET}-simulator")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -target ${IOS_ARCH}-apple-ios${IOS_MIN_TARGET}-simulator")
 endif()
 
 SET(CMAKE_SYSTEM_NAME Darwin)
@@ -103,16 +105,4 @@ IF (NOT DEFINED IOS_MIN_TARGET)
    OUTPUT_STRIP_TRAILING_WHITESPACE)
 ENDIF()
 
-# 使用 -target 标志以区分真机和模拟器 (Apple Silicon)
-if(PLATFORM_NAME STREQUAL "iphonesimulator")
-    SET(IOS_TARGET_TRIPLE "${IOS_ARCH}-apple-ios${IOS_MIN_TARGET}-simulator")
-else()
-    SET(IOS_TARGET_TRIPLE "${IOS_ARCH}-apple-ios${IOS_MIN_TARGET}")
-endif()
-
-SET(IOS_COMMON_FLAGS "-target ${IOS_TARGET_TRIPLE}")
-
-SET(CMAKE_C_FLAGS_INIT "${IOS_COMMON_FLAGS}")
-SET(CMAKE_CXX_FLAGS_INIT "${IOS_COMMON_FLAGS}")
-SET(CMAKE_ASM_FLAGS_INIT "${IOS_COMMON_FLAGS}")
 set(CMAKE_OSX_DEPLOYMENT_TARGET ${IOS_MIN_TARGET} CACHE STRING "Minimum iOS version")

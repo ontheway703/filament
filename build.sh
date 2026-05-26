@@ -688,12 +688,11 @@ function build_ios_target {
     local lc_target=$(echo "$1" | tr '[:upper:]' '[:lower:]')
     local arch=$2
     local platform=$3
-    local build_dir="out/cmake-ios-${lc_target}-${arch}-${platform}"
 
     echo "Building iOS ${lc_target} (${arch}) for ${platform}..."
-    mkdir -p "${build_dir}"
+    mkdir -p "out/cmake-ios-${lc_target}-${arch}-${platform}"
 
-    pushd "${build_dir}" > /dev/null
+    pushd "out/cmake-ios-${lc_target}-${arch}-${platform}" > /dev/null
 
     if [[ ! -d "CMakeFiles" ]] || [[ "${ISSUE_CMAKE_ALWAYS}" == "true" ]]; then
         cmake \
@@ -712,7 +711,7 @@ function build_ios_target {
             ${STEREOSCOPIC_OPTION} \
             ${EXCEPTIONS_OPTION} \
             ../..
-        ln -sf "${build_dir}/compile_commands.json" \
+        ln -sf "out/cmake-ios-${lc_target}-${arch}/compile_commands.json" \
            ../../compile_commands.json
     fi
 
@@ -759,6 +758,13 @@ function build_ios {
 
         if [[ "${IOS_BUILD_SIMULATOR}" == "true" ]]; then
             build_ios_target "Debug" "arm64" "iphonesimulator"
+            build_ios_target "Debug" "x86_64" "iphonesimulator"
+
+            # Create a universal library for the simulator
+            build/ios/create-universal-libs.sh \
+                -o "${lib_dir}/universal" \
+                "${lib_dir}/arm64-iphonesimulator" \
+                "${lib_dir}/x86_64-iphonesimulator"
         fi
 
         # Always create XCFrameworks
@@ -791,6 +797,13 @@ function build_ios {
 
         if [[ "${IOS_BUILD_SIMULATOR}" == "true" ]]; then
             build_ios_target "Release" "arm64" "iphonesimulator"
+            build_ios_target "Release" "x86_64" "iphonesimulator"
+
+            # Create a universal library for the simulator
+            build/ios/create-universal-libs.sh \
+                -o "${lib_dir}/universal" \
+                "${lib_dir}/arm64-iphonesimulator" \
+                "${lib_dir}/x86_64-iphonesimulator"
         fi
 
         # Always create XCFrameworks
