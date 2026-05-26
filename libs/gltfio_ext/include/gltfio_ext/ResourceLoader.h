@@ -164,4 +164,3 @@ private:
 } // namespace filament::gltfio_ext
 
 #endif // GLTFIO_EXT_RESOURCELOADER_H
-

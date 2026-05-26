@@ -132,7 +132,7 @@ bool decodeMeshoptCompression(cgltf_data* data) {
                 assert_invariant(false);
                 break;
         }
-        
+
         if (error != 0) {
             slog.e << "gltfio: meshopt decompression failed with error " << error << io::endl;
             free(destination);

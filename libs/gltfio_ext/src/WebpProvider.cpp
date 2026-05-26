@@ -24,7 +24,7 @@ namespace filament::gltfio_ext {
     }
 
     TextureProvider* createWebpProvider(Engine* engine) {
-        return nullptr;        
+        return nullptr;
     }
 }
 

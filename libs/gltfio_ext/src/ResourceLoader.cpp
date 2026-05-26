@@ -283,12 +283,12 @@ inline void uploadBuffers(FFilamentAsset* asset, Engine& engine,
             if (floatsCount == 0) {
                 continue;
             }
-            
+
             if (floatsCount > std::numeric_limits<size_t>::max() / sizeof(float)) {
                 continue;
             }
             const size_t floatsByteCount = sizeof(float) * floatsCount;
-            
+
             float* floatsData = (float*)malloc(floatsByteCount);
             cgltf_accessor_unpack_floats(accessor, floatsData, floatsCount);
 
@@ -325,20 +325,20 @@ inline void uploadBuffers(FFilamentAsset* asset, Engine& engine,
             if (utility::requiresConversion(accessor)) {
                 const cgltf_size bufferSize = accessor->buffer_view->buffer->size;
                 const cgltf_size totalOffset = accessor->buffer_view->offset + accessor->offset;
-                
+
                 if (totalOffset >= bufferSize) {
                     continue;
                 }
-                
+
                 const cgltf_size availableBytes = bufferSize - totalOffset;
                 const cgltf_size stride = accessor->stride;
                 const cgltf_size elementSize = cgltf_calc_size(accessor->type, accessor->component_type);
-                
+
                 cgltf_size maxCount = 0;
                 if (stride > 0 && availableBytes >= elementSize) {
                     maxCount = 1 + (availableBytes - elementSize) / stride;
                 }
-                
+
                 cgltf_size safeCount = accessor->count;
                 if (safeCount > maxCount) {
                     LOG(WARNING) << "Accessor count exceeds buffer capacity, clamping.";
@@ -353,12 +353,12 @@ inline void uploadBuffers(FFilamentAsset* asset, Engine& engine,
                 if (floatsCount == 0) {
                     continue;
                 }
-                
+
                 if (floatsCount > std::numeric_limits<size_t>::max() / sizeof(float)) {
                     continue;
                 }
                 const size_t floatsByteCount = sizeof(float) * floatsCount;
-                
+
                 float* floatsData = (float*) malloc(floatsByteCount);
                 cgltf_accessor_unpack_floats(accessor, floatsData, floatsCount);
                 BufferObject* bo = BufferObject::Builder().size(floatsByteCount).build(engine);
@@ -397,20 +397,20 @@ inline void uploadBuffers(FFilamentAsset* asset, Engine& engine,
         if (utility::requiresPacking(accessor)) {
             const cgltf_size bufferSize = accessor->buffer_view->buffer->size;
             const cgltf_size totalOffset = accessor->buffer_view->offset + accessor->offset;
-            
+
             if (totalOffset >= bufferSize) {
                 continue;
             }
-            
+
             const cgltf_size availableBytes = bufferSize - totalOffset;
             const cgltf_size stride = accessor->stride;
             const cgltf_size elementSize = cgltf_calc_size(accessor->type, accessor->component_type);
-            
+
             cgltf_size maxCount = 0;
             if (stride > 0 && availableBytes >= elementSize) {
                 maxCount = 1 + (availableBytes - elementSize) / stride;
             }
-            
+
             cgltf_size safeCount = accessor->count;
             if (safeCount > maxCount) {
                 LOG(WARNING) << "Accessor count exceeds buffer capacity, clamping.";
@@ -425,7 +425,7 @@ inline void uploadBuffers(FFilamentAsset* asset, Engine& engine,
             if (floatsCount == 0) {
                 continue;
             }
-            
+
             if (floatsCount > std::numeric_limits<size_t>::max() / sizeof(float)) {
                 continue;
             }
