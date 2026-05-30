@@ -36,7 +36,7 @@
 
 #include <camutils/Manipulator.h>
 
-#include <getopt/getopt.h>
+#include <utils/getopt.h>
 
 #include <utils/NameComponentManager.h>
 
@@ -73,6 +73,7 @@ struct App {
     ResourceLoader* resourceLoader = nullptr;
     gltfio::TextureProvider* stbDecoder = nullptr;
     gltfio::TextureProvider* ktxDecoder = nullptr;
+    gltfio::TextureProvider* webpDecoder = nullptr;
     int instanceToAnimate = -1;
     std::vector<FilamentInstance*> instances;
 };
@@ -111,19 +112,19 @@ static void printUsage(char* name) {
 
 static int handleCommandLineArguments(int argc, char* argv[], App* app) {
     static constexpr const char* OPTSTR = "ha:i:un:m:";
-    static const struct option OPTIONS[] = {
-        { "help",         no_argument,       nullptr, 'h' },
-        { "api",          required_argument, nullptr, 'a' },
-        { "ibl",          required_argument, nullptr, 'i' },
-        { "num",          required_argument, nullptr, 'n' },
-        { "animate",      required_argument, nullptr, 'm' },
-        { "ubershader",   no_argument,       nullptr, 'u' },
+    static const utils::getopt::option OPTIONS[] = {
+        { "help",         utils::getopt::no_argument,       nullptr, 'h' },
+        { "api",          utils::getopt::required_argument, nullptr, 'a' },
+        { "ibl",          utils::getopt::required_argument, nullptr, 'i' },
+        { "num",          utils::getopt::required_argument, nullptr, 'n' },
+        { "animate",      utils::getopt::required_argument, nullptr, 'm' },
+        { "ubershader",   utils::getopt::no_argument,       nullptr, 'u' },
         { nullptr, 0, nullptr, 0 }
     };
     int opt;
     int option_index = 0;
-    while ((opt = getopt_long(argc, argv, OPTSTR, OPTIONS, &option_index)) >= 0) {
-        std::string arg(optarg ? optarg : "");
+    while ((opt = utils::getopt::getopt_long(argc, argv, OPTSTR, OPTIONS, &option_index)) >= 0) {
+        std::string arg(utils::getopt::optarg ? utils::getopt::optarg : "");
         switch (opt) {
             default:
             case 'h':
@@ -146,7 +147,7 @@ static int handleCommandLineArguments(int argc, char* argv[], App* app) {
                 break;
         }
     }
-    return optind;
+    return utils::getopt::optind;
 }
 
 static std::ifstream::pos_type getFileSize(const char* filename) {
@@ -213,6 +214,13 @@ int main(int argc, char** argv) {
             app.resourceLoader->addTextureProvider("image/png", app.stbDecoder);
             app.resourceLoader->addTextureProvider("image/jpeg", app.stbDecoder);
             app.resourceLoader->addTextureProvider("image/ktx2", app.ktxDecoder);
+            if (isWebpSupported()) {
+                app.webpDecoder = createWebpProvider(app.engine);                
+                app.resourceLoader->addTextureProvider("image/webp", app.webpDecoder);
+            }
+            else {
+                app.webpDecoder = nullptr;
+            }
         }
 
         if (!app.resourceLoader->asyncBeginLoad(app.asset)) {
@@ -280,6 +288,7 @@ int main(int argc, char** argv) {
         delete app.resourceLoader;
         delete app.stbDecoder;
         delete app.ktxDecoder;
+        delete app.webpDecoder;
 
         AssetLoader::destroy(&app.loader);
     };

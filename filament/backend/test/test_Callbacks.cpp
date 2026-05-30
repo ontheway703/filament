@@ -18,6 +18,7 @@
 
 #include "Lifetimes.h"
 #include "Skip.h"
+#include "../src/DriverBase.h"
 
 using namespace filament;
 using namespace filament::backend;
@@ -25,25 +26,23 @@ using namespace filament::backend;
 namespace test {
 
 TEST_F(BackendTest, FrameScheduledCallback) {
-    SKIP_IF(Backend::OPENGL, "Frame callbacks are unsupported in OpenGL");
-    SKIP_IF(Backend::VULKAN, "Frame callbacks are unsupported in Vulkan, see b/417254479");
-    SKIP_IF(Backend::WEBGPU, "Frame callbacks are unsupported in WebGPU");
-
     auto& api = getDriverApi();
-    Cleanup cleanup(api);
 
     // Create a SwapChain.
     // In order for the frameScheduledCallback to be called, this must be a real SwapChain (not
     // headless) so we obtain a drawable.
-    auto swapChain = cleanup.add(createSwapChain());
+    auto swapChain = addCleanup(createSwapChain());
 
-    Handle<HwRenderTarget> renderTarget = cleanup.add(api.createDefaultRenderTarget());
+    Handle<HwRenderTarget> renderTarget = addCleanup(api.createDefaultRenderTarget());
 
     int callbackCountA = 0;
-    api.setFrameScheduledCallback(swapChain, nullptr, [&callbackCountA](PresentCallable callable) {
-        callable();
-        callbackCountA++;
-    }, 0);
+    api.setFrameScheduledCallback(
+            swapChain, nullptr,
+            [&callbackCountA](PresentCallable callable) {
+                callable();
+                callbackCountA++;
+            },
+            0);
 
     // Render the first frame.
     api.makeCurrent(swapChain, swapChain);
@@ -68,7 +67,18 @@ TEST_F(BackendTest, FrameScheduledCallback) {
         callbackCountB++;
     }, 0);
 
-    // Render one final frame.
+    // Render another frame.
+    api.makeCurrent(swapChain, swapChain);
+    api.beginFrame(0, 0, 0);
+    api.beginRenderPass(renderTarget, {});
+    api.endRenderPass(0);
+    api.commit(swapChain);
+    api.endFrame(0);
+
+    // Now, unset the callback
+    api.setFrameScheduledCallback(swapChain, nullptr, {}, 0);
+
+    // Render a final frame. This time no callback should be called.
     api.makeCurrent(swapChain, swapChain);
     api.beginFrame(0, 0, 0);
     api.beginRenderPass(renderTarget, {});
@@ -91,10 +101,9 @@ TEST_F(BackendTest, FrameCompletedCallback) {
     SKIP_IF(Backend::WEBGPU, "Frame callbacks are unsupported in WebGPU");
 
     auto& api = getDriverApi();
-    Cleanup cleanup(api);
 
     // Create a SwapChain.
-    auto swapChain = cleanup.add(api.createSwapChainHeadless(256, 256, 0));
+    auto swapChain = addCleanup(createSwapChain());
 
     int callbackCountA = 0;
     api.setFrameCompletedCallback(swapChain, nullptr,
@@ -131,5 +140,33 @@ TEST_F(BackendTest, FrameCompletedCallback) {
     EXPECT_EQ(callbackCountA, 2);
     EXPECT_EQ(callbackCountB, 1);
 }
+
+#ifdef __EXCEPTIONS
+TEST_F(BackendTest, FenceUnrecoverableErrorInterruption) {
+    DriverBase* driverBase = static_cast<DriverBase*>(&getDriver());
+    
+    std::atomic<bool> waitStarted = false;
+    std::atomic<bool> waitFinished = false;
+    FenceStatus waitResult = FenceStatus::TIMEOUT_EXPIRED;
+
+    std::thread waitingThread([&]() {
+        waitStarted = true;
+        waitResult = driverBase->waitForFence([]() { return false; });
+        waitFinished = true;
+    });
+
+    while (!waitStarted) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    driverBase->setUnrecoverableError();
+
+    waitingThread.join();
+
+    EXPECT_TRUE(waitFinished);
+    EXPECT_EQ(waitResult, FenceStatus::ERROR);
+}
+#endif
 
 } // namespace test

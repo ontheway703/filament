@@ -35,15 +35,19 @@ test::NativeView getNativeView() {
 
 namespace {
 
-std::array<test::Backend, 2> const VALID_BACKENDS{
-        test::Backend::OPENGL,
-        test::Backend::VULKAN,
+std::array<test::Backend, 3> const VALID_BACKENDS{
+    test::Backend::OPENGL,
+    test::Backend::VULKAN,
+    test::Backend::WEBGPU
 };
 
 }// namespace
 
 int main(int argc, char* argv[]) {
-    auto backend = test::parseArgumentsForBackend(argc, argv);
+    const auto arguments = test::parseArguments(argc, argv);
+    const auto backend = arguments.backend;
+
+    // Note that Linux is headless-only.
 
     if (!std::any_of(VALID_BACKENDS.begin(), VALID_BACKENDS.end(),
                 [backend](test::Backend validBackend) { return backend == validBackend; })) {
@@ -51,6 +55,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    test::initTests(backend, test::OperatingSystem::LINUX, false, argc, argv);
+    const auto operatingSystem = arguments.isContinuousIntegration ?
+            test::OperatingSystem::CONTINUOUS_INTEGRATION : test::OperatingSystem::LINUX;
+    test::initTests(backend, operatingSystem, false, argc, argv);
     return test::runTests();
 }

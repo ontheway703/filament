@@ -26,12 +26,13 @@ class PlatformNoop final : public Platform {
 public:
 
     int getOSVersion() const noexcept final { return 0; }
+    utils::CString getDeviceInfo(DeviceInfoType, Driver*) const noexcept override { return {}; }
 
     ~PlatformNoop() noexcept override = default;
 
 protected:
 
-    Driver* createDriver(void* sharedContext, const Platform::DriverConfig& driverConfig) noexcept override;
+    Driver* createDriver(void* sharedContext, const Platform::DriverConfig& driverConfig) override;
 };
 
 } // namespace filament

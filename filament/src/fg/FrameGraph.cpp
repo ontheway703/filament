@@ -15,18 +15,18 @@
  */
 
 #include "fg/FrameGraph.h"
+#include "fg/details/DependencyGraph.h"
 #include "fg/details/PassNode.h"
 #include "fg/details/Resource.h"
 #include "fg/details/ResourceNode.h"
-#include "fg/details/DependencyGraph.h"
+#include "fg/details/ResourceCreationContext.h"
 
 #include "FrameGraphId.h"
 #include "FrameGraphPass.h"
 #include "FrameGraphRenderPass.h"
 #include "FrameGraphTexture.h"
-#include "ResourceAllocator.h"
 
-#include "details/Engine.h"
+#include "details/View.h"
 
 #include <backend/DriverEnums.h>
 #include <backend/Handle.h>
@@ -35,6 +35,7 @@
 
 #include <utils/compiler.h>
 #include <utils/CString.h>
+#include <utils/StaticString.h>
 #include <utils/debug.h>
 #include <utils/ostream.h>
 #include <utils/Panic.h>
@@ -54,11 +55,11 @@ void FrameGraph::Builder::sideEffect() noexcept {
     mPassNode->makeTarget();
 }
 
-const char* FrameGraph::Builder::getName(FrameGraphHandle const handle) const noexcept {
+utils::StaticString FrameGraph::Builder::getName(FrameGraphHandle const handle) const noexcept {
     return mFrameGraph.getResource(handle)->name;
 }
 
-uint32_t FrameGraph::Builder::declareRenderPass(const char* name,
+uint32_t FrameGraph::Builder::declareRenderPass(utils::StaticString name,
         FrameGraphRenderPass::Descriptor const& desc) {
     // it's safe here to cast to RenderPassNode because we can't be here for a PresentPassNode
     // also only RenderPassNodes have the concept of render targets.
@@ -76,7 +77,9 @@ FrameGraphId<FrameGraphTexture> FrameGraph::Builder::declareRenderPass(
 
 // ------------------------------------------------------------------------------------------------
 
-FrameGraph::FrameGraph(ResourceAllocatorInterface& resourceAllocator, Mode const mode)
+
+FrameGraph::FrameGraph(TextureCacheInterface& resourceAllocator,
+        Mode const mode)
         : mResourceAllocator(resourceAllocator),
           mArena("FrameGraph Arena", 262144),
           mMode(mode),
@@ -90,6 +93,14 @@ FrameGraph::FrameGraph(ResourceAllocatorInterface& resourceAllocator, Mode const
     mResourceNodes.reserve(256);
     mPassNodes.reserve(64);
 }
+
+#if FILAMENT_ENABLE_FGVIEWER
+void FrameGraph::setFgviewerData(FgviewerManager* fgviewer, FView const* view) {
+    mFgviewer = fgviewer;
+    mView = view;
+}
+#endif
+
 
 UTILS_NOINLINE
 void FrameGraph::destroyInternal() noexcept {
@@ -116,11 +127,20 @@ void FrameGraph::reset() noexcept {
     mResourceNodes.clear();
     mResources.clear();
     mResourceSlots.clear();
+    mGraph.clear();
 }
 
 FrameGraph& FrameGraph::compile() noexcept {
 
     FILAMENT_TRACING_CALL(FILAMENT_TRACING_CATEGORY_FILAMENT);
+
+#if FILAMENT_ENABLE_FGVIEWER
+    // Add passes for reading back textures
+    if (UTILS_LIKELY(mFgviewer && mView)) {
+        mFgviewer->addReadbacksToFramegraph(*this, mView->getRenderTargetHandle(),
+                mView->getViewHandle());
+    }
+#endif
 
     DependencyGraph& dependencyGraph = mGraph;
 
@@ -192,6 +212,11 @@ FrameGraph& FrameGraph::compile() noexcept {
         pNode->resolveResourceUsage(dependencyGraph);
     }
 
+#if FILAMENT_ENABLE_FGVIEWER
+    if (UTILS_LIKELY(mFgviewer && mView)) {
+        mFgviewer->framegraphUpdated(*this, *mView);
+    }
+#endif
     return *this;
 }
 
@@ -199,7 +224,8 @@ void FrameGraph::execute(backend::DriverApi& driver) noexcept {
 
     bool const useProtectedMemory = mMode == Mode::PROTECTED;
     auto const& passNodes = mPassNodes;
-    auto& resourceAllocator = mResourceAllocator;
+
+    ResourceCreationContext const context{ *this, driver, useProtectedMemory };
 
     FILAMENT_TRACING_NAME(FILAMENT_TRACING_CATEGORY_FILAMENT, "FrameGraph");
     driver.pushGroupMarker("FrameGraph");
@@ -217,7 +243,7 @@ void FrameGraph::execute(backend::DriverApi& driver) noexcept {
         // devirtualize resourcesList
         for (VirtualResource* resource : node->devirtualize) {
             assert_invariant(resource->first == node);
-            resource->devirtualize(resourceAllocator, useProtectedMemory);
+            resource->devirtualize(context);
         }
 
         // call execute
@@ -227,11 +253,17 @@ void FrameGraph::execute(backend::DriverApi& driver) noexcept {
         // destroy concrete resources
         for (VirtualResource* resource : node->destroy) {
             assert_invariant(resource->last == node);
-            resource->destroy(resourceAllocator);
+            resource->destroy(context);
         }
         driver.popGroupMarker();
     }
     driver.popGroupMarker();
+
+#if FILAMENT_ENABLE_FGVIEWER
+    if (UTILS_LIKELY(mFgviewer)) {
+        mFgviewer->framegraphExecuted();
+    }
+#endif
 }
 
 void FrameGraph::addPresentPass(const std::function<void(Builder&)>& setup) noexcept {
@@ -438,7 +470,7 @@ FrameGraphHandle FrameGraph::forwardResourceInternal(FrameGraphHandle const reso
     return resourceHandle;
 }
 
-FrameGraphId<FrameGraphTexture> FrameGraph::import(char const* name,
+FrameGraphId<FrameGraphTexture> FrameGraph::import(utils::StaticString name,
         FrameGraphRenderPass::ImportDescriptor const& desc,
         backend::Handle<backend::HwRenderTarget> target) {
     // create a resource that represents the imported render target
@@ -481,8 +513,8 @@ void FrameGraph::export_graphviz(utils::io::ostream& out, char const* name) cons
     mGraph.export_graphviz(out, name);
 }
 
-fgviewer::FrameGraphInfo FrameGraph::getFrameGraphInfo(const char *viewName) const {
 #if FILAMENT_ENABLE_FGVIEWER
+fgviewer::FrameGraphInfo FrameGraph::getFrameGraphInfo(const char* viewName) const {
     fgviewer::FrameGraphInfo info{utils::CString(viewName)};
     std::vector<fgviewer::FrameGraphInfo::Pass> passes;
 
@@ -491,6 +523,12 @@ fgviewer::FrameGraphInfo FrameGraph::getFrameGraphInfo(const char *viewName) con
     while (first != activePassNodesEnd) {
         PassNode *const pass = *first;
         ++first;
+
+        auto const nameStrView = std::string_view(pass->getName());
+        if (nameStrView == fgviewer::READBACK_PASS_NAME ||
+                nameStrView == fgviewer::RESOLVED_MONITOR_PASS_NAME) {
+            continue;
+        }
 
         assert_invariant(!pass->isCulled());
         std::vector<fgviewer::ResourceId> reads;
@@ -520,12 +558,18 @@ fgviewer::FrameGraphInfo FrameGraph::getFrameGraphInfo(const char *viewName) con
                 continue;
             writes.push_back(resourceNode->resourceHandle.index);
         }
-        passes.emplace_back(utils::CString(pass->getName()),
-            std::move(reads), std::move(writes));
+        passes.emplace_back(pass->getId(), utils::CString(pass->getName()),
+            std::move(reads), std::move(writes), pass->getRenderTargetInfo());
     }
 
     std::unordered_map<fgviewer::ResourceId, fgviewer::FrameGraphInfo::Resource> resources;
-    for (const auto &resourceNode: mResourceNodes) {
+    for (const auto& resourceNode: mResourceNodes) {
+        auto const nameStrView = std::string_view(resourceNode->getName());
+        if (nameStrView == fgviewer::READBACK_PASS_NAME ||
+                nameStrView == fgviewer::RESOLVED_MONITOR_PASS_NAME) {
+            continue;
+        }
+
         const FrameGraphHandle resourceHandle = resourceNode->resourceHandle;
         if (resources.find(resourceHandle.index) != resources.end())
             continue;
@@ -575,13 +619,61 @@ fgviewer::FrameGraphInfo FrameGraph::getFrameGraphInfo(const char *viewName) con
     info.setGraphvizData(utils::CString(out.c_str()));
 
     return info;
-#else
-    return fgviewer::FrameGraphInfo();
+}
 #endif
+
+#if FILAMENT_ENABLE_FGVIEWER
+
+FrameGraphId<FrameGraphTexture> FrameGraph::getTextureByIdName(uint32_t id,
+        const char* name) const {
+    // 1. Try the fast path: check if the requested ID matches the expected name.
+    if (id < mResourceSlots.size()) {
+        auto const& slot = mResourceSlots[id];
+        if (slot.rid > 0) {
+            VirtualResource const* resource = mResources[slot.rid];
+            if (resource && strcmp(resource->name.c_str(), name) == 0) {
+                FrameGraphHandle handle;
+                handle.index = (uint16_t) id;
+                handle.version = slot.version;
+                return FrameGraphId<FrameGraphTexture>(handle);
+            }
+        }
+    }
+
+    // 2. Slow path fallback: graph shifts across frames, so the ID might be invalid.
+    // Search all resource slots for a matching name.
+    for (size_t i = 1; i < mResourceSlots.size(); ++i) {
+        auto const& slot = mResourceSlots[i];
+        if (slot.rid > 0) {
+            VirtualResource const* resource = mResources[slot.rid];
+            if (resource && strcmp(resource->name.c_str(), name) == 0) {
+                FrameGraphHandle handle;
+                handle.index = (uint16_t) i;
+                handle.version = slot.version;
+                return FrameGraphId<FrameGraphTexture>(handle);
+            }
+        }
+    }
+
+    return {};
 }
 
+void FrameGraph::dumpResources() const {
+    for (size_t i = 1; i < mResourceSlots.size(); ++i) {
+        auto const& slot = mResourceSlots[i];
+        if (slot.rid > 0) {
+            VirtualResource const* resource = mResources[slot.rid];
+            if (resource) {
+                fprintf(stderr, "[fgviewer]   Slot %zu rid %u: \"%s\"\n", i, (uint32_t) slot.rid,
+                        resource->name.c_str());
+            }
+        }
+    }
+}
+#endif
 
 // ------------------------------------------------------------------------------------------------
+
 
 /*
  * Explicit template instantiation for FrameGraphTexture which is a known type,
@@ -590,13 +682,13 @@ fgviewer::FrameGraphInfo FrameGraph::getFrameGraphInfo(const char *viewName) con
 
 template void FrameGraph::present(FrameGraphId<FrameGraphTexture> input);
 
-template FrameGraphId<FrameGraphTexture> FrameGraph::create(char const* name,
+template FrameGraphId<FrameGraphTexture> FrameGraph::create(utils::StaticString name,
         FrameGraphTexture::Descriptor const& desc) noexcept;
 
 template FrameGraphId<FrameGraphTexture> FrameGraph::createSubresource(FrameGraphId<FrameGraphTexture> parent,
-        char const* name, FrameGraphTexture::SubResourceDescriptor const& desc) noexcept;
+        utils::StaticString name, FrameGraphTexture::SubResourceDescriptor const& desc) noexcept;
 
-template FrameGraphId<FrameGraphTexture> FrameGraph::import(char const* name,
+template FrameGraphId<FrameGraphTexture> FrameGraph::import(utils::StaticString name,
         FrameGraphTexture::Descriptor const& desc, FrameGraphTexture::Usage usage, FrameGraphTexture const& resource) noexcept;
 
 template FrameGraphId<FrameGraphTexture> FrameGraph::read(PassNode* passNode,

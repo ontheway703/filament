@@ -19,3 +19,9 @@ results
 /compile_commands.json
 /.cache
 /tmp
+
+# For /test/renderdiff dependencies
+/mesa
+/gltf
+/filament-assets
+/venv

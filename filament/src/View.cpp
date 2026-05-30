@@ -17,6 +17,7 @@
 #include "details/View.h"
 #include "filament/View.h"
 
+#include <stdint.h>
 
 namespace filament {
 
@@ -41,12 +42,32 @@ Camera& View::getCamera() noexcept {
     return downcast(this)->getCameraUser();
 }
 
+void View::setChannelDepthClearEnabled(uint8_t channel, bool enabled) noexcept {
+    downcast(this)->setChannelDepthClearEnabled(channel, enabled);
+}
+
+bool View::isChannelDepthClearEnabled(uint8_t channel) const noexcept {
+    return downcast(this)->isChannelDepthClearEnabled(channel);
+}
+
 void View::setViewport(Viewport const& viewport) noexcept {
     downcast(this)->setViewport(viewport);
 }
 
 Viewport const& View::getViewport() const noexcept {
     return downcast(this)->getViewport();
+}
+
+void View::setGridSize(double size) noexcept {
+    downcast(this)->setGridSize(size);
+}
+
+double View::getGridSize() const noexcept {
+    return downcast(this)->getGridSize();
+}
+
+double View::getEffectiveGridSize() const noexcept {
+    return downcast(this)->getEffectiveGridSize();
 }
 
 void View::setFrustumCullingEnabled(bool const culling) noexcept {
@@ -167,6 +188,10 @@ void View::setDynamicResolutionOptions(const DynamicResolutionOptions& options) 
 
 View::DynamicResolutionOptions View::getDynamicResolutionOptions() const noexcept {
     return downcast(this)->getDynamicResolutionOptions();
+}
+
+math::float2 View::getLastDynamicResolutionScale() const noexcept {
+    return downcast(this)->getLastDynamicResolutionScale();
 }
 
 void View::setRenderQuality(const RenderQuality& renderQuality) noexcept {

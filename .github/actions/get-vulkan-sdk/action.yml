@@ -8,8 +8,8 @@ runs:
       uses: actions/cache@v3
       id: cache-vulkan-sdk
       with:
-        path: ${{ runner.homedir }}/VulkanSDK
-        key: vulkansdk-${{ env.GITHUB_VULKANSDK_VERSION }}-2-${{ runner.os }}
+        path: ~/VulkanSDK
+        key: vulkansdk-${{ env.GITHUB_VULKANSDK_VERSION }}-2-${{ runner.os }}-${{ runner.arch }}
     - name: Download Vulkan SDK
       if: steps.cache-vulkan-sdk.outputs.cache-hit != 'true'
       run: |
@@ -21,6 +21,10 @@ runs:
       run: |
         source ${{ github.workspace }}/build/common/get-vulkan-sdk.sh
         unpack_vulkan_installer
+      shell: bash
+    - name: Run Vulkan SDK setup
+      if: runner.os != 'Linux'
+      run: |
         pushd .
         cd ~/VulkanSDK/${GITHUB_VULKANSDK_VERSION}
         sudo ./install_vulkan.py

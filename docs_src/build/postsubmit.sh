@@ -16,7 +16,10 @@
 
 FILAMENT_BOT_TOKEN=$2
 
+set -ex
+
 function update_to_main() {
+    ./build.sh -p wasm release
     python3 docs_src/build/run.py
     mkdir -p tmp
     pushd .
@@ -49,3 +52,5 @@ else
     echo "has edits (to /docs_src): ${HAS_EDITS}"
     echo "bypass: ${DO_BYPASS}"
 fi
+
+set +ex

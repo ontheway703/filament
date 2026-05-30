@@ -71,6 +71,12 @@ public:
         bool hasScreenSpaceReflectionsOrRefractions;
         // Use a depth format with a stencil component.
         bool enabledStencilBuffer;
+        // Backend feature level
+        backend::FeatureLevel featureLevel;
+        // Auto depth resolve supported
+        bool isAutoDepthResolveSupported;
+        // Use post-process fog
+        bool fogAsPostProcess;
     };
 
     struct ColorPassInput {

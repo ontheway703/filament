@@ -69,12 +69,25 @@ public:
     // Returns true if rendering can proceed. Always call submitFrame() when done.
     bool shouldRenderFrame(backend::DriverApi& driver) const noexcept;
 
+    // Call this when a frame is skipped (i.e. submitFrame() is NOT called)
+    void frameSkipped() noexcept {
+        if (mFrameToSkip) {
+            mFrameToSkip--;
+        }
+    }
+
     void submitFrame(backend::DriverApi& driver) noexcept;
+
+    // set frameCount frame to report as "skip". For debugging.
+    void skipNextFrames(size_t frameCount) noexcept;
+    // return remaining number of frame to be skipped
+    size_t getFrameToSkipCount() const noexcept;
 
 private:
     using Container = std::array<backend::Handle<backend::HwFence>, MAX_FRAME_LATENCY>;
     Container mDelayedFences{};
     uint8_t const mLatency;
+    uint16_t mFrameToSkip{};
 };
 
 } // namespace filament

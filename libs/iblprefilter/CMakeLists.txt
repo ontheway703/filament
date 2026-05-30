@@ -36,7 +36,7 @@ list(APPEND SRCS ${RESGEN_SOURCE})
 # Generate all .filamat: default material, skyboxes, and post-process
 # ==================================================================================================
 
-if (CMAKE_CROSSCOMPILING)
+if (CMAKE_CROSSCOMPILING OR FILAMENT_IMPORT_PREBUILT_EXECUTABLES)
     include(${IMPORT_EXECUTABLES})
 endif()
 
@@ -99,7 +99,7 @@ if (MSVC)
     set(OPTIMIZATION_FLAGS
         /fp:fast
     )
-elseif(WEBGL)
+elseif (WASM)
     # Avoid strict-vtable-pointers here, it is broken in WebAssembly.
     set(OPTIMIZATION_FLAGS -fvisibility-inlines-hidden)
 else()

@@ -23,10 +23,13 @@
 #include <private/utils/Tracing.h>
 
 #include <utils/Log.h>
+#include <utils/Panic.h>
 
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
 #include <meshoptimizer.h>
+
+#include <limits>
 
 namespace filament::gltfio::utility {
 
@@ -84,7 +87,7 @@ void decodeDracoMeshes(cgltf_data const* gltf, cgltf_primitive const* prim,
     }
 }
 
-void decodeMeshoptCompression(cgltf_data* data) {
+bool decodeMeshoptCompression(cgltf_data* data) {
     for (size_t i = 0; i < data->buffer_views_count; ++i) {
         if (!data->buffer_views[i].has_meshopt_compression) {
             continue;
@@ -94,11 +97,22 @@ void decodeMeshoptCompression(cgltf_data* data) {
         assert_invariant(source);
         source += compression->offset;
 
+        if (compression->stride == 0) {
+            slog.e << "gltfio: meshopt decompression failed, stride is 0." << io::endl;
+            return false;
+        }
+
+        size_t const theoreticalMaxCount = std::numeric_limits<size_t>::max() / compression->stride;
+        FILAMENT_CHECK_PRECONDITION(compression->count <= theoreticalMaxCount)
+                << "gltfio: meshopt decompression exceeds maximum count of " << theoreticalMaxCount
+                << " (actual=" << compression->count << ") given stride of " << compression->stride
+                << ".";
+
         // This memory is freed by cgltf.
         void* destination = malloc(compression->count * compression->stride);
         assert_invariant(destination);
 
-        UTILS_UNUSED_IN_RELEASE int error = 0;
+        int error = 0;
         switch (compression->mode) {
             case cgltf_meshopt_compression_mode_invalid:
                 break;
@@ -118,7 +132,12 @@ void decodeMeshoptCompression(cgltf_data* data) {
                 assert_invariant(false);
                 break;
         }
-        assert_invariant(!error);
+        
+        if (error != 0) {
+            slog.e << "gltfio: meshopt decompression failed with error " << error << io::endl;
+            free(destination);
+            return false;
+        }
 
         switch (compression->filter) {
             case cgltf_meshopt_compression_filter_none:
@@ -139,6 +158,7 @@ void decodeMeshoptCompression(cgltf_data* data) {
 
         data->buffer_views[i].data = destination;
     }
+    return true;
 }
 
 bool primitiveHasVertexColor(cgltf_primitive* inPrim) {
@@ -158,6 +178,9 @@ bool primitiveHasVertexColor(cgltf_primitive* inPrim) {
 // exist in the glTF we need to compute it manually. This is a bit of a cheat, cgltf_calc_size is
 // private but its implementation file is available in this cpp file.
 uint32_t computeBindingSize(cgltf_accessor const* accessor) {
+    if (accessor->count == 0) {
+        return 0;
+    }
     cgltf_size element_size = cgltf_calc_size(accessor->type, accessor->component_type);
     return uint32_t(accessor->stride * (accessor->count - 1) + element_size);
 }

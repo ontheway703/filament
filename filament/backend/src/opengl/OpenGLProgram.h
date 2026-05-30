@@ -20,7 +20,7 @@
 #include "DriverBase.h"
 
 #include "BindingMap.h"
-#include "OpenGLContext.h"
+#include "OpenGLState.h"
 #include "ShaderCompilerService.h"
 
 #include <private/backend/Driver.h>
@@ -43,8 +43,8 @@ namespace filament::backend {
 class OpenGLDriver;
 
 struct PushConstantBundle {
-    utils::Slice<std::pair<GLint, ConstantType>> vertexConstants;
-    utils::Slice<std::pair<GLint, ConstantType>> fragmentConstants;
+    utils::Slice<const std::pair<GLint, ConstantType>> vertexConstants;
+    utils::Slice<const std::pair<GLint, ConstantType>> fragmentConstants;
 };
 
 class OpenGLProgram : public HwProgram {
@@ -56,7 +56,7 @@ public:
 
     bool isValid() const noexcept { return mToken || gl.program != 0; }
 
-    bool use(OpenGLDriver* const gld, OpenGLContext& context) noexcept {
+    bool use(OpenGLDriver* const gld, OpenGLState& gls) noexcept {
         // both non-null is impossible by construction
         assert_invariant(!mToken || !gl.program);
 
@@ -71,7 +71,7 @@ public:
             return false;
         }
 
-        context.useProgram(gl.program);
+        gls.useProgram(gl.program);
         return true;
     }
 
@@ -88,14 +88,14 @@ public:
     }
 
     // For ES2 only
-    void updateUniforms(uint32_t index, GLuint id, void const* buffer, uint16_t age) const noexcept;
+    void updateUniforms(uint32_t index, GLuint id, void const* buffer, uint16_t age, uint32_t offset) const noexcept;
     void setRec709ColorSpace(bool rec709) const noexcept;
 
     PushConstantBundle getPushConstants() {
         auto fragBegin = mPushConstants.begin() + mPushConstantFragmentStageOffset;
         return {
-            .vertexConstants = utils::Slice(mPushConstants.begin(), fragBegin),
-            .fragmentConstants = utils::Slice(fragBegin, mPushConstants.end()),
+                .vertexConstants = { mPushConstants.begin(), fragBegin },
+                .fragmentConstants = { fragBegin, mPushConstants.end() },
         };
     }
 
@@ -105,8 +105,8 @@ private:
 
     void initialize(OpenGLDriver& gld);
 
-    void initializeProgramState(OpenGLContext& context, GLuint program,
-            LazyInitializationData& lazyInitializationData) noexcept;
+    void initializeProgramState(OpenGLState& gls, GLuint program,
+            LazyInitializationData& lazyInitializationData);
 
     BindingMap mBindingMap;     // 8 bytes + out-of-line 256 bytes
 
@@ -123,6 +123,7 @@ private:
         LocationInfo locations;
         mutable GLuint id = 0;
         mutable uint16_t age = std::numeric_limits<uint16_t>::max();
+        mutable uint32_t offset = 0;
     };
     UniformsRecord const* mUniformsRecords = nullptr;
     GLint mRec709Location : 24;     // 4 bytes

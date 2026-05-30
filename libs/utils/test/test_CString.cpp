@@ -21,6 +21,8 @@
 #include <algorithm>
 #include <climits>
 #include <utility>
+#include <type_traits>
+#include <unordered_set>
 
 using namespace utils;
 
@@ -56,7 +58,8 @@ TEST(CString, Constructors) {
     }
     // CString(const char* cstr)
     {
-        CString str("hello");
+        const char* hello_cstr = "hello";
+        CString str(hello_cstr);
         EXPECT_STREQ("hello", str.c_str());
         EXPECT_EQ(5, str.length());
     }
@@ -82,6 +85,50 @@ TEST(CString, Constructors) {
         EXPECT_EQ(original_cstr, s2.c_str()); // pointer should be moved
         EXPECT_EQ(nullptr, s1.c_str()); // original should be empty
     }
+}
+
+TEST(CString, LiteralConstructor) {
+    // This test verifies that CString can be constructed from a string literal,
+    // and that this uses the desired template constructor, not the explicit
+    // (and costly) `const char*` constructor.
+
+    // Test copy-initialization. CString should be convertible from a string literal.
+    // This works because "literal" has type `const char[N]` which matches
+    // `StringLiteral<N>` and calls the non-explicit template constructor.
+    static_assert(std::is_convertible_v<decltype("literal"), CString>,
+            "CString should be convertible from a string literal.");
+    CString s_copy = "literal";
+    EXPECT_STREQ("literal", s_copy.c_str());
+    EXPECT_EQ(7, s_copy.length());
+
+    // Test direct-initialization. This should also use the same efficient constructor.
+    static_assert(std::is_constructible_v<CString, decltype("literal")>,
+            "CString should be constructible from a string literal.");
+    CString s_direct("literal");
+    EXPECT_STREQ("literal", s_direct.c_str());
+    EXPECT_EQ(7, s_direct.length());
+
+    // Verify that direct-initialization uses the sized constructor by using an embedded null.
+    // If the strlen() constructor were used, the length would be 3.
+    // The size of "abc\0def" is 8 (including the terminating null). The constructor
+    // calculates the length as N-1 = 7.
+    CString const s_direct_null("abc\0def");
+    EXPECT_EQ(7, s_direct_null.length());
+
+    // CString should NOT be convertible from a `const char*`.
+    // This is because the `const char*` constructor is explicit.
+    static_assert(!std::is_convertible_v<const char*, CString>,
+            "CString should not be convertible from a const char*.");
+
+    // This demonstrates the non-convertibility. The following line would fail to compile:
+    // const char* cstr = "hello";
+    // CString s2 = cstr;
+
+    // Explicit construction from a const char* should still work (via direct-initialization).
+    const char* cstr = "explicit";
+    CString s2(cstr);
+    EXPECT_STREQ("explicit", s2.c_str());
+    EXPECT_EQ(8, s2.length());
 }
 
 TEST(CString, Assignment) {
@@ -196,7 +243,7 @@ TEST(CString, Concatenation) {
     }
 }
 
-TEST(CString, Comparison) {
+TEST(CString, ComparisonCString) {
     CString s1("abc");
     CString s2("abc");
     CString s3("def");
@@ -224,6 +271,106 @@ TEST(CString, Comparison) {
 
     EXPECT_TRUE(s4 < s1);
     EXPECT_TRUE(s1 > s4);
+}
+
+TEST(CString, ComparisonStringView) {
+    const CString CS1("abc");
+    const CString CS2("abc");
+    const CString CS3("def");
+    const CString CS4("ab");
+    const std::string_view sv1("abc");
+    const std::string_view sv2("abc");
+    const std::string_view sv3("def");
+    const std::string_view sv4("ab");
+
+    EXPECT_TRUE(CS1 == sv2);
+    EXPECT_TRUE(sv2 == CS1);
+    EXPECT_FALSE(CS1 == sv3);
+    EXPECT_FALSE(sv3 == CS1);
+
+    EXPECT_TRUE(CS1 != sv3);
+    EXPECT_TRUE(sv3 != CS1);
+    EXPECT_FALSE(CS1 != sv2);
+    EXPECT_FALSE(sv2 != CS1);
+
+    EXPECT_TRUE(CS1 < sv3);
+    EXPECT_TRUE(sv1 < CS3);
+    EXPECT_FALSE(CS3 < sv1);
+    EXPECT_FALSE(sv3 < CS1);
+
+    EXPECT_TRUE(CS3 > sv1);
+    EXPECT_TRUE(sv3 > CS1);
+    EXPECT_FALSE(CS1 > sv3);
+    EXPECT_FALSE(sv1 > CS3);
+
+    EXPECT_TRUE(CS1 <= sv2);
+    EXPECT_TRUE(sv1 <= CS2);
+    EXPECT_TRUE(CS1 <= sv3);
+    EXPECT_TRUE(sv1 <= CS3);
+    EXPECT_FALSE(CS3 <= sv1);
+    EXPECT_FALSE(sv3 <= CS1);
+
+    EXPECT_TRUE(CS2 >= sv1);
+    EXPECT_TRUE(sv2 >= CS1);
+    EXPECT_TRUE(CS3 >= sv1);
+    EXPECT_TRUE(sv3 >= CS1);
+    EXPECT_FALSE(CS1 >= sv3);
+    EXPECT_FALSE(sv1 >= CS3);
+
+    EXPECT_TRUE(CS4 < sv1);
+    EXPECT_TRUE(sv4 < CS1);
+    EXPECT_TRUE(CS1 > sv4);
+    EXPECT_TRUE(sv1 > CS4);
+}
+
+TEST(CString, ComparisonStringLiteral) {
+    const CString CS1("abc");
+    const CString CS2("abc");
+    const CString CS3("def");
+    const CString CS4("ab");
+    const char* sv1("abc");
+    const char* sv2("abc");
+    const char* sv3("def");
+    const char* sv4("ab");
+
+    EXPECT_TRUE(CS1 == sv2);
+    EXPECT_TRUE(sv2 == CS1);
+    EXPECT_FALSE(CS1 == sv3);
+    EXPECT_FALSE(sv3 == CS1);
+
+    EXPECT_TRUE(CS1 != sv3);
+    EXPECT_TRUE(sv3 != CS1);
+    EXPECT_FALSE(CS1 != sv2);
+    EXPECT_FALSE(sv2 != CS1);
+
+    EXPECT_TRUE(CS1 < sv3);
+    EXPECT_TRUE(sv1 < CS3);
+    EXPECT_FALSE(CS3 < sv1);
+    EXPECT_FALSE(sv3 < CS1);
+
+    EXPECT_TRUE(CS3 > sv1);
+    EXPECT_TRUE(sv3 > CS1);
+    EXPECT_FALSE(CS1 > sv3);
+    EXPECT_FALSE(sv1 > CS3);
+
+    EXPECT_TRUE(CS1 <= sv2);
+    EXPECT_TRUE(sv1 <= CS2);
+    EXPECT_TRUE(CS1 <= sv3);
+    EXPECT_TRUE(sv1 <= CS3);
+    EXPECT_FALSE(CS3 <= sv1);
+    EXPECT_FALSE(sv3 <= CS1);
+
+    EXPECT_TRUE(CS2 >= sv1);
+    EXPECT_TRUE(sv2 >= CS1);
+    EXPECT_TRUE(CS3 >= sv1);
+    EXPECT_TRUE(sv3 >= CS1);
+    EXPECT_FALSE(CS1 >= sv3);
+    EXPECT_FALSE(sv1 >= CS3);
+
+    EXPECT_TRUE(CS4 < sv1);
+    EXPECT_TRUE(sv4 < CS1);
+    EXPECT_TRUE(CS1 > sv4);
+    EXPECT_TRUE(sv1 > CS4);
 }
 
 TEST(CString, ElementAccess) {
@@ -431,6 +578,62 @@ TEST(CString, Replace) {
     }
 }
 
+TEST(CString, ReplaceInPlace) {
+    // Shrinking replacement
+    {
+        CString str("0123456789");
+        const char* const original_cstr = str.c_str();
+        str.replace(3, 3, "ab");
+        EXPECT_STREQ("012ab6789", str.c_str());
+        EXPECT_EQ(9, str.length());
+        EXPECT_EQ(original_cstr, str.c_str());
+    }
+    {
+        CString str("0123456789");
+        const char* const original_cstr = str.c_str();
+        str.replace(0, 3, "ab");
+        EXPECT_STREQ("ab3456789", str.c_str());
+        EXPECT_EQ(9, str.length());
+        EXPECT_EQ(original_cstr, str.c_str());
+    }
+    {
+        CString str("0123456789");
+        const char* const original_cstr = str.c_str();
+        str.replace(7, 3, "ab");
+        EXPECT_STREQ("0123456ab", str.c_str());
+        EXPECT_EQ(9, str.length());
+        EXPECT_EQ(original_cstr, str.c_str());
+    }
+    {
+        CString str("0123456789");
+        const char* const original_cstr = str.c_str();
+        str.replace(0, 10, "ab");
+        EXPECT_STREQ("ab", str.c_str());
+        EXPECT_EQ(2, str.length());
+        EXPECT_EQ(original_cstr, str.c_str());
+    }
+
+    // Same size replacement
+    {
+        CString str("0123456789");
+        const char* const original_cstr = str.c_str();
+        str.replace(0, 10, "abcdefghij");
+        EXPECT_STREQ("abcdefghij", str.c_str());
+        EXPECT_EQ(10, str.length());
+        EXPECT_EQ(original_cstr, str.c_str());
+    }
+
+    // Shrink to empty
+    {
+        CString str("0123456789");
+        const char* const original_cstr = str.c_str();
+        str.replace(3, 3, "");
+        EXPECT_STREQ("0126789", str.c_str());
+        EXPECT_EQ(7, str.length());
+        EXPECT_EQ(original_cstr, str.c_str());
+    }
+}
+
 TEST(CString, ReplaceZeroLength) {
     {
         std::string str("foobar");
@@ -491,6 +694,31 @@ TEST(CString, ToString) {
     EXPECT_STREQ("0.000000", to_string(0.0f).c_str());
     EXPECT_STREQ("1.500000", to_string(1.5f).c_str());
     EXPECT_STREQ("-3.140000", to_string(-3.14f).c_str());
+}
+
+TEST(CString, HeterogeneousLookupForContainer) {
+    std::unordered_set<CString> us;
+
+    const char* world("world");
+    const std::string_view filament("filament");
+    const CString unittest("unittest");
+
+    EXPECT_TRUE(us.insert("hello").second);
+    EXPECT_TRUE(us.insert(CString(world)).second); // or emplace(world)
+    EXPECT_TRUE(us.insert(CString(filament)).second); // or emplace(filament)
+    EXPECT_TRUE(us.insert(unittest).second);
+
+    auto it = us.find("hello");
+    EXPECT_NE(it, us.end());
+    it = us.find(world);
+    EXPECT_NE(it, us.end());
+    it = us.find(filament);
+    EXPECT_NE(it, us.end());
+    it = us.find(unittest);
+    EXPECT_NE(it, us.end());
+
+    it = us.find("invalid key");
+    EXPECT_EQ(it, us.end());
 }
 
 TEST(FixedSizeString, EmptyString) {

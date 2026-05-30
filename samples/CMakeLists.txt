@@ -39,6 +39,7 @@ set(MATERIAL_SRCS
         materials/sandboxSubsurface.mat
         materials/sandboxUnlit.mat
         materials/texturedLit.mat
+        materials/uvmorph.mat
 )
 
 # Tint does not support setting gl_PointSize, disable the relevant sample if using WebGPU
@@ -47,7 +48,7 @@ if (NOT FILAMENT_SUPPORTS_WEBGPU)
     set(MATERIAL_SRCS ${MATERIAL_SRCS} materials/pointSprites.mat)
 endif ()
 
-if (CMAKE_CROSSCOMPILING)
+if (CMAKE_CROSSCOMPILING OR FILAMENT_IMPORT_PREBUILT_EXECUTABLES)
     include(${IMPORT_EXECUTABLES})
 endif()
 
@@ -227,7 +228,6 @@ add_library(samples-common STATIC
 )
 
 target_include_directories(samples-common PRIVATE
-    ${ROOT_DIR}/third_party/getopt/include
 )
 target_link_libraries(samples-common filament)
 
@@ -269,7 +269,9 @@ if (NOT ANDROID)
     add_demo(gltf_viewer)
     add_demo(gltf_instances)
     add_demo(heightfield)
+    add_demo(helloasync)
     add_demo(hellomorphing)
+    add_demo(hellouvmorphing)
     add_demo(hellopbr)
     add_demo(hellotriangle)
     add_demo(helloskinning)
@@ -280,6 +282,7 @@ if (NOT ANDROID)
     add_demo(image_viewer)
     add_demo(lightbulb)
     add_demo(material_sandbox)
+    add_demo(materialinstancestress)
     add_demo(multiple_windows)
     # Tint does not support setting gl_PointSize, disable the relevant sample if using WebGPU
     # https://github.com/gpuweb/gpuweb/issues/1190
@@ -305,6 +308,7 @@ if (NOT ANDROID)
     target_link_libraries(hellopbr PRIVATE filameshio suzanne-resources)
     target_link_libraries(hellostereo PRIVATE filameshio suzanne-resources)
     target_link_libraries(image_viewer PRIVATE viewer imageio)
+    target_link_libraries(materialinstancestress PRIVATE geometry filameshio suzanne-resources)
     target_link_libraries(multiple_windows PRIVATE filameshio suzanne-resources)
     target_link_libraries(rendertarget PRIVATE filameshio suzanne-resources)
     target_link_libraries(sample_cloth PRIVATE filameshio)

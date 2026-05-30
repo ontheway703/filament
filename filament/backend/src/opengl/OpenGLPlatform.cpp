@@ -45,6 +45,21 @@ Driver* OpenGLPlatform::createDefaultDriver(OpenGLPlatform* platform,
 
 OpenGLPlatform::~OpenGLPlatform() noexcept = default;
 
+utils::CString OpenGLPlatform::getDeviceInfo(DeviceInfoType infoType,
+        Driver* driver) const noexcept {
+    switch (infoType) {
+        case DeviceInfoType::OPENGL_RENDERER:
+            return getRendererString(driver);
+        case DeviceInfoType::OPENGL_VENDOR:
+            return getVendorString(driver);
+        case DeviceInfoType::OPENGL_VERSION:
+            return getVersionString(driver);
+        default:
+            FILAMENT_CHECK_POSTCONDITION(false) << "Unsupported DeviceInfoType for OpenGLPlatform";
+            return {};
+    }
+}
+
 utils::CString OpenGLPlatform::getVendorString(Driver const* driver) {
     auto const p = static_cast<OpenGLDriverBase const*>(driver);
 #if UTILS_HAS_RTTI
@@ -63,6 +78,15 @@ utils::CString OpenGLPlatform::getRendererString(Driver const* driver) {
     return p->getRendererString();
 }
 
+utils::CString OpenGLPlatform::getVersionString(Driver const* driver) {
+    auto const p = static_cast<OpenGLDriverBase const*>(driver);
+#if UTILS_HAS_RTTI
+    FILAMENT_CHECK_POSTCONDITION(dynamic_cast<OpenGLDriverBase const*>(driver))
+            << "Driver* has not been allocated with OpenGLPlatform";
+#endif
+    return p->getVersionString();
+}
+
 void OpenGLPlatform::makeCurrent(SwapChain* drawSwapChain, SwapChain* readSwapChain,
         utils::Invocable<void()>, utils::Invocable<void(size_t)>) {
     makeCurrent(getCurrentContextType(), drawSwapChain, readSwapChain);
@@ -73,6 +97,10 @@ bool OpenGLPlatform::isProtectedContextSupported() const noexcept {
 }
 
 bool OpenGLPlatform::isSRGBSwapChainSupported() const noexcept {
+    return false;
+}
+
+bool OpenGLPlatform::isMSAASwapChainSupported(uint32_t) const noexcept {
     return false;
 }
 
@@ -117,6 +145,15 @@ FenceStatus OpenGLPlatform::waitFence(
     return FenceStatus::ERROR;
 }
 
+Platform::Sync* OpenGLPlatform::createSync() noexcept {
+    return new Platform::Sync();
+}
+
+void OpenGLPlatform::destroySync(Platform::Sync* sync) noexcept {
+    // sync must be a Platform::Sync, since it was created by this platform
+    // object.
+    delete sync;
+}
 
 Platform::Stream* OpenGLPlatform::createStream(
         UTILS_UNUSED void* nativeStream) noexcept {

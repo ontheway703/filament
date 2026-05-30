@@ -218,6 +218,22 @@ public:
         return const_cast<View*>(this)->getCamera();
     }
 
+
+    /**
+     * Sets whether a channel must clear the depth buffer before all primitives are rendered.
+     * Channel depth clear is off by default for all channels.
+     * This is orthogonal to Renderer::setClearOptions().
+     * @param channel between 0 and 7
+     * @param enabled true to enable clear, false to disable
+     */
+    void setChannelDepthClearEnabled(uint8_t channel, bool enabled) noexcept;
+
+    /**
+     * @param channel between 0 and 7
+     * @return true if this channel has depth clear enabled.
+     */
+    bool isChannelDepthClearEnabled(uint8_t channel) const noexcept;
+
     /**
      * Sets the blending mode used to draw the view into the SwapChain.
      *
@@ -302,6 +318,8 @@ public:
     /**
      * Sets how many samples are to be used for MSAA in the post-process stage.
      * Default is 1 and disables MSAA.
+     * Note that post-processing is disabled at FL0. If the feature level is 
+     * set to 0, values passed to this function are ignored.
      *
      * @param count number of samples to use for multi-sampled anti-aliasing.\n
      *              0: treated as 1
@@ -392,7 +410,9 @@ public:
 
     /**
      * Enables or disable multi-sample anti-aliasing (MSAA). Disabled by default.
-     *
+     * Note that MSAA is a post-processing effect, and post-processing is disabled at FL0. 
+     * If the feature level is set to 0, values passed to this function are ignored.
+     * 
      * @param options multi-sample anti-aliasing options
      */
     void setMultiSampleAntiAliasingOptions(MultiSampleAntiAliasingOptions options) noexcept;
@@ -444,7 +464,7 @@ public:
     /**
      * Enables or disables bloom in the post-processing stage. Disabled by default.
      *
-     * @param options options
+     * @param options options. Values may be silently clamped to valid ranges.
      */
     void setBloomOptions(BloomOptions options) noexcept;
 
@@ -526,6 +546,14 @@ public:
     DynamicResolutionOptions getDynamicResolutionOptions() const noexcept;
 
     /**
+     * Returns the last dynamic resolution scale factor used by this view. This value is updated
+     * when Renderer::render(View*) is called
+     * @return a float2 where x is the horizontal and y the vertical scale factor.
+     * @see Renderer::render
+     */
+    math::float2 getLastDynamicResolutionScale() const noexcept;
+
+    /**
      * Sets the rendering quality for this view. Refer to RenderQuality for more
      * information about the different settings available.
      *
@@ -561,6 +589,32 @@ public:
      *
      */
     void setDynamicLightingOptions(float zLightNear, float zLightFar) noexcept;
+
+    /**
+     * Sets the grid size for grid-based world origin snapping.
+     *
+     * The world origin used for rendering will snap to a grid of this size. 
+     * This avoids recomputing all transforms every frame when the camera moves within a grid cell.
+     *
+     * Hysteresis is applied automatically to avoid rapid snapping near edges.
+     *
+     * @param size The size of the grid cell in world units. If set to 0 or negative,
+     *             the grid size is automatically calculated based on the camera frustum.
+     */
+    void setGridSize(double size) noexcept;
+
+    /**
+     * Returns the grid size used for grid-based world origin snapping.
+     * @return The grid size in world units. A value of 0 or negative means automatic calculation is enabled.
+     */
+    double getGridSize() const noexcept;
+
+    /**
+     * Returns the effective grid size used for grid-based world origin snapping.
+     * If grid size was set to 0 or negative, this returns the automatically calculated size.
+     * @return The effective grid size in world units.
+     */
+    double getEffectiveGridSize() const noexcept;
 
     /*
      * Set the shadow mapping technique this View uses.

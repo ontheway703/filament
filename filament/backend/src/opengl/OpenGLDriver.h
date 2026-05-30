@@ -24,7 +24,9 @@
 #include "GLBufferObject.h"
 #include "GLDescriptorSet.h"
 #include "GLDescriptorSetLayout.h"
+#include "GLMemoryMappedBuffer.h"
 #include "GLTexture.h"
+#include "JobQueue.h"
 #include "ShaderCompilerService.h"
 
 #include <backend/AcquiredImage.h>
@@ -35,7 +37,6 @@
 #include <backend/Platform.h>
 #include <backend/Program.h>
 #include <backend/TargetBufferInfo.h>
-#include <backend/BufferObjectStreamDescriptor.h>
 
 #include "private/backend/Driver.h"
 #include "private/backend/HandleAllocator.h"
@@ -44,6 +45,7 @@
 #include <utils/FixedCapacityVector.h>
 #include <utils/compiler.h>
 #include <utils/CString.h>
+#include <utils/ImmutableCString.h>
 #include <utils/debug.h>
 
 #include <math/vec4.h>
@@ -72,6 +74,7 @@
 namespace filament::backend {
 
 class OpenGLPlatform;
+class OpenGLState;
 class PixelBufferDescriptor;
 struct TargetBufferInfo;
 class OpenGLProgram;
@@ -99,10 +102,11 @@ public:
 
     struct GLSwapChain : public HwSwapChain {
         using HwSwapChain::HwSwapChain;
+        TargetBufferFlags attachments{};
         bool rec709 = false;
         struct {
             CallbackHandler* handler = nullptr;
-            FrameScheduledCallback callback;
+            std::shared_ptr<FrameScheduledCallback> callback = nullptr;
         } frameScheduled;
     };
 
@@ -151,6 +155,8 @@ public:
 
     using GLDescriptorSet = filament::backend::GLDescriptorSet;
 
+    using GLMemoryMappedBuffer = filament::backend::GLMemoryMappedBuffer;
+
     struct GLStream : public HwStream {
         using HwStream::HwStream;
         struct Info {
@@ -191,43 +197,77 @@ public:
     struct GLFence : public HwFence {
         using HwFence::HwFence;
         struct State {
-            std::mutex lock;
-            std::condition_variable cond;
             FenceStatus status{ FenceStatus::TIMEOUT_EXPIRED };
         };
         std::shared_ptr<State> state{ std::make_shared<State>() };
     };
 
+    // Note: named "GLSyncFence" to avoid confusion with the GL handle,
+    // "GLsync" (lowercase S)
+    struct GLSyncFence : public HwSync {
+        struct CallbackData {
+            CallbackHandler* handler;
+            Platform::SyncCallback cb;
+            Platform::Sync* sync;
+            void* userData;
+        };
+        std::mutex lock;
+        std::vector<std::unique_ptr<CallbackData>> conversionCallbacks;
+    };
+
     OpenGLDriver(OpenGLDriver const&) = delete;
     OpenGLDriver& operator=(OpenGLDriver const&) = delete;
+
+    using DriverBase::scheduleDestroy;
 
 private:
     OpenGLPlatform& mPlatform;
     OpenGLContext mContext;
+    OpenGLState* mBackendState = nullptr; // owned by backend thread
+    OpenGLState* mWorkerState = nullptr;  // owned by worker thread (initialized for async mode)
     ShaderCompilerService mShaderCompilerService;
 
     friend class TimerQueryFactory;
     friend class TimerQueryNativeFactory;
     OpenGLContext& getContext() noexcept { return mContext; }
+    OpenGLState& getBackendState() const noexcept {
+        // mBackendState should always be available.
+        assert_invariant(mBackendState);
+        return *mBackendState;
+    }
+    OpenGLState& getWorkerState() const noexcept {
+        // mWorkerState should be available only when the asynchronous mode is enabled.
+        // Ideally, this method should be called within asynchronous jobs.
+        assert_invariant(mWorkerState);
+        return *mWorkerState;
+    }
 
     ShaderCompilerService& getShaderCompilerService() noexcept {
         return mShaderCompilerService;
     }
 
     ShaderModel getShaderModel() const noexcept override;
-    ShaderLanguage getShaderLanguage() const noexcept override;
+    utils::FixedCapacityVector<ShaderLanguage> getShaderLanguages(
+            ShaderLanguage preferredLanguage) const noexcept override;
 
     /*
      * OpenGLDriver interface
      */
 
     utils::CString getVendorString() const noexcept override {
-        return utils::CString{ mContext.state.vendor };
+        return utils::CString{ mContext.vendor };
     }
 
     utils::CString getRendererString() const noexcept override {
-        return utils::CString{ mContext.state.renderer };
+        return utils::CString{ mContext.renderer };
     }
+
+    utils::CString getVersionString() const noexcept override {
+        return utils::CString{ mContext.version };
+    }
+
+    JobQueue* getJobQueue() const noexcept { return mJobQueue.get(); }
+    JobWorker* getJobWorker() const noexcept { return mJobWorker.get(); }
 
     template<typename T>
     friend class ConcreteDispatcher;
@@ -307,13 +347,13 @@ private:
 
     void setStencilState(StencilState ss) noexcept;
 
-    void setTextureData(GLTexture const* t,
+    void setTextureData(OpenGLState& gl, GLTexture const* t,
             uint32_t level,
             uint32_t xoffset, uint32_t yoffset, uint32_t zoffset,
             uint32_t width, uint32_t height, uint32_t depth,
             PixelBufferDescriptor&& p);
 
-    void setCompressedTextureData(GLTexture const* t,
+    void setCompressedTextureData(OpenGLState& gl, GLTexture const* t,
             uint32_t level,
             uint32_t xoffset, uint32_t yoffset, uint32_t zoffset,
             uint32_t width, uint32_t height, uint32_t depth,
@@ -322,7 +362,7 @@ private:
     void renderBufferStorage(GLuint rbo, GLenum internalformat, uint32_t width,
             uint32_t height, uint8_t samples) const noexcept;
 
-    void textureStorage(GLTexture* t, uint32_t width, uint32_t height,
+    void textureStorage(OpenGLState& gl, GLTexture* t, uint32_t width, uint32_t height,
             uint32_t depth, bool useProtectedMemory) noexcept;
 
     /* State tracking GL wrappers... */
@@ -338,6 +378,36 @@ private:
     using AttachmentArray = std::array<GLenum, MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT + 2>;
     static GLsizei getAttachments(AttachmentArray& attachments, TargetBufferFlags buffers,
             bool isDefaultFramebuffer) noexcept;
+
+    // Common methods
+    void readPixelsFromBoundFramebuffer(uint32_t x, uint32_t y, uint32_t width, uint32_t height,
+            PixelBufferDescriptor&& p);
+    void createTextureCommon(OpenGLState& gl, Handle<HwTexture> th, SamplerType target, uint8_t levels,
+            TextureFormat format, uint8_t samples, uint32_t width, uint32_t height, uint32_t depth,
+            TextureUsage usage, utils::ImmutableCString&& tag);
+    void update3DImageCommon(OpenGLState& gl, Handle<HwTexture> th,
+            uint32_t level, uint32_t xoffset, uint32_t yoffset, uint32_t zoffset,
+            uint32_t width, uint32_t height, uint32_t depth,
+            PixelBufferDescriptor&& data);
+    void createTextureViewSwizzleCommon(Handle<HwTexture> th, Handle<HwTexture> srch,
+            TextureSwizzle r, TextureSwizzle g, TextureSwizzle b,
+            TextureSwizzle a, utils::ImmutableCString&& tag);
+    void importTextureCommon(OpenGLState& gl, Handle<HwTexture> th, intptr_t id, SamplerType target, uint8_t levels,
+            TextureFormat format, uint8_t samples, uint32_t width, uint32_t height, uint32_t depth,
+            TextureUsage usage, utils::ImmutableCString&& tag);
+    void createBufferObjectCommon(OpenGLState& gl, Handle<HwBufferObject> boh, uint32_t byteCount,
+            BufferObjectBinding bindingType, BufferUsage usage, utils::ImmutableCString&& tag);
+    void setVertexBufferObjectCommon(Handle<HwVertexBuffer> vbh, uint32_t index,
+            Handle<HwBufferObject> boh);
+    void updateBufferObjectCommon(OpenGLState& gl, Handle<HwBufferObject> boh, BufferDescriptor&& bd,
+            uint32_t byteOffset);
+    void createIndexBufferCommon(OpenGLState& gl, Handle<HwIndexBuffer> ibh, ElementType const elementType,
+            uint32_t indexCount, BufferUsage const usage, utils::ImmutableCString&& tag);
+    void updateIndexBufferCommon(OpenGLState& gl, Handle<HwIndexBuffer> ibh, BufferDescriptor&& p,
+            uint32_t const byteOffset);
+    void destroyTextureCommon(OpenGLState& gl, Handle<HwTexture> th);
+    void destroyBufferObjectCommon(OpenGLState& gl, Handle<HwBufferObject> boh);
+    void destroyIndexBufferCommon(OpenGLState& gl, Handle<HwIndexBuffer> ibh);
 
     // state required to represent the current render pass
     Handle<HwRenderTarget> mRenderPassTarget;
@@ -356,6 +426,9 @@ private:
     struct {
         DescriptorSetHandle dsh;
         std::array<uint32_t, CONFIG_UNIFORM_BINDING_COUNT> offsets;
+#ifndef NDEBUG
+        utils::ImmutableCString tag;
+#endif
     } mBoundDescriptorSets[MAX_DESCRIPTOR_SET_COUNT] = {};
 
     void clearWithRasterPipe(TargetBufferFlags clearFlags,
@@ -374,30 +447,25 @@ private:
     // the must be accessed from the user thread only
     std::vector<GLStream*> mStreamsWithPendingAcquiredImage;
 
-    std::unordered_map<GLuint, BufferObjectStreamDescriptor> mStreamUniformDescriptors;
-
-    void attachStream(GLTexture* t, GLStream* stream) noexcept;
+    void attachStream(GLTexture* t, GLStream* stream);
     void detachStream(GLTexture* t) noexcept;
     void replaceStream(GLTexture* t, GLStream* stream) noexcept;
     math::mat3f getStreamTransformMatrix(Handle<HwStream> sh);
 
 #ifndef FILAMENT_SILENCE_NOT_SUPPORTED_BY_ES2
     // tasks executed on the main thread after the fence signaled
-    void whenGpuCommandsComplete(const std::function<void()>& fn) noexcept;
+    void whenGpuCommandsComplete(const std::function<void()>& fn);
     void executeGpuCommandsCompleteOps() noexcept;
     std::vector<std::pair<GLsync, std::function<void()>>> mGpuCommandCompleteOps;
 
-    void whenFrameComplete(const std::function<void()>& fn) noexcept;
+    void whenFrameComplete(const std::function<void()>& fn);
     std::vector<std::function<void()>> mFrameCompleteOps;
 #endif
 
     // tasks regularly executed on the main thread at until they return true
-    void runEveryNowAndThen(std::function<bool()> fn) noexcept;
+    void runEveryNowAndThen(std::function<bool()> fn);
     void executeEveryNowAndThenOps() noexcept;
     std::vector<std::function<bool()>> mEveryNowAndThenOps;
-
-    const Platform::DriverConfig mDriverConfig;
-    Platform::DriverConfig const& getDriverConfig() const noexcept { return mDriverConfig; }
 
     // for ES2 sRGB support
     GLSwapChain* mCurrentDrawSwapChain = nullptr;
@@ -405,6 +473,9 @@ private:
 
     PushConstantBundle* mCurrentPushConstants = nullptr;
     PipelineLayout::SetLayout mCurrentSetLayout;
+
+    JobQueue::Ptr mJobQueue;
+    JobWorker::Ptr mJobWorker;
 };
 
 // ------------------------------------------------------------------------------------------------

@@ -471,7 +471,7 @@ void TangentsJobExtended::run(Params* params) {
         }
     }
 
-    std::unique_ptr<uint3[]> unpackedTriangles;    
+    std::unique_ptr<uint3[]> unpackedTriangles;
     size_t const triangleCount = prim.indices ? (prim.indices->count / 3) : (vertexCount / 3);
     unpackedTriangles.reset(new uint3[triangleCount]);
 

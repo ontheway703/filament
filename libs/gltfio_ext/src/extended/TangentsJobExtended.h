@@ -63,7 +63,7 @@ struct TangentsJobExtended {
     struct Params {
         InputParams in;
         OutputParams out;
-        uint8_t jobType = 0;        
+        uint8_t jobType = 0;
     };
 
     // Performs tangents generation synchronously. This can be invoked from inside a job if desired.

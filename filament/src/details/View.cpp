@@ -24,7 +24,7 @@
 #include "FrameInfo.h"
 #include "Froxelizer.h"
 #include "RenderPrimitive.h"
-#include "ResourceAllocator.h"
+#include "TextureCache.h"
 #include "ShadowMap.h"
 #include "ShadowMapManager.h"
 
@@ -33,6 +33,7 @@
 #include "details/Engine.h"
 #include "details/IndirectLight.h"
 #include "details/InstanceBuffer.h"
+#include "details/MorphTargetBuffer.h"
 #include "details/RenderTarget.h"
 #include "details/Renderer.h"
 #include "details/Scene.h"
@@ -75,12 +76,17 @@
 #include <cmath>
 #include <chrono>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <new>
 #include <ratio>
 #include <utility>
 
 using namespace utils;
+
+#if FILAMENT_ENABLE_FGVIEWER
+#include "fg/FgviewerManager.h"
+#endif
 
 namespace filament {
 
@@ -103,6 +109,10 @@ FView::FView(FEngine& engine)
           mSharedState(std::make_shared<SharedState>())
 {
     DriverApi& driver = engine.getDriverApi();
+
+    mIsHighPrecisionEvsmSupported = driver.isTextureFormatFilterable(TextureFormat::RGBA32F);
+
+    mFeatureLevel = engine.getSupportedFeatureLevel();
 
     auto const& layout = engine.getPerRenderableDescriptorSetLayout();
 
@@ -142,7 +152,7 @@ FView::FView(FEngine& engine)
 #ifndef NDEBUG
     // This can fail if another view has already registered this data source
     mDebugState->owner = debugRegistry.registerDataSource("d.view.frame_info",
-            [weak = std::weak_ptr(mDebugState)]() -> DebugRegistry::DataSource {
+            [weak = std::weak_ptr<DebugState>(mDebugState)]() -> DebugRegistry::DataSource {
                 // the View could have been destroyed by the time we do this
                 auto const state = weak.lock();
                 if (!state) {
@@ -166,10 +176,10 @@ FView::FView(FEngine& engine)
 #endif
 
 #if FILAMENT_ENABLE_FGVIEWER
-    fgviewer::DebugServer* fgviewerServer = engine.debug.fgviewerServer;
-    if (UTILS_LIKELY(fgviewerServer)) {
+    FgviewerManager* fgviewerManager = engine.debug.fgviewer;
+    if (UTILS_LIKELY(fgviewerManager)) {
         mFrameGraphViewerViewHandle =
-            fgviewerServer->createView(utils::CString(getName()));
+            fgviewerManager->createView(CString(getName()));
     }
 #endif
 
@@ -219,9 +229,9 @@ void FView::terminate(FEngine& engine) {
 #endif
 
 #if FILAMENT_ENABLE_FGVIEWER
-    fgviewer::DebugServer* fgviewerServer = engine.debug.fgviewerServer;
-    if (UTILS_LIKELY(fgviewerServer)) {
-        fgviewerServer->destroyView(mFrameGraphViewerViewHandle);
+    FgviewerManager* fgviewerManager = engine.debug.fgviewer;
+    if (UTILS_LIKELY(fgviewerManager)) {
+        fgviewerManager->destroyView(mFrameGraphViewerViewHandle);
     }
 #endif
 }
@@ -320,9 +330,9 @@ float2 FView::updateScale(FEngine& engine,
         // relative scaling ("velocity" control)
         const float scale = mScale.x * mScale.y * command;
 
-        const float w = float(mViewport.width);
-        const float h = float(mViewport.height);
         if (scale < 1.0f && !options.homogeneousScaling) {
+            const float w = float(mViewport.width);
+            const float h = float(mViewport.height);
             // figure out the major and minor axis
             const float major = std::max(w, h);
             const float minor = std::min(w, h);
@@ -351,7 +361,7 @@ float2 FView::updateScale(FEngine& engine,
         const auto s = mScale;
         mScale = clamp(s, options.minScale, options.maxScale);
 
-        // disable the integration term when we're outside the controllable range
+        // Disable the integration term when we're outside the controllable range
         // (i.e. we clamped). This help not to have to wait too long for the Integral term
         // to kick in after a clamping event.
         mPidController.setIntegralInhibitionEnabled(mScale != s);
@@ -372,7 +382,7 @@ float2 FView::updateScale(FEngine& engine,
         debugFrameHistory->back() = {
                 .target             = target,
                 .targetWithHeadroom = targetWithHeadroom,
-                .frameTime          = duration_cast<duration_ms>(info.frameTime).count(),
+                .frameTime          = duration_cast<duration_ms>(info.gpuFrameDuration).count(),
                 .frameTimeDenoised  = duration_cast<duration_ms>(info.denoisedFrameTime).count(),
                 .scale              = mScale.x * mScale.y,
                 .pid_e              = mPidController.getError(),
@@ -394,8 +404,10 @@ bool FView::isSkyboxVisible() const noexcept {
     return skybox != nullptr && (skybox->getLayerMask() & mVisibleLayers);
 }
 
-void FView::prepareShadowing(FEngine& engine, FScene::RenderableSoa& renderableData,
-        FScene::LightSoa const& lightData, CameraInfo const& cameraInfo) noexcept {
+void FView::prepareShadowing(FEngine& engine, DriverApi& driver,
+        FScene::RenderableSoa& renderableData,
+        FScene::LightSoa const& lightData,
+        CameraInfo const& cameraInfo) noexcept {
     FILAMENT_TRACING_CALL(FILAMENT_TRACING_CATEGORY_FILAMENT);
 
     mHasShadowing = false;
@@ -404,7 +416,7 @@ void FView::prepareShadowing(FEngine& engine, FScene::RenderableSoa& renderableD
         return;
     }
 
-    auto& lcm = engine.getLightManager();
+    auto const& lcm = engine.getLightManager();
 
     ShadowMapManager::Builder builder;
 
@@ -461,8 +473,8 @@ void FView::prepareShadowing(FEngine& engine, FScene::RenderableSoa& renderableD
 
     if (builder.hasShadowMaps()) {
         ShadowMapManager::createIfNeeded(engine, mShadowMapManager);
-        auto const shadowTechnique = mShadowMapManager->update(builder, engine, *this,
-                cameraInfo, renderableData, lightData);
+        auto const shadowTechnique = mShadowMapManager->update(driver, builder, engine,
+                *this, cameraInfo, renderableData, lightData);
 
         mHasShadowing = any(shadowTechnique);
         mNeedsShadowMap = any(shadowTechnique & ShadowMapManager::ShadowTechnique::SHADOW_MAP);
@@ -521,27 +533,132 @@ void FView::prepareLighting(FEngine& engine, CameraInfo const& cameraInfo) noexc
     getColorPassDescriptorSet().prepareDirectionalLight(engine, exposure, sceneSpaceDirection, directionalLight);
 }
 
+/*
+ * Calculates an automatic grid size based on the camera frustum dimensions.
+ * Handles both perspective and orthographic projections.
+ * 
+ * For perspective projections, it uses the width of the frustum at the far plane.
+ * This ensures that the grid size scales with the visible volume and accounts for
+ * field-of-view (zooming in reduces grid size to preserve precision).
+ * For orthographic projections, it uses the absolute width of the frustum.
+ * 
+ * camera: The camera to use for the calculation.
+ * Returns the calculated grid size (10% of the computed width, chosen as a
+ * reasonable balance between precision and snapping frequency).
+ */
+double FView::calculateAutomaticGridSize(const FCamera* camera) const noexcept {
+    auto const& p = camera->getCullingProjectionMatrix();
+    
+    // Base scale is the width of the frustum at Z=1 for perspective,
+    // or the absolute width for orthographic.
+    double baseScale = 2.0 / std::abs(p[0][0]);
+    
+    // Detect perspective by checking if P[3][2] is non-zero
+    bool const isPerspective = std::abs(p[3][2]) > 1e-5;
+    
+    if (isPerspective) {
+        double const zf = camera->getCullingFar();
+        // Scale at far plane
+        return baseScale * zf * 0.1;
+    } else {
+        // Ortho: baseScale is the full width of the frustum.
+        // Use 10% of the width as grid size.
+        return baseScale * 0.1;
+    }
+}
+
+/*
+ * Computes a stable grid origin for the camera to improve floating-point precision.
+ * Snapping only occurs when the camera moves beyond the grid boundary plus hysteresis.
+ * 
+ * This implementation follows Strategy A: only update the grid size when a position snap occurs.
+ * This prevents instability when the frustum (and thus auto grid size) changes smoothly.
+ * Alternative Strategy B (scale hysteresis) could be used if we want to respond to large scale changes without moving.
+ * 
+ * cameraPosition: The current world position of the camera.
+ * currentGridSize: The grid size used in the previous frame (stable).
+ * newGridSize: The new calculated grid size (target).
+ * hysteresisRatio: The hysteresis margin as a ratio of the grid size [0, 1].
+ * forceSnap: Force a snap regardless of threshold (used for manual grid size changes).
+ * Returns the stable grid origin.
+ */
+double3 FView::computeGridOrigin(double3 cameraPosition, double currentGridSize, double newGridSize, double hysteresisRatio, bool forceSnap) const noexcept {
+    if (currentGridSize <= 0.0) {
+        return cameraPosition;
+    }
+
+    const double threshold = currentGridSize * (0.5 + hysteresisRatio);
+    const double3 currentOrigin = mGridOrigin;
+
+    // Check threshold per axis (without loop)
+    bool const snapX = std::abs(cameraPosition.x - currentOrigin.x) > threshold;
+    bool const snapY = std::abs(cameraPosition.y - currentOrigin.y) > threshold;
+    bool const snapZ = std::abs(cameraPosition.z - currentOrigin.z) > threshold;
+
+    if (snapX || snapY || snapZ || forceSnap) {
+        // Snap triggered! Use new grid size to compute new origin.
+        double3 const newOrigin = {
+                std::round(cameraPosition.x / newGridSize) * newGridSize,
+                std::round(cameraPosition.y / newGridSize) * newGridSize,
+                std::round(cameraPosition.z / newGridSize) * newGridSize
+        };
+        mGridOrigin = newOrigin;
+        mEffectiveGridSize = newGridSize;
+    }
+
+    return mGridOrigin;
+}
+
 CameraInfo FView::computeCameraInfo(FEngine const& engine) const noexcept {
     FScene const* const scene = getScene();
 
     /*
      * We apply a "world origin" to "everything" in order to implement the IBL rotation.
-     * The "world origin" is also used to keep the origin close to the camera position to
+     * The "world origin" is also used to keep the origin close to the camera position (or snapped grid) to
      * improve fp precision in the shader for large scenes.
      */
-    double3 translation;
-    mat3 rotation;
+    double3 translation = 0.0;
+    mat3 rotation{ 1.0f };
 
     /*
      * Calculate all camera parameters needed to render this View for this frame.
      */
     FCamera const* const camera = mViewingCamera ? mViewingCamera : mCullingCamera;
+    double3 const cameraPosition = camera->getPosition();
+
+    // Internal policy controlled by feature flag and debug flags
     if (engine.debug.view.camera_at_origin) {
-        // this moves the camera to the origin, effectively doing all shader computations in
-        // view-space, which improves floating point precision in the shader by staying around
-        // zero, where fp precision is highest. This also ensures that when the camera is placed
-        // very far from the origin, objects are still rendered and lit properly.
-        translation = -camera->getPosition();
+        if (engine.features.view.enable_grid_based_world_origin) {
+            // This moves the camera to a snapped grid origin, improving floating point precision
+            // while avoiding per-frame transform updates for objects as long as the camera
+            // stays within the grid cell (plus hysteresis).
+
+            // Determine the target grid size (either manual or automatic).
+            double newGridSize = mGridSize;
+            if (newGridSize <= 0.0) {
+                newGridSize = calculateAutomaticGridSize(camera);
+            }
+
+            // For the first frame, initialize the effective grid size.
+            double currentGridSize = mEffectiveGridSize;
+            if (currentGridSize <= 0.0) {
+                // First time initialization
+                currentGridSize = newGridSize;
+                mEffectiveGridSize = currentGridSize;
+            }
+            
+            // Force snap if user manually changed grid size to a positive value
+            bool const forceSnap = (mGridSize > 0.0 && mGridSize != currentGridSize);
+            
+            constexpr double hysteresisRatio = 0.5; // Automatic 50% hysteresis
+            translation = -computeGridOrigin(cameraPosition, currentGridSize, newGridSize, hysteresisRatio, forceSnap);
+        } else {
+            // this moves the camera to the origin, effectively doing all shader computations in
+            // view-space, which improves floating point precision in the shader by staying around
+            // zero, where fp precision is highest. This also ensures that when the camera is placed
+            // very far from the origin, objects are still rendered and lit properly.
+            translation = -cameraPosition;
+        }
     }
 
     FIndirectLight const* const ibl = scene->getIndirectLight();
@@ -685,7 +802,7 @@ void FView::prepare(FEngine& engine, DriverApi& driver, RootArenaScope& rootAren
 
         setFroxelizerSync(froxelizeLightsJob);
 
-        prepareShadowing(engine, renderableData, lightData, cameraInfo);
+        prepareShadowing(engine, driver, renderableData, lightData, cameraInfo);
 
         /*
          * Partition the SoA so that renderables are partitioned w.r.t their visibility into the
@@ -778,11 +895,10 @@ void FView::prepare(FEngine& engine, DriverApi& driver, RootArenaScope& rootAren
         for (uint32_t const i : merged) {
             auto const& skinning = sceneData.elementAt<FScene::SKINNING_BUFFER>(i);
             auto const& morphing = sceneData.elementAt<FScene::MORPHING_BUFFER>(i);
-            auto const& instance = sceneData.elementAt<FScene::INSTANCES>(i);
 
             // FIXME: when only one is active the UBO handle of the other is null
             //        (probably a problem on vulkan)
-            if (UTILS_UNLIKELY(skinning.handle || morphing.handle || instance.buffer)) {
+            if (UTILS_UNLIKELY(skinning.handle || morphing.handle)) {
                 auto const ci = sceneData.elementAt<FScene::RENDERABLE_INSTANCE>(i);
                 FRenderableManager& rcm = engine.getRenderableManager();
                 auto& descriptorSet = rcm.getDescriptorSet(ci);
@@ -795,10 +911,8 @@ void FView::prepare(FEngine& engine, DriverApi& driver, RootArenaScope& rootAren
                 }
 
                 descriptorSet.setBuffer(layout,
-                        +PerRenderableBindingPoints::OBJECT_UNIFORMS,
-                        instance.buffer ? instance.buffer->getHandle() : mRenderableUbh,
-                        instance.buffer ? instance.buffer->getOffset() : 0,
-                        sizeof(PerRenderableUib));
+                        +PerRenderableBindingPoints::OBJECT_UNIFORMS, mRenderableUbh,
+                        0, sizeof(PerRenderableUib));
 
                 descriptorSet.setBuffer(layout,
                         +PerRenderableBindingPoints::BONES_UNIFORMS,
@@ -833,13 +947,18 @@ void FView::prepare(FEngine& engine, DriverApi& driver, RootArenaScope& rootAren
                             +PerRenderableBindingPoints::MORPHING_UNIFORMS,
                             morphing.handle, 0, sizeof(PerRenderableMorphingUib));
 
-                    descriptorSet.setSampler(layout,
-                            +PerRenderableBindingPoints::MORPH_TARGET_POSITIONS,
-                            morphing.morphTargetBuffer->getPositionsHandle(), {});
+                    const auto* mtb = morphing.morphTargetBuffer;
+                    if (mtb->hasPositions()) {
+                        descriptorSet.setSampler(layout,
+                                +PerRenderableBindingPoints::MORPH_TARGET_POSITIONS,
+                                mtb->getPositionsHandle(), {});
+                    }
 
-                    descriptorSet.setSampler(layout,
-                            +PerRenderableBindingPoints::MORPH_TARGET_TANGENTS,
-                            morphing.morphTargetBuffer->getTangentsHandle(), {});
+                    if (mtb->hasTangents()) {
+                        descriptorSet.setSampler(layout,
+                                +PerRenderableBindingPoints::MORPH_TARGET_TANGENTS,
+                                mtb->getTangentsHandle(), {});
+                    }
                 }
 
                 descriptorSet.commit(layout, driver);
@@ -929,7 +1048,7 @@ void FView::updateUBOs(
     for (uint32_t const i : visibleRenderables) {
         auto& instancesInfo = instancesData[i];
         if (instancesInfo.buffer) {
-            assert_invariant(instancesInfo.count == instancesInfo.buffer->getInstanceCount());
+            assert_invariant(instancesInfo.count <= instancesInfo.buffer->getInstanceCount());
             icount += instancesInfo.count;
         }
     }
@@ -977,7 +1096,6 @@ void FView::updateUBOs(
         auto& instancesInfo = instancesData[i];
         if (instancesInfo.buffer) {
             instancesInfo.buffer->prepare(
-                    mRenderableUbh,
                     buffer,  j, instancesInfo.count,
                     worldTransformData[i], uboData[i]);
             j += instancesInfo.count;
@@ -986,7 +1104,8 @@ void FView::updateUBOs(
 
     // We capture state shared between Scene and the update buffer callback, because the Scene could
     // be destroyed before the callback executes.
-    std::weak_ptr<SharedState>* const weakShared = new(std::nothrow) std::weak_ptr(mSharedState);
+    std::weak_ptr<SharedState>* const weakShared =
+            new (std::nothrow) std::weak_ptr<SharedState>(mSharedState);
 
     // update the UBO
     driver.resetBufferObject(mRenderableUbh);
@@ -1126,14 +1245,13 @@ void FView::prepareShadowMapping() const noexcept {
         uniforms = mShadowMapManager->getShadowMappingUniforms();
     }
 
-    constexpr float low  = 5.54f; // ~ std::log(std::numeric_limits<math::half>::max()) * 0.5f;
-    constexpr float high = 42.0f; // ~ std::log(std::numeric_limits<float>::max()) * 0.5f;
     constexpr uint32_t SHADOW_SAMPLING_RUNTIME_PCF = 0u;
     constexpr uint32_t SHADOW_SAMPLING_RUNTIME_EVSM = 1u;
     constexpr uint32_t SHADOW_SAMPLING_RUNTIME_DPCF = 2u;
     constexpr uint32_t SHADOW_SAMPLING_RUNTIME_PCSS = 3u;
     auto& s = mUniforms.edit();
     s.cascadeSplits = uniforms.cascadeSplits;
+    s.shadowAtlasResolution = uniforms.atlasResolution;
     s.ssContactShadowDistance = uniforms.ssContactShadowDistance;
     s.directionalShadows = int32_t(uniforms.directionalShadows);
     s.cascades = int32_t(uniforms.cascades);
@@ -1143,8 +1261,8 @@ void FView::prepareShadowMapping() const noexcept {
             break;
         case ShadowType::VSM:
             s.shadowSamplingType = SHADOW_SAMPLING_RUNTIME_EVSM;
-            s.vsmExponent = mVsmShadowOptions.highPrecision ? high : low;
-            s.vsmDepthScale = mVsmShadowOptions.minVarianceScale * 0.01f * s.vsmExponent;
+            s.vsmExponent = 0; // this is only used when rendering the shadowmap, not when using it
+            s.vsmMaxMoment = ShadowMapManager::getMaxMomentEVSM(mVsmShadowOptions);
             s.vsmLightBleedReduction = mVsmShadowOptions.lightBleedReduction;
             break;
         case ShadowType::DPCF:
@@ -1402,8 +1520,8 @@ void FView::executePickingQueries(DriverApi& driver,
             });
         } else {
             driver.readPixels(handle, x, y, 1, 1, {
-                    &pQuery->result.renderable, 4u * 4u, // 4*float
-                    PixelDataFormat::RG, PixelDataType::FLOAT,
+                    &pQuery->result.renderable, 4u * 4u, // 4*uint
+                    PixelDataFormat::RGBA_INTEGER, PixelDataType::UINT,
                     pQuery->handler, [](void*, size_t, void* user) {
                         FPickingQuery* const pQuery = static_cast<FPickingQuery*>(user);
                         // pQuery->result.renderable already contains the right value!
@@ -1433,9 +1551,12 @@ void FView::setTemporalAntiAliasingOptions(TemporalAntiAliasingOptions options) 
 }
 
 void FView::setMultiSampleAntiAliasingOptions(MultiSampleAntiAliasingOptions options) noexcept {
-    options.sampleCount = uint8_t(options.sampleCount < 1u ? 1u : options.sampleCount);
-    mMultiSampleAntiAliasingOptions = options;
-    assert_invariant(!options.enabled || !mRenderTarget || !mRenderTarget->hasSampleableDepth());
+    // MSAA is a post-process effect, and post-processing is disabled at FL0
+    if (mFeatureLevel >= FeatureLevel::FEATURE_LEVEL_1) {
+        options.sampleCount = uint8_t(options.sampleCount < 1u ? 1u : options.sampleCount);
+        mMultiSampleAntiAliasingOptions = options;
+        assert_invariant(!options.enabled || !mRenderTarget || !mRenderTarget->hasSampleableDepth());
+    }
 }
 
 void FView::setScreenSpaceReflectionsOptions(ScreenSpaceReflectionsOptions options) noexcept {
@@ -1473,6 +1594,9 @@ void FView::setAmbientOcclusionOptions(AmbientOcclusionOptions options) noexcept
 }
 void FView::setVsmShadowOptions(VsmShadowOptions options) noexcept {
     options.msaaSamples = std::max(uint8_t(0), options.msaaSamples);
+    if (!mIsHighPrecisionEvsmSupported) {
+        options.highPrecision = false;
+    }
     mVsmShadowOptions = options;
 }
 

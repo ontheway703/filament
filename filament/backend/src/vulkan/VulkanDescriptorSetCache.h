@@ -55,7 +55,8 @@ public:
             VkDeviceSize size) noexcept;
 
     void updateSampler(fvkmemory::resource_ptr<VulkanDescriptorSet> set, uint8_t binding,
-            fvkmemory::resource_ptr<VulkanTexture> texture, VkSampler sampler) noexcept;
+            fvkmemory::resource_ptr<VulkanTexture> texture, VkSampler sampler,
+            VkDescriptorSetLayout externalSamplerLayout = VK_NULL_HANDLE) noexcept;
 
     void updateSamplerForExternalSamplerSet(fvkmemory::resource_ptr<VulkanDescriptorSet> set, uint8_t binding,
             fvkmemory::resource_ptr<VulkanTexture> texture) noexcept;
@@ -70,11 +71,15 @@ public:
     void unbind(uint8_t setIndex);
 
     void commit(VulkanCommandBuffer* commands, VkPipelineLayout pipelineLayout,
-            fvkutils::DescriptorSetMask const& useExternalSamplerMask,
             fvkutils::DescriptorSetMask const& setMask);
 
     fvkmemory::resource_ptr<VulkanDescriptorSet> createSet(Handle<HwDescriptorSet> handle,
             fvkmemory::resource_ptr<VulkanDescriptorSetLayout> layout);
+
+    // Create and set as current a new VkDescriptorSet using the `set` currently bound layout and
+    // copy all the bindings and ignoring the samplers bindings in the `samplerMask`.
+    void cloneSet(fvkmemory::resource_ptr<VulkanDescriptorSet> set,
+            fvkutils::SamplerBitmask samplerMask) noexcept;
 
     // This method is meant to be used with external samplers
     VkDescriptorSet getVkSet(DescriptorCount const& count, VkDescriptorSetLayout vklayout);
@@ -90,8 +95,8 @@ public:
     void resetCachedState() noexcept { mLastBoundInfo = {}; }
 
 private:
-    void updateSamplerImpl(VkDescriptorSet set, uint8_t binding,
-            fvkmemory::resource_ptr<VulkanTexture> texture, VkSampler sampler) noexcept;
+    void copySet(VkDescriptorSet srcSet, VkDescriptorSet destSet,
+            fvkutils::SamplerBitmask copyBindings) const;
 
     class DescriptorInfinitePool;
 

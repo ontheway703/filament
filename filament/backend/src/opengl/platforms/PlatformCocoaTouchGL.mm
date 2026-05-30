@@ -47,7 +47,7 @@ struct PlatformCocoaTouchGLImpl {
     GLuint mDefaultDepthbuffer = 0;
     CVOpenGLESTextureCacheRef mTextureCache = nullptr;
     CocoaTouchExternalImage::SharedGl* mExternalImageSharedGl = nullptr;
-    struct ExternalImageCocoaTouchGL : public Platform::ExternalImage {
+    struct ExternalImageCocoaTouchGL final : public Platform::ExternalImage {
         CVPixelBufferRef cvBuffer;
     protected:
         ~ExternalImageCocoaTouchGL() noexcept final;
@@ -64,7 +64,7 @@ PlatformCocoaTouchGL::~PlatformCocoaTouchGL() noexcept {
     delete pImpl;
 }
 
-Driver* PlatformCocoaTouchGL::createDriver(void* sharedGLContext, const Platform::DriverConfig& driverConfig) noexcept {
+Driver* PlatformCocoaTouchGL::createDriver(void* sharedGLContext, const Platform::DriverConfig& driverConfig) {
     EAGLSharegroup* sharegroup = (__bridge EAGLSharegroup*) sharedGLContext;
 
     EAGLContext *context = [[EAGLContext alloc] initWithAPI:kEAGLRenderingAPIOpenGLES3 sharegroup:sharegroup];

@@ -21,6 +21,10 @@
 
 #include <backend/DriverEnums.h>
 
+#if defined(__EMSCRIPTEN__)
+#include <backend/platforms/WebGPUWasmPolyfill.h>
+#endif
+
 #include <webgpu/webgpu_cpp.h>
 
 #include <string_view>
@@ -39,6 +43,45 @@ namespace filament::backend {
            textureFormat == wgpu::TextureFormat::Depth24Plus ||
            textureFormat == wgpu::TextureFormat::Depth24PlusStencil8 ||
            textureFormat == wgpu::TextureFormat::Depth32FloatStencil8;
+}
+
+[[nodiscard]] constexpr bool isUIntFormat(const wgpu::TextureFormat format) {
+    // see https://www.w3.org/TR/webgpu/#texture-formats
+    //  and https://www.w3.org/TR/webgpu/#texture-format-caps
+    switch (format) {
+        case wgpu::TextureFormat::R8Uint:
+        case wgpu::TextureFormat::R16Uint:
+        case wgpu::TextureFormat::RG8Uint:
+        case wgpu::TextureFormat::R32Uint:
+        case wgpu::TextureFormat::RG16Uint:
+        case wgpu::TextureFormat::RGBA8Uint:
+        case wgpu::TextureFormat::RGB10A2Uint:
+        case wgpu::TextureFormat::RG32Uint:
+        case wgpu::TextureFormat::RGBA16Uint:
+        case wgpu::TextureFormat::RGBA32Uint:
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] constexpr bool isIntFormat(const wgpu::TextureFormat format) {
+    // see https://www.w3.org/TR/webgpu/#texture-formats
+    //  and https://www.w3.org/TR/webgpu/#texture-format-caps
+    switch (format) {
+        case wgpu::TextureFormat::R8Sint:
+        case wgpu::TextureFormat::R16Sint:
+        case wgpu::TextureFormat::RG8Sint:
+        case wgpu::TextureFormat::R32Sint:
+        case wgpu::TextureFormat::RG16Sint:
+        case wgpu::TextureFormat::RGBA8Sint:
+        case wgpu::TextureFormat::RG32Sint:
+        case wgpu::TextureFormat::RGBA16Sint:
+        case wgpu::TextureFormat::RGBA32Sint:
+            return true;
+        default:
+            return false;
+    }
 }
 
 [[nodiscard]] constexpr std::string_view toString(const PixelDataFormat format) {
@@ -558,7 +601,7 @@ namespace filament::backend {
     }
 
     wgpu::TextureUsage transientAttachmentNeeded{ wgpu::TextureUsage::None };
-    const bool useTransientAttachment {
+    bool const useTransientAttachment =
             deviceSupportsTransientAttachments &&
             // Usage consists of attachment flags only.
             none(fUsage & ~TextureUsage::ALL_ATTACHMENTS) &&
@@ -569,9 +612,12 @@ namespace filament::backend {
             // restriction.
             // Note that the custom shader does not resolve stencil. We do need to move to vk 1.2
             // and above to be able to support stencil resolve (along with depth).
-            !(any(fUsage & TextureUsage::DEPTH_ATTACHMENT) && samples > 1)};
+            !(any(fUsage & TextureUsage::DEPTH_ATTACHMENT) && samples > 1);
+
     if (useTransientAttachment) {
+#if !defined(__EMSCRIPTEN__)
         transientAttachmentNeeded |= wgpu::TextureUsage::TransientAttachment;
+#endif
     }
 
     // A texture that is a blit destination or render attachment will often need to be

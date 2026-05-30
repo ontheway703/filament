@@ -40,6 +40,7 @@ set(PUBLIC_HDRS
         include/filament/Skybox.h
         include/filament/Stream.h
         include/filament/SwapChain.h
+        include/filament/Sync.h
         include/filament/Texture.h
         include/filament/TextureSampler.h
         include/filament/ToneMapper.h
@@ -55,7 +56,9 @@ set(SRCS
         src/materials/bloom/bloom.cpp
         src/materials/colorGrading/colorGrading.cpp
         src/materials/dof/dof.cpp
+        src/materials/evsm/evsm.cpp
         src/materials/flare/flare.cpp
+        src/materials/fog/fog.cpp
         src/materials/fsr/fsr.cpp
         src/materials/sgsr/sgsr.cpp
         src/materials/ssao/ssao.cpp
@@ -83,18 +86,21 @@ set(SRCS
         src/InstanceBuffer.cpp
         src/LightManager.cpp
         src/Material.cpp
+        src/MaterialCache.cpp
+        src/MaterialDefinition.cpp
         src/MaterialInstance.cpp
         src/MaterialInstanceManager.cpp
         src/MaterialParser.cpp
         src/MorphTargetBuffer.cpp
         src/PostProcessManager.cpp
+        src/ProgramSpecialization.cpp
+        src/LocalProgramCache.cpp
         src/RenderPass.cpp
         src/RenderPrimitive.cpp
         src/RenderTarget.cpp
         src/RenderableManager.cpp
         src/Renderer.cpp
         src/RendererUtils.cpp
-        src/ResourceAllocator.cpp
         src/ResourceList.cpp
         src/Scene.cpp
         src/ShadowMap.cpp
@@ -103,7 +109,9 @@ set(SRCS
         src/Skybox.cpp
         src/Stream.cpp
         src/SwapChain.cpp
+        src/Sync.cpp
         src/Texture.cpp
+        src/TextureCache.cpp
         src/ToneMapper.cpp
         src/TransformManager.cpp
         src/UniformBuffer.cpp
@@ -113,6 +121,7 @@ set(SRCS
         src/components/LightManager.cpp
         src/components/RenderableManager.cpp
         src/components/TransformManager.cpp
+        src/details/BufferAllocator.cpp
         src/details/BufferObject.cpp
         src/details/Camera.cpp
         src/details/ColorGrading.cpp
@@ -132,7 +141,9 @@ set(SRCS
         src/details/Skybox.cpp
         src/details/Stream.cpp
         src/details/SwapChain.cpp
+        src/details/Sync.cpp
         src/details/Texture.cpp
+        src/details/UboManager.cpp
         src/details/VertexBuffer.cpp
         src/details/View.cpp
         src/ds/PerViewDescriptorSetUtils.cpp
@@ -145,12 +156,14 @@ set(SRCS
         src/ds/StructureDescriptorSet.cpp
         src/fg/Blackboard.cpp
         src/fg/DependencyGraph.cpp
+        src/fg/FgviewerManager.cpp
         src/fg/FrameGraph.cpp
         src/fg/FrameGraphPass.cpp
         src/fg/FrameGraphResources.cpp
         src/fg/FrameGraphTexture.cpp
         src/fg/PassNode.cpp
         src/fg/ResourceNode.cpp
+        src/fg/ResourceCreationContext.cpp
         src/fsr.cpp
         src/ZstdHelper.cpp
 )
@@ -161,6 +174,7 @@ set(PRIVATE_HDRS
         src/Bimap.h
         src/BufferPoolAllocator.h
         src/ColorSpaceUtils.h
+        src/compact.h
         src/Culler.h
         src/DFG.h
         src/FilamentAPI-impl.h
@@ -172,23 +186,29 @@ set(PRIVATE_HDRS
         src/HwRenderPrimitiveFactory.h
         src/HwVertexBufferInfoFactory.h
         src/Intersections.h
+        src/MaterialCache.h
+        src/MaterialDefinition.h
         src/MaterialParser.h
+        src/LocalProgramCache.h
         src/MaterialInstanceManager.h
         src/PIDController.h
         src/PostProcessManager.h
+        src/ProgramSpecialization.h
         src/RenderPass.h
         src/RenderPrimitive.h
         src/RendererUtils.h
-        src/ResourceAllocator.h
         src/ResourceList.h
         src/ShadowMap.h
         src/ShadowMapManager.h
         src/SharedHandle.h
+        src/TextureCache.h
         src/UniformBuffer.h
         src/components/CameraManager.h
         src/components/LightManager.h
         src/components/RenderableManager.h
         src/components/TransformManager.h
+        src/details/AsyncHelpers.h
+        src/details/BufferAllocator.h
         src/details/BufferObject.h
         src/details/Camera.h
         src/details/ColorGrading.h
@@ -209,6 +229,7 @@ set(PRIVATE_HDRS
         src/details/Stream.h
         src/details/SwapChain.h
         src/details/Texture.h
+        src/details/UboManager.h
         src/details/VertexBuffer.h
         src/details/View.h
         src/downcast.h
@@ -221,6 +242,7 @@ set(PRIVATE_HDRS
         src/ds/TypedUniformBuffer.h
         src/fg/Blackboard.h
         src/fg/FrameGraph.h
+        src/fg/FrameGraphDummyLink.h
         src/fg/FrameGraphId.h
         src/fg/FrameGraphPass.h
         src/fg/FrameGraphRenderPass.h
@@ -230,6 +252,7 @@ set(PRIVATE_HDRS
         src/fg/details/DependencyGraph.h
         src/fg/details/PassNode.h
         src/fg/details/Resource.h
+        src/fg/details/ResourceAllocator.h
         src/fg/details/ResourceNode.h
         src/fg/details/Utilities.h
         src/fsr.h
@@ -242,9 +265,10 @@ set(PRIVATE_HDRS
 set(MATERIAL_SRCS
         src/materials/antiAliasing/fxaa/fxaa.mat
         src/materials/antiAliasing/taa/taa.mat
+        src/materials/blitArray.mat
         src/materials/blitDepth.mat
         src/materials/blitLow.mat
-        src/materials/blitArray.mat
+        src/materials/clearDepth.mat
         src/materials/bloom/bloomDownsample.mat
         src/materials/bloom/bloomDownsample2x.mat
         src/materials/bloom/bloomDownsample9.mat
@@ -263,7 +287,10 @@ set(MATERIAL_SRCS
         src/materials/dof/dofMipmap.mat
         src/materials/dof/dofTiles.mat
         src/materials/dof/dofTilesSwizzle.mat
+        src/materials/evsm/gaussian.mat
+        src/materials/evsm/vsmMipmap.mat
         src/materials/flare/flare.mat
+        src/materials/fog/fog.mat
         src/materials/fsr/fsr_easu.mat
         src/materials/fsr/fsr_easu_mobile.mat
         src/materials/fsr/fsr_easu_mobileF.mat
@@ -278,7 +305,6 @@ set(MATERIAL_SRCS
         src/materials/ssao/mipmapDepth.mat
         src/materials/ssao/sao.mat
         src/materials/ssao/saoBentNormals.mat
-        src/materials/vsmMipmap.mat
 )
 
 if (NOT FILAMENT_DISABLE_GTAO)
@@ -288,14 +314,16 @@ if (NOT FILAMENT_DISABLE_GTAO)
     )
 endif()
 
-set(MATERIAL_FL0_SRCS
+set(MATERIAL_MULTIVIEW_SRCS
+        src/materials/clearDepth.mat
         src/materials/defaultMaterial.mat
         src/materials/skybox.mat
 )
 
-set(MATERIAL_MULTIVIEW_SRCS
-        src/materials/defaultMaterial.mat
-        src/materials/skybox.mat
+# This set of materials should only be compiled for vulkan or metal because they contain operations
+# not allowed on other platforms. (e.g. sampling from a multi-sampled texture).
+set(MATERIAL_VULKAN_METAL_SRCS
+        src/materials/resolveDepth.mat
 )
 
 # ==================================================================================================
@@ -316,11 +344,6 @@ if (NOT DFG_LUT_SIZE)
     endif()
 endif()
 message(STATUS "DFG LUT size set to ${DFG_LUT_SIZE}x${DFG_LUT_SIZE}")
-
-# Whether to include FL0 materials.
-if (FILAMENT_ENABLE_FEATURE_LEVEL_0)
-    add_definitions(-DFILAMENT_ENABLE_FEATURE_LEVEL_0)
-endif()
 
 # Whether to include MULTIVIEW materials.
 if (FILAMENT_ENABLE_MULTIVIEW)
@@ -353,7 +376,7 @@ add_definitions(
 # Generate all .filamat: default material, skyboxes, and post-process
 # ==================================================================================================
 
-if (CMAKE_CROSSCOMPILING)
+if (CMAKE_CROSSCOMPILING OR FILAMENT_IMPORT_PREBUILT_EXECUTABLES)
     include(${IMPORT_EXECUTABLES})
 endif()
 
@@ -370,6 +393,27 @@ foreach(mat_src ${MATERIAL_SRCS})
     list(APPEND MATERIAL_DIRS ${mat_dir})
 endforeach()
 list(REMOVE_DUPLICATES MATERIAL_DIRS)
+
+function(check_in_list list_name item out_var)
+    list(FIND ${list_name} "${item}" index)
+    if (index GREATER -1)
+        set(${out_var} TRUE PARENT_SCOPE)
+    else()
+        set(${out_var} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+macro(compile_material output_path fullname flags_var comment_str)
+    add_custom_command(
+            OUTPUT ${output_path}
+            COMMAND matc ${${flags_var}} -o ${output_path} ${fullname}
+            MAIN_DEPENDENCY ${fullname}
+            DEPENDS matc
+            COMMENT "${comment_str}"
+    )
+    list(APPEND FILAMAT_FILES_FOR_GROUP ${output_path})
+    list(APPEND FILAMAT_TARGETS_FOR_GROUP ${output_path})
+endmacro()
 
 # For each directory, generate a single resource package
 foreach(mat_dir ${MATERIAL_DIRS})
@@ -393,44 +437,35 @@ foreach(mat_dir ${MATERIAL_DIRS})
 
         # --- Base material ---
         set(output_path "${MATERIAL_DIR}/${localname}.filamat")
-        add_custom_command(
-                OUTPUT ${output_path}
-                COMMAND matc ${MATC_BASE_FLAGS} -o ${output_path} ${fullname}
-                MAIN_DEPENDENCY ${fullname}
-                DEPENDS matc
-                COMMENT "Compiling material ${fullname}"
-        )
-        list(APPEND FILAMAT_FILES_FOR_GROUP ${output_path})
-        list(APPEND FILAMAT_TARGETS_FOR_GROUP ${output_path})
+        set(MATC_CUSTOM_FLAGS "${MATC_BASE_FLAGS}")
+        set(COMMENT_STR "Compiling material ${fullname}")
 
-        # --- Feature Level 0 variant ---
-        list(FIND MATERIAL_FL0_SRCS ${mat_src} index)
-        if (${index} GREATER -1 AND FILAMENT_ENABLE_FEATURE_LEVEL_0)
-            string(REGEX REPLACE "[.]filamat$" "_fl0.filamat" output_path_fl0 ${output_path})
-            add_custom_command(
-                    OUTPUT ${output_path_fl0}
-                    COMMAND matc ${MATC_BASE_FLAGS} -PfeatureLevel=0 -o ${output_path_fl0} ${fullname}
-                    MAIN_DEPENDENCY ${fullname}
-                    DEPENDS matc
-                    COMMENT "Compiling material ${fullname} (FL0)"
-            )
-            list(APPEND FILAMAT_FILES_FOR_GROUP ${output_path_fl0})
-            list(APPEND FILAMAT_TARGETS_FOR_GROUP ${output_path_fl0})
+        check_in_list(MATERIAL_VULKAN_METAL_SRCS ${mat_src} is_vk_metal)
+        if (is_vk_metal)
+            # Remove webgpu and related parameters
+            # The variant-filter=stereo is added in the root folder's CMakeLists.txt for webgpu
+            # Context is that webgpu does not support the stereo variant
+            string(REPLACE "-a;webgpu;--variant-filter=stereo" "" MATC_CUSTOM_FLAGS "${MATC_CUSTOM_FLAGS}")
+
+            # Remove gl
+            string(REPLACE "-a;opengl" "" MATC_CUSTOM_FLAGS "${MATC_CUSTOM_FLAGS}")
+
+            # Remove any empty args
+            string(REPLACE ";;" ";" MATC_CUSTOM_FLAGS "${MATC_CUSTOM_FLAGS}")
+            string(REGEX REPLACE "^;|;$" "" MATC_CUSTOM_FLAGS "${MATC_CUSTOM_FLAGS}")
+
+            set(COMMENT_STR "Compiling material ${fullname} (Vulkan/Metal)")
         endif()
 
+        compile_material(${output_path} ${fullname} MATC_CUSTOM_FLAGS "${COMMENT_STR}")
+
         # --- Multiview variant ---
-        list(FIND MATERIAL_MULTIVIEW_SRCS ${mat_src} index)
-        if (${index} GREATER -1 AND FILAMENT_ENABLE_MULTIVIEW)
+        check_in_list(MATERIAL_MULTIVIEW_SRCS ${mat_src} is_multiview)
+        if (is_multiview AND FILAMENT_ENABLE_MULTIVIEW)
             string(REGEX REPLACE "[.]filamat$" "_multiview.filamat" output_path_multiview ${output_path})
-            add_custom_command(
-                    OUTPUT ${output_path_multiview}
-                    COMMAND matc ${MATC_BASE_FLAGS} -PstereoscopicType=multiview -o ${output_path_multiview} ${fullname}
-                    MAIN_DEPENDENCY ${fullname}
-                    DEPENDS matc
-                    COMMENT "Compiling material ${fullname} (Multiview)"
-            )
-            list(APPEND FILAMAT_FILES_FOR_GROUP ${output_path_multiview})
-            list(APPEND FILAMAT_TARGETS_FOR_GROUP ${output_path_multiview})
+            set(MATC_MULTIVIEW_FLAGS "${MATC_BASE_FLAGS}" "-PstereoscopicType=multiview")
+            set(COMMENT_STR "Compiling material ${fullname} (Multiview)")
+            compile_material(${output_path_multiview} ${fullname} MATC_MULTIVIEW_FLAGS "${COMMENT_STR}")
         endif()
     endforeach()
 
@@ -503,6 +538,14 @@ add_custom_command(
 add_custom_command(
         OUTPUT "${MATERIAL_DIR}/dofCombine.filamat"
         DEPENDS src/materials/dof/dofUtils.fs
+        APPEND
+)
+
+add_custom_command(
+        OUTPUT "${MATERIAL_DIR}/fog.filamat"
+        DEPENDS ../shaders/src/surface_fog.fs
+        DEPENDS src/materials/utils/depthUtils.fs
+        DEPENDS src/materials/utils/geometry.fs
         APPEND
 )
 
@@ -607,6 +650,12 @@ add_custom_command(
         APPEND
 )
 
+add_custom_command(
+        OUTPUT "${MATERIAL_DIR}/gaussian.filamat"
+        DEPENDS src/materials/evsm/gaussian.fs
+        APPEND
+)
+
 file(MAKE_DIRECTORY "${GENERATION_ROOT}/generated/data/")
 
 set(output_path_dfg_bin "${GENERATION_ROOT}/generated/data/dfg.bin")
@@ -695,9 +744,16 @@ if (MSVC)
     set(OPTIMIZATION_FLAGS
         /fp:fast
     )
-elseif(WEBGL)
+elseif (WASM)
     # Avoid strict-vtable-pointers here, it is broken in WebAssembly.
     set(OPTIMIZATION_FLAGS -fvisibility-inlines-hidden)
+elseif (FILAMENT_USING_GCC)
+    set(OPTIMIZATION_FLAGS
+        -ffast-math
+        -fno-finite-math-only
+        -ffp-contract=fast
+        -fvisibility-inlines-hidden
+    )
 else()
     set(OPTIMIZATION_FLAGS
         -ffast-math
@@ -719,6 +775,18 @@ set(LINUX_COMPILER_FLAGS
 
 if (MSVC)
     set(FILAMENT_WARNINGS /W3)
+elseif (FILAMENT_USING_GCC)
+    # GCC is not officially supported, so use a weaker set of warnings (incl. not using -Werror).
+    set(FILAMENT_WARNINGS
+            -Wall -Wextra-semi -Wundef
+            -Wno-unused-parameter -Wno-missing-field-initializers
+            -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-function
+            -Wnon-virtual-dtor -Wimplicit-fallthrough
+            -Wno-strict-aliasing
+            -Wno-changes-meaning -Wno-return-type
+            -Wno-invalid-constexpr -Wno-parentheses
+            -Wno-sign-compare -Wno-deprecated-declarations
+    )
 else()
     set(FILAMENT_WARNINGS
             -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers

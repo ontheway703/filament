@@ -39,37 +39,33 @@ MetalBuffer::MetalBuffer(MetalContext& context, BufferObjectBinding bindingType,
         mUploadStrategy = UploadStrategy::POOL;
     }
 
-    // If the buffer is less than 4K in size and is updated frequently, we don't use an explicit
-    // buffer. Instead, we use immediate command encoder methods like setVertexBytes:length:atIndex:.
-    // This won't work for SSBOs, since they are read/write.
+    MTLResourceOptions options = MTLResourceStorageModePrivate;
 
-    /*
-    if (size <= 4 * 1024 && bindingType != BufferObjectBinding::SHADER_STORAGE &&
-            usage == BufferUsage::DYNAMIC && !forceGpuBuffer) {
-        mBuffer = nil;
-        mCpuBuffer = malloc(size);
-        return;
+    // The buffer will be memory mapped for write operations.
+    if (any(usage & BufferUsage::SHARED_WRITE_BIT)) {
+#if defined(FILAMENT_IOS) || defined(__arm64__) || defined(__aarch64__)
+        // iOS and Apple Silicon devices use UMA (Unified Memory Architecture), so we use Shared memory.
+        options = MTLResourceStorageModeShared;
+#else
+        // Intel Macs require Managed memory for CPU/GPU synchronization.
+        options = MTLResourceStorageModeManaged;
+#endif
     }
-    */
 
-    // Otherwise, we allocate a private GPU buffer.
     {
         ScopedAllocationTimer timer("generic");
-        mBuffer = { [context.device newBufferWithLength:size options:MTLResourceStorageModePrivate],
+        mBuffer = { [context.device newBufferWithLength:size options:options],
             TrackedMetalBuffer::Type::GENERIC };
     }
+
     // mBuffer might fail to be allocated. Clients can check for this by calling
     // wasAllocationSuccessful().
 }
 
-MetalBuffer::~MetalBuffer() {
-    if (mCpuBuffer) {
-        free(mCpuBuffer);
-    }
-}
+MetalBuffer::~MetalBuffer() = default;
 
-void MetalBuffer::copyIntoBuffer(
-        void* src, size_t size, size_t byteOffset, TagResolver&& getHandleTag) {
+void MetalBuffer::copyIntoBuffer(id<MTLCommandBuffer> cmdBuffer, void* src, size_t size,
+        size_t byteOffset, TagResolver&& getHandleTag) {
     if (size <= 0) {
         return;
     }
@@ -83,34 +79,27 @@ void MetalBuffer::copyIntoBuffer(
     FILAMENT_CHECK_PRECONDITION(!(byteOffset & 0x3))
             << "byteOffset must be a multiple of 4, tag=" << getHandleTag();
 
-    // If we have a cpu buffer, we can directly copy into it.
-    if (mCpuBuffer) {
-        memcpy(static_cast<uint8_t*>(mCpuBuffer) + byteOffset, src, size);
-        return;
-    }
+    id<MTLCommandBuffer> targetCmdBuffer =
+            cmdBuffer ? cmdBuffer : getPendingCommandBuffer(&mContext);
 
     switch (mUploadStrategy) {
         case UploadStrategy::BUMP_ALLOCATOR:
-            uploadWithBumpAllocator(src, size, byteOffset, std::move(getHandleTag));
+            uploadWithBumpAllocator(targetCmdBuffer, src, size, byteOffset,
+                    std::move(getHandleTag));
             break;
         case UploadStrategy::POOL:
-            uploadWithPoolBuffer(src, size, byteOffset, std::move(getHandleTag));
+            uploadWithPoolBuffer(targetCmdBuffer, src, size, byteOffset, std::move(getHandleTag));
             break;
     }
 }
 
-void MetalBuffer::copyIntoBufferUnsynchronized(
-        void* src, size_t size, size_t byteOffset, TagResolver&& getHandleTag) {
+void MetalBuffer::copyIntoBufferUnsynchronized(id<MTLCommandBuffer> cmdBuffer, void* src,
+        size_t size, size_t byteOffset, TagResolver&& getHandleTag) {
     // TODO: implement the unsynchronized version
-    copyIntoBuffer(src, size, byteOffset, std::move(getHandleTag));
+    copyIntoBuffer(cmdBuffer, src, size, byteOffset, std::move(getHandleTag));
 }
 
 id<MTLBuffer> MetalBuffer::getGpuBufferForDraw() noexcept {
-    // If there's a CPU buffer, then we return nil here, as the CPU-side buffer will be bound
-    // separately.
-    if (mCpuBuffer) {
-        return nil;
-    }
     assert_invariant(mBuffer);
     return mBuffer.get();
 }
@@ -171,45 +160,10 @@ void MetalBuffer::bindBuffers(id<MTLCommandBuffer> cmdBuffer, id<MTLCommandEncod
                                                    offsets:metalOffsets.data()
                                                  withRange:bufferRange];
     }
-
-    for (size_t b = 0; b < count; b++) {
-        MetalBuffer* const buffer = buffers[b];
-        if (!buffer) {
-            continue;
-        }
-
-        const void* cpuBuffer = buffer->getCpuBuffer();
-        if (!cpuBuffer) {
-            continue;
-        }
-
-        const size_t bufferIndex = bufferStart + b;
-        const size_t offset = offsets[b];
-        auto* bytes = static_cast<const uint8_t*>(cpuBuffer);
-
-        if (stages & Stage::VERTEX) {
-            [(id<MTLRenderCommandEncoder>) encoder setVertexBytes:(bytes + offset)
-                                                           length:(buffer->getSize() - offset)
-                                                          atIndex:bufferIndex];
-        }
-        if (stages & Stage::FRAGMENT) {
-            [(id<MTLRenderCommandEncoder>) encoder setFragmentBytes:(bytes + offset)
-                                                             length:(buffer->getSize() - offset)
-                                                            atIndex:bufferIndex];
-        }
-        if (stages & Stage::COMPUTE) {
-            // TODO: using setBytes means the data is read-only, which currently isn't enforced.
-            // In practice this won't be an issue since MetalBuffer ensures all SSBOs are realized
-            // through actual id<MTLBuffer> allocations.
-            [(id<MTLComputeCommandEncoder>) encoder setBytes:(bytes + offset)
-                                                      length:(buffer->getSize() - offset)
-                                                     atIndex:bufferIndex];
-        }
-    }
 }
 
-void MetalBuffer::uploadWithPoolBuffer(
-        void* src, size_t size, size_t byteOffset, TagResolver&& getHandleTag) const {
+void MetalBuffer::uploadWithPoolBuffer(id<MTLCommandBuffer> cmdBuffer, void* src, size_t size,
+        size_t byteOffset, TagResolver&& getHandleTag) const {
     MetalBufferPool* bufferPool = mContext.bufferPool;
     const MetalBufferPoolEntry* const staging = bufferPool->acquireBuffer(size);
     FILAMENT_CHECK_POSTCONDITION(staging)
@@ -218,7 +172,6 @@ void MetalBuffer::uploadWithPoolBuffer(
     memcpy(staging->buffer.get().contents, src, size);
 
     // Encode a blit from the staging buffer into the private GPU buffer.
-    id<MTLCommandBuffer> cmdBuffer = getPendingCommandBuffer(&mContext);
     id<MTLBlitCommandEncoder> blitEncoder = [cmdBuffer blitCommandEncoder];
     blitEncoder.label = @"Buffer upload blit - pool buffer";
     [blitEncoder copyFromBuffer:staging->buffer.get()
@@ -232,8 +185,8 @@ void MetalBuffer::uploadWithPoolBuffer(
     }];
 }
 
-void MetalBuffer::uploadWithBumpAllocator(
-        void* src, size_t size, size_t byteOffset, TagResolver&& getHandleTag) const {
+void MetalBuffer::uploadWithBumpAllocator(id<MTLCommandBuffer> cmdBuffer, void* src, size_t size,
+        size_t byteOffset, TagResolver&& getHandleTag) const {
     MetalBumpAllocator& allocator = *mContext.bumpAllocator;
     auto [buffer, offset] = allocator.allocateStagingArea(size);
     FILAMENT_CHECK_POSTCONDITION(buffer)
@@ -246,7 +199,6 @@ void MetalBuffer::uploadWithBumpAllocator(
     memcpy(static_cast<char*>(contents) + offset, src, size);
 
     // Encode a blit from the staging buffer into the private GPU buffer.
-    id<MTLCommandBuffer> cmdBuffer = getPendingCommandBuffer(&mContext);
     id<MTLBlitCommandEncoder> blitEncoder = [cmdBuffer blitCommandEncoder];
     blitEncoder.label = @"Buffer upload blit - bump allocator";
     [blitEncoder copyFromBuffer:buffer

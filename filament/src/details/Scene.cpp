@@ -232,13 +232,16 @@ void FScene::prepare(JobSystem& js,
             sceneData.elementAt<INSTANCES>(index)           = rcm.getInstancesInfo(ri);
             sceneData.elementAt<WORLD_AABB_CENTER>(index)   = worldAABB.center;
             sceneData.elementAt<VISIBLE_MASK>(index)        = 0;
-            sceneData.elementAt<CHANNELS>(index)            = rcm.getChannels(ri);
+            sceneData.elementAt<CHANNELS>(index)            = rcm.getLightChannels(ri);
             sceneData.elementAt<LAYERS>(index)              = rcm.getLayerMask(ri);
             sceneData.elementAt<WORLD_AABB_EXTENT>(index)   = worldAABB.halfExtent;
             //sceneData.elementAt<PRIMITIVES>(index)          = {}; // already initialized, Slice<>
             sceneData.elementAt<SUMMED_PRIMITIVE_COUNT>(index) = 0;
             //sceneData.elementAt<UBO>(index)                 = {}; // not needed here
             sceneData.elementAt<USER_DATA>(index)           = scale;
+
+
+            sceneData.elementAt<SKINNING_STATE>(index) = rcm.getSkinning(ri);
         }
     };
 
@@ -342,6 +345,7 @@ void FScene::prepare(JobSystem& js,
             sceneData.data<LAYERS>()[i] = 0;
             sceneData.data<VISIBLE_MASK>()[i] = 0;
             sceneData.data<VISIBILITY_STATE>()[i] = {};
+            sceneData.data<SKINNING_STATE>()[i] = {};
         }
     }
 
@@ -360,6 +364,7 @@ void FScene::prepareVisibleRenderables(Range<uint32_t> visibleRenderables) noexc
         PerRenderableData& uboData = sceneData.elementAt<UBO>(i);
 
         auto const visibility = sceneData.elementAt<VISIBILITY_STATE>(i);
+        auto const skinning = sceneData.elementAt<SKINNING_STATE>(i);
         auto const& model = sceneData.elementAt<WORLD_TRANSFORM>(i);
         auto const ri = sceneData.elementAt<RENDERABLE_INSTANCE>(i);
 
@@ -389,8 +394,8 @@ void FScene::prepareVisibleRenderables(Range<uint32_t> visibleRenderables) noexc
         uboData.worldFromModelNormalMatrix = m;
 
         uboData.flagsChannels = PerRenderableData::packFlagsChannels(
-                visibility.skinning,
-                visibility.morphing,
+                skinning.skinning,
+                static_cast<uint8_t>(skinning.morphType),
                 visibility.screenSpaceContactShadows,
                 sceneData.elementAt<INSTANCES>(i).buffer != nullptr,
                 sceneData.elementAt<CHANNELS>(i));

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <backend/platforms/WebGPUPlatform.h>
+#include <backend/platforms/WebGPUPlatformLinux.h>
 
 #include <backend/DriverEnums.h>
 
@@ -56,6 +56,8 @@
             void* library { nullptr };
         } g_x11;
     } // namespace
+#elif defined(FILAMENT_SUPPORTS_OSMESA)
+    // No need
 #else
     #error Not a supported Linux or FeeBSD + WebGPU platform
 #endif
@@ -66,7 +68,7 @@
 
 namespace filament::backend {
 
-std::vector<wgpu::RequestAdapterOptions> WebGPUPlatform::getAdapterOptions() {
+std::vector<wgpu::RequestAdapterOptions> WebGPUPlatformLinux::getAdapterOptions() {
     constexpr std::array powerPreferences = {
         wgpu::PowerPreference::HighPerformance,
         wgpu::PowerPreference::LowPower };
@@ -93,7 +95,7 @@ std::vector<wgpu::RequestAdapterOptions> WebGPUPlatform::getAdapterOptions() {
     return requests;
 }
 
-wgpu::Extent2D WebGPUPlatform::getSurfaceExtent(void* nativeWindow) const {
+wgpu::Extent2D WebGPUPlatformLinux::getSurfaceExtent(void* nativeWindow) const {
     auto surfaceExtent = wgpu::Extent2D{};
 #if defined(__linux__) && defined(FILAMENT_SUPPORTS_WAYLAND)
     wl* ptrval = reinterpret_cast<wl*>(nativeWindow);
@@ -128,7 +130,7 @@ wgpu::Extent2D WebGPUPlatform::getSurfaceExtent(void* nativeWindow) const {
     return surfaceExtent;
 }
 
-wgpu::Surface WebGPUPlatform::createSurface(void* nativeWindow, uint64_t /*flags*/) {
+wgpu::Surface WebGPUPlatformLinux::createSurface(void* nativeWindow, uint64_t /*flags*/) {
     wgpu::Surface surface = nullptr;
 #if defined(__linux__) && defined(FILAMENT_SUPPORTS_WAYLAND)
     wl* ptrval = reinterpret_cast<wl*>(nativeWindow);

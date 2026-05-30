@@ -18,6 +18,9 @@
 #define TNT_FILAMENT_BACKEND_VULKANFBOCACHE_H
 
 #include "VulkanContext.h"
+#include "vulkan/memory/Resource.h"
+#include "vulkan/memory/ResourceManager.h"
+#include "vulkan/memory/ResourcePointer.h"
 
 #include <utils/Hash.h>
 
@@ -26,6 +29,9 @@
 #include <tsl/robin_map.h>
 
 namespace filament::backend {
+
+struct VulkanFramebuffer;
+struct VulkanRenderPass;
 
 // Simple manager for VkFramebuffer and VkRenderPass objects.
 //
@@ -37,18 +43,18 @@ class VulkanFboCache {
 public:
     constexpr static VulkanLayout FINAL_COLOR_ATTACHMENT_LAYOUT = VulkanLayout::COLOR_ATTACHMENT;
     constexpr static VulkanLayout FINAL_RESOLVE_ATTACHMENT_LAYOUT = VulkanLayout::COLOR_ATTACHMENT;
-    constexpr static VulkanLayout FINAL_DEPTH_ATTACHMENT_LAYOUT = VulkanLayout::DEPTH_ATTACHMENT;
+    constexpr static VulkanLayout FINAL_DEPTH_STENCIL_ATTACHMENT_LAYOUT = VulkanLayout::DEPTH_STENCIL_ATTACHMENT;
 
     // RenderPassKey is a small POD representing the immutable state that is used to construct
     // a VkRenderPass. It is hashed and used as a lookup key.
     struct alignas(8) RenderPassKey {
         VkFormat colorFormat[MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT]; // 32 bytes
-        VkFormat depthFormat; // 4 bytes
+        VkFormat depthStencilFormat; // 4 bytes
         TargetBufferFlags clear; // 4 bytes
         TargetBufferFlags discardStart; // 4 bytes
         TargetBufferFlags discardEnd; // 4 bytes
 
-        VulkanLayout initialDepthLayout; // 1 byte
+        VulkanLayout initialDepthStencilLayout; // 1 byte
         uint8_t samples; // 1 byte
         uint8_t needsResolveMask; // 1 byte
         uint8_t usesLazilyAllocatedMemory; // 1 byte
@@ -57,7 +63,7 @@ public:
         uint8_t padding[2];
     };
     struct RenderPassVal {
-        VkRenderPass handle;
+        fvkmemory::resource_ptr<VulkanRenderPass> handle;
         uint32_t timestamp;
     };
     static_assert(0 == MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT % 8);
@@ -80,10 +86,10 @@ public:
         uint16_t samples; // 2 bytes
         VkImageView color[MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT]; // 64 bytes
         VkImageView resolve[MRT::MAX_SUPPORTED_RENDER_TARGET_COUNT]; // 64 bytes
-        VkImageView depth; // 8 bytes
+        VkImageView depthStencil; // 8 bytes
     };
     struct FboVal {
-        VkFramebuffer handle;
+        fvkmemory::resource_ptr<VulkanFramebuffer> handle;
         uint32_t timestamp;
     };
     static_assert(sizeof(VkRenderPass) == 8, "VkRenderPass has unexpected size.");
@@ -94,14 +100,17 @@ public:
         bool operator()(const FboKey& k1, const FboKey& k2) const;
     };
 
-    explicit VulkanFboCache(VkDevice device);
+    explicit VulkanFboCache(VkDevice device, uint32_t timeBeforeEvictionFbo);
     ~VulkanFboCache();
 
     // Retrieves or creates a VkFramebuffer handle.
-    VkFramebuffer getFramebuffer(FboKey const& config) noexcept;
+    fvkmemory::resource_ptr<VulkanFramebuffer> getFramebuffer(FboKey const& config,
+            fvkmemory::ResourceManager* resManager,
+            fvkmemory::resource_ptr<VulkanRenderTarget> renderTarget) noexcept;
 
     // Retrieves or creates a VkRenderPass handle.
-    VkRenderPass getRenderPass(RenderPassKey const& config) noexcept;
+    fvkmemory::resource_ptr<VulkanRenderPass> getRenderPass(
+        RenderPassKey const& config, fvkmemory::ResourceManager* resManager) noexcept;
 
     // Evicts old unused Vulkan objects. Call this once per frame.
     void gc() noexcept;
@@ -117,9 +126,11 @@ private:
     using FboMap = tsl::robin_map<FboKey, FboVal, FboKeyHashFn, FboKeyEqualFn>;
     FboMap mFramebufferCache;
 
-    tsl::robin_map<RenderPassKey, RenderPassVal, RenderPassHash, RenderPassEq> mRenderPassCache;
+    using RenderPassMap = tsl::robin_map<RenderPassKey, RenderPassVal, RenderPassHash, RenderPassEq>;
+    RenderPassMap mRenderPassCache;
     tsl::robin_map<VkRenderPass, uint32_t> mRenderPassRefCount;
     uint32_t mCurrentTime = 0;
+    uint32_t mTimeBeforeEvictionFbo;
 };
 
 } // namespace filament::backend

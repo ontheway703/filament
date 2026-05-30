@@ -16,38 +16,42 @@
 
 #include "PlatformRunner.h"
 
-#include <getopt/getopt.h>
+#include <utils/getopt.h>
 
 #include <iostream>
 #include <string>
 
 namespace test {
 
-Backend parseArgumentsForBackend(int argc, char* argv[]) {
-    Backend backend = Backend::OPENGL;
+TestArguments parseArguments(int argc, char* argv[]) {
+    TestArguments arguments = {};
+    arguments.backend = Backend::OPENGL;
+
     // The first colon in OPTSTR turns on silent error reporting. This is important, as the
     // arguments may also contain gtest parameters we don't know about.
-    static constexpr const char* OPTSTR = ":a:";
-    static const struct option OPTIONS[] = {
-            { "api", required_argument, nullptr, 'a' },
-            { nullptr, 0, nullptr, 0 }  // termination of the option list
+    static constexpr const char* OPTSTR = ":a:kc";
+    static const utils::getopt::option OPTIONS[] = {
+            { "api", utils::getopt::required_argument, nullptr, 'a' },
+            { "headless_only", utils::getopt::no_argument, nullptr, 'k' },
+            { "ci", utils::getopt::no_argument, nullptr, 'c' },
+            { nullptr, 0, nullptr, 0 }  // termination of the utils::getopt::option list
     };
 
     int opt;
     int optionIndex = 0;
 
-    while ((opt = getopt_long(argc, argv, OPTSTR, OPTIONS, &optionIndex)) >= 0) {
-        std::string arg(optarg ? optarg : "");
+    while ((opt = utils::getopt::getopt_long(argc, argv, OPTSTR, OPTIONS, &optionIndex)) >= 0) {
+        std::string arg(utils::getopt::optarg ? utils::getopt::optarg : "");
         switch (opt) {
             case 'a':
                 if (arg == "opengl") {
-                    backend = Backend::OPENGL;
+                    arguments.backend = Backend::OPENGL;
                 } else if (arg == "vulkan") {
-                    backend = Backend::VULKAN;
+                    arguments.backend = Backend::VULKAN;
                 } else if (arg == "metal") {
-                    backend = Backend::METAL;
+                    arguments.backend = Backend::METAL;
                 } else if (arg == "webgpu") {
-                    backend = Backend::WEBGPU;
+                    arguments.backend = Backend::WEBGPU;
                 } else {
                     std::cerr << "Unrecognized target API. Must be 'opengl'|'vulkan'|'metal'|'webgpu'."
                               << std::endl
@@ -55,10 +59,16 @@ Backend parseArgumentsForBackend(int argc, char* argv[]) {
                               << std::endl;
                 }
                 break;
+            case 'k':
+                arguments.headlessOnly = true;
+                break;
+            case 'c':
+                arguments.isContinuousIntegration = true;
+                break;
         }
     }
 
-    return backend;
+    return arguments;
 }
 
 } // namespace test

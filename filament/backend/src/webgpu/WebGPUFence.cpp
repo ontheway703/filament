@@ -15,35 +15,14 @@
  */
 
 #include "WebGPUFence.h"
-#include "WebGPUConstants.h"
 
-#include <backend/DriverEnums.h>
-
-#include <webgpu/webgpu_cpp.h>
-
-#include <atomic>
+#include <chrono>
 
 namespace filament::backend {
 
-FenceStatus WebGPUFence::getStatus() { return mStatus.load(); }
+WebGPUFence::WebGPUFence() = default;
+WebGPUFence::~WebGPUFence() = default;
 
-void WebGPUFence::addMarkerToQueueState(wgpu::Queue const& queue) {
-    // The lambda function is called when the work is done. It updates the fence status based on the
-    // result of the work.
-    queue.OnSubmittedWorkDone(
-        wgpu::CallbackMode::AllowSpontaneous,
-        [this](const wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
-            switch (status) {
-                case wgpu::QueueWorkDoneStatus::Success:
-                    mStatus.store(FenceStatus::CONDITION_SATISFIED);
-                    break;
-                case wgpu::QueueWorkDoneStatus::CallbackCancelled:
-                case wgpu::QueueWorkDoneStatus::Error:
-                    mStatus.store(FenceStatus::ERROR);
-                    FWGPU_LOGW << "WebGPUFence: wgpu::QueueWorkDoneStatus::Error. " << message;
-                    break;
-            }
-        });
-}
+
 
 } // namespace filament::backend

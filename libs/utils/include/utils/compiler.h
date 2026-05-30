@@ -33,7 +33,7 @@
 #if __has_attribute(visibility)
 #    define UTILS_PUBLIC  __attribute__((visibility("default")))
 #else
-#    define UTILS_PUBLIC  
+#    define UTILS_PUBLIC
 #endif
 
 #if __has_attribute(deprecated)
@@ -102,6 +102,14 @@
 #else
 #   define UTILS_LIKELY( exp )    (!!(exp))
 #   define UTILS_UNLIKELY( exp )  (!!(exp))
+#endif
+
+#if __has_builtin(__builtin_mul_overflow)
+#   define UTILS_HAS_BUILTIN_MUL_OVERFLOW 1
+#   define UTILS_MUL_OVERFLOW(a, b, res) __builtin_mul_overflow((a), (b), (res))
+#else
+#   define UTILS_HAS_BUILTIN_MUL_OVERFLOW 0
+#   define UTILS_MUL_OVERFLOW(a, b, res) (*(res) = (a) * (b), false)
 #endif
 
 #if __has_builtin(__builtin_expect_with_probability)
@@ -264,7 +272,7 @@ typedef SSIZE_T ssize_t;
 
 #if defined(_MSC_VER) && !defined(__PRETTY_FUNCTION__)
 #    define __PRETTY_FUNCTION__ __FUNCSIG__
-#endif 
+#endif
 
 
 #if defined(_MSC_VER)

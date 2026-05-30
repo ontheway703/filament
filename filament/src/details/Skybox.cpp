@@ -21,6 +21,7 @@
 #include "details/Material.h"
 #include "details/Texture.h"
 #include "details/VertexBuffer.h"
+#include "details/IndexBuffer.h"
 
 #include "FilamentAPI-impl.h"
 
@@ -51,6 +52,7 @@ struct Skybox::BuilderDetails {
     float4 mColor{0, 0, 0, 1};
     float mIntensity = FIndirectLight::DEFAULT_INTENSITY;
     bool mShowSun = false;
+    uint8_t mPriority = 7;
 };
 
 using BuilderType = Skybox;
@@ -77,13 +79,18 @@ Skybox::Builder& Skybox::Builder::color(float4 const color) noexcept {
     return *this;
 }
 
+Skybox::Builder& Skybox::Builder::priority(uint8_t const priority) noexcept {
+    mImpl->mPriority = priority;
+    return *this;
+}
+
 Skybox::Builder& Skybox::Builder::showSun(bool const show) noexcept {
     mImpl->mShowSun = show;
     return *this;
 }
 
 Skybox* Skybox::Builder::build(Engine& engine) {
-    FTexture* cubemap = downcast(mImpl->mEnvironmentMap);
+    FTexture const* cubemap = downcast(mImpl->mEnvironmentMap);
 
     FILAMENT_CHECK_PRECONDITION(!cubemap || cubemap->isCubemap())
             << "environment maps must be a cubemap";
@@ -118,33 +125,26 @@ FSkybox::FSkybox(FEngine& engine, const Builder& builder) noexcept
             .material(0, mSkyboxMaterialInstance)
             .castShadows(false)
             .receiveShadows(false)
-            .priority(0x7)
+            .priority(builder->mPriority)
             .culling(false)
             .build(engine, mSkybox);
 }
 
 FMaterial const* FSkybox::createMaterial(FEngine& engine) {
     Material::Builder builder;
-#ifdef FILAMENT_ENABLE_FEATURE_LEVEL_0
-    if (UTILS_UNLIKELY(engine.getActiveFeatureLevel() == Engine::FeatureLevel::FEATURE_LEVEL_0)) {
-        builder.package(MATERIALS_SKYBOX_FL0_DATA, MATERIALS_SKYBOX_FL0_SIZE);
-    } else
-#endif
-    {
-        switch (engine.getConfig().stereoscopicType) {
-            case Engine::StereoscopicType::NONE:
-            case Engine::StereoscopicType::INSTANCED:
-                builder.package(MATERIALS_SKYBOX_DATA, MATERIALS_SKYBOX_SIZE);
-                break;
-            case Engine::StereoscopicType::MULTIVIEW:
+    switch (engine.getConfig().stereoscopicType) {
+        case Engine::StereoscopicType::NONE:
+        case Engine::StereoscopicType::INSTANCED:
+            builder.package(MATERIALS_SKYBOX_DATA, MATERIALS_SKYBOX_SIZE);
+            break;
+        case Engine::StereoscopicType::MULTIVIEW:
 #ifdef FILAMENT_ENABLE_MULTIVIEW
-                builder.package(MATERIALS_SKYBOX_MULTIVIEW_DATA, MATERIALS_SKYBOX_MULTIVIEW_SIZE);
+            builder.package(MATERIALS_SKYBOX_MULTIVIEW_DATA, MATERIALS_SKYBOX_MULTIVIEW_SIZE);
 #else
-                PANIC_POSTCONDITION("Multiview is enabled in the Engine, but this build has not "
-                                    "been compiled for multiview.");
+            PANIC_POSTCONDITION("Multiview is enabled in the Engine, but this build has not "
+                                "been compiled for multiview.");
 #endif
-                break;
-        }
+            break;
     }
     auto material = builder.build(engine);
     return downcast(material);

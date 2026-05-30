@@ -29,13 +29,12 @@
 #include <bluevk/BlueVK.h>
 #include <utils/FixedCapacityVector.h>
 
+#include <memory>
 
 using namespace bluevk;
 
 namespace filament::backend {
 
-struct VulkanHeadlessSwapChain;
-struct VulkanSurfaceSwapChain;
 class VulkanCommands;
 
 // A wrapper around the platform implementation of swapchain.
@@ -82,8 +81,13 @@ struct VulkanSwapChain : public HwSwapChain, fvkmemory::Resource {
 
     inline void setFrameScheduledCallback(CallbackHandler* handler,
             FrameScheduledCallback&& callback) noexcept {
-        frameScheduled.handler = handler;
-        frameScheduled.callback = std::move(callback);
+        if (!callback) {
+            mFrameScheduled.handler = nullptr;
+            mFrameScheduled.callback.reset();
+            return;
+        }
+        mFrameScheduled.handler = handler;
+        mFrameScheduled.callback = std::make_shared<FrameScheduledCallback>(std::move(callback));
     }
 
 private:
@@ -104,12 +108,13 @@ private:
     // These fields store a callback to notify the client that Filament is commiting a frame.
     struct {
         CallbackHandler* handler = nullptr;
-        FrameScheduledCallback callback;
-    } frameScheduled;
+        std::shared_ptr<FrameScheduledCallback> callback;
+    } mFrameScheduled;
 
     // We create VulkanTextures based on VkImages. VulkanTexture has facilities for doing layout
     // transitions, which are useful here.
     utils::FixedCapacityVector<fvkmemory::resource_ptr<VulkanTexture>> mColors;
+    utils::FixedCapacityVector<fvkmemory::resource_ptr<VulkanSemaphore>> mFinishedDrawing;
     fvkmemory::resource_ptr<VulkanTexture> mDepth;
     VkExtent2D mExtent;
     uint32_t mLayerCount;

@@ -17,12 +17,17 @@
 #ifndef TNT_FILAMENT_BACKEND_WEBGPUSWAPCHAIN_H
 #define TNT_FILAMENT_BACKEND_WEBGPUSWAPCHAIN_H
 
-#include <webgpu/webgpu_cpp.h>
-
 #include "DriverBase.h"
 #include <backend/Platform.h>
 
+#if defined(__EMSCRIPTEN__)
+#include <backend/platforms/WebGPUWasmPolyfill.h>
+#endif
+
+#include <webgpu/webgpu_cpp.h>
+
 #include <cstdint>
+#include <memory>
 
 namespace filament::backend {
 
@@ -49,11 +54,19 @@ public:
 
     [[nodiscard]] bool isHeadless() const { return mType == SwapChainType::HEADLESS; }
 
+    [[nodiscard]] uint32_t getWidth() const { return mConfig.width; }
+    [[nodiscard]] uint32_t getHeight() const { return mConfig.height; }
+
     void present(DriverBase& driver);
 
     void setFrameScheduledCallback(CallbackHandler* handler, FrameScheduledCallback&& callback) {
-        frameScheduled.handler = handler;
-        frameScheduled.callback = std::move(callback);
+        if (!callback) {
+            mFrameScheduled.handler = nullptr;
+            mFrameScheduled.callback.reset();
+            return;
+        }
+        mFrameScheduled.handler = handler;
+        mFrameScheduled.callback = std::make_shared<FrameScheduledCallback>(std::move(callback));
     }
 
 private:
@@ -83,8 +96,8 @@ private:
 
     struct {
         CallbackHandler* handler = nullptr;
-        FrameScheduledCallback callback;
-    } frameScheduled;
+        std::shared_ptr<FrameScheduledCallback> callback;
+    } mFrameScheduled;
 };
 
 } // namespace filament::backend

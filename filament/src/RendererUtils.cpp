@@ -58,7 +58,8 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
         FrameGraph& fg, const char* name, FEngine& engine, FView const& view,
         ColorPassInput const& colorPassInput,
         FrameGraphTexture::Descriptor const& colorBufferDesc,
-        ColorPassConfig const& config, PostProcessManager::ColorGradingConfig const colorGradingConfig,
+        ColorPassConfig const& config,
+        PostProcessManager::ColorGradingConfig const colorGradingConfig,
         RenderPass::Executor passExecutor) noexcept {
 
     struct ColorPassData {
@@ -92,7 +93,7 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                     }
                 }
 
-                if (config.hasContactShadows) {
+                if (config.hasContactShadows || config.fogAsPostProcess) {
                     data.structure = colorPassInput.structure;
                     assert_invariant(data.structure);
                     data.structure = builder.sample(data.structure);
@@ -110,7 +111,7 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                     data.color = builder.createTexture("Color Buffer", colorBufferDesc);
                 }
 
-                const bool canAutoResolveDepth = engine.getDriverApi().isAutoDepthResolveSupported();
+                const bool canAutoResolveDepth = config.isAutoDepthResolveSupported;
 
                 FrameGraphTexture::Usage depthStencilUsage = FrameGraphTexture::Usage::DEPTH_ATTACHMENT;
 
@@ -119,11 +120,12 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                     clearDepthFlags = TargetBufferFlags::DEPTH;
                     clearStencilFlags = config.enabledStencilBuffer ?
                             TargetBufferFlags::STENCIL : TargetBufferFlags::NONE;
-                    const char* const textureName = config.enabledStencilBuffer ?
-                             "Depth/Stencil Buffer" : "Depth Buffer";
+                    utils::StaticString const textureName = config.enabledStencilBuffer ?
+                            utils::StaticString{"Depth/Stencil Buffer"} :
+                            utils::StaticString{"Depth Buffer"};
 
                     bool const isES2 =
-                            engine.getDriverApi().getFeatureLevel() == FeatureLevel::FEATURE_LEVEL_0;
+                            config.featureLevel == FeatureLevel::FEATURE_LEVEL_0;
 
                     TextureFormat const stencilFormat = isES2 ?
                             TextureFormat::DEPTH24_STENCIL8 : TextureFormat::DEPTH32F_STENCIL8;
@@ -207,25 +209,36 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                     ColorPassData const& data, DriverApi& driver) {
                 auto out = resources.getRenderPassInfo();
 
-                // set samplers and uniforms
-                view.prepareSSAO(data.ssao ?
-                        resources.getTexture(data.ssao) : engine.getOneTextureArray());
+                TextureHandle const structure = data.structure ?
+                        resources.getTexture(data.structure) : engine.getOneTexture();
 
-                // set screen-space reflections and screen-space refractions
-                view.prepareSSR(data.ssr ?
-                        resources.getTexture(data.ssr) : engine.getOneTextureArray());
+                TextureHandle const ssao = data.ssao ?
+                        resources.getTexture(data.ssao) : engine.getOneTextureArray();
 
-                // set structure sampler
-                view.prepareStructure(data.structure ?
-                        resources.getTexture(data.structure) : engine.getOneTexture());
-
-                // set shadow sampler
-                view.prepareShadowMapping(engine,
-                        data.shadows
+                TextureHandle const shadows = data.shadows
                             ? resources.getTexture(data.shadows)
                             : (view.getShadowType() != ShadowType::PCF
                                    ? engine.getOneTextureArray()
-                                   : engine.getOneTextureArrayDepth()));
+                                   : engine.getOneTextureArrayDepth());
+
+                auto ssr = data.ssr ?
+                        resources.getTexture(data.ssr) : engine.getOneTextureArray();
+
+                // set samplers and uniforms
+                view.prepareSSAO(ssao);
+
+                // set screen-space reflections and screen-space refractions
+                view.prepareSSR(ssr);
+
+                // set structure sampler
+                view.prepareStructure(structure);
+
+                // set shadow sampler
+                view.prepareShadowMapping(engine, shadows);
+
+                if (config.fogAsPostProcess) {
+                    engine.getPostProcessManager().fogPrepare(driver);
+                }
 
                 view.commitDescriptorSet(driver);
 
@@ -245,7 +258,21 @@ RendererUtils::ColorPassOutput RendererUtils::colorPass(
                 }
 
                 driver.beginRenderPass(out.target, out.params);
+                Platform* platform = engine.getPlatform();
+                CircularBuffer const& circularBuffer = driver.getCircularBuffer();
+                // b/479079631: Log the current command buffer size before and after executing the
+                // render pass.
+                if (platform->hasDebugUpdateStatFunc()) {
+                    platform->debugUpdateStat(
+                            "filament.renderer.color_pass.command_buffer_used_start",
+                            circularBuffer.getUsed());
+                }
                 passExecutor.execute(engine, driver);
+                if (platform->hasDebugUpdateStatFunc()) {
+                    platform->debugUpdateStat(
+                            "filament.renderer.color_pass.command_buffer_used_end",
+                            circularBuffer.getUsed());
+                }
                 driver.endRenderPass();
 
                 // unbind all descriptor sets to avoid false dependencies with the next pass
