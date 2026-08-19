@@ -232,6 +232,8 @@ endif()
 # Tests
 # ==================================================================================================
 
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
 set(GLTF_TEST_FILES)
 function(add_test_gltf SOURCE TARGET)
     set(source_path "${ROOT_DIR}/${SOURCE}")
@@ -246,9 +248,24 @@ function(add_test_gltf SOURCE TARGET)
 endfunction()
 
 add_test_gltf("third_party/models/AnimatedMorphCube/AnimatedMorphCube.glb" "AnimatedMorphCube.glb")
-add_test_gltf("tmp/test_assets/ecorche_animation_only.glb" "ecorche_animation_only.glb")
-add_test_gltf("tmp/test_assets/ecorche_full.glb" "ecorche_full.glb")
-add_test_gltf("tmp/test_assets/ecorche_mesh_only.glb" "ecorche_mesh_only.glb")
+
+set(GLTFIO_EXT_FIXTURE_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/generate_fixtures.py")
+set(GLTFIO_EXT_FIXTURE_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/manifest.json")
+set(GLTFIO_EXT_GENERATED_FIXTURES
+        "${CMAKE_CURRENT_BINARY_DIR}/ecorche_animation_only.glb"
+        "${CMAKE_CURRENT_BINARY_DIR}/ecorche_full.glb"
+        "${CMAKE_CURRENT_BINARY_DIR}/ecorche_mesh_only.glb")
+
+add_custom_command(
+        OUTPUT ${GLTFIO_EXT_GENERATED_FIXTURES}
+        COMMAND ${Python3_EXECUTABLE} ${GLTFIO_EXT_FIXTURE_GENERATOR}
+                --manifest ${GLTFIO_EXT_FIXTURE_MANIFEST}
+                --output-dir ${CMAKE_CURRENT_BINARY_DIR}
+        DEPENDS ${GLTFIO_EXT_FIXTURE_GENERATOR} ${GLTFIO_EXT_FIXTURE_MANIFEST}
+        COMMENT "Staging deterministic gltfio_ext test fixtures"
+        VERBATIM)
+
+list(APPEND GLTF_TEST_FILES ${GLTFIO_EXT_GENERATED_FIXTURES})
 
 add_custom_target(test_gltfio_ext_files DEPENDS ${GLTF_TEST_FILES})
 

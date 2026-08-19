@@ -47,7 +47,7 @@ cd out/cmake-debug/libs/gltfio_ext
 
 ## 测试概览
 
-总计：**10个测试可执行文件，115个测试用例**，覆盖 gltfio_ext 特有功能和核心场景。
+总计：**10个测试可执行文件，116个测试用例**，覆盖 gltfio_ext 特有功能和核心场景。
 
 | 测试文件 | 类型 | 用例数 | 依赖库 | 需要资源 | 功能覆盖 |
 |---------|------|-------|--------|---------|---------|
@@ -64,8 +64,13 @@ cd out/cmake-debug/libs/gltfio_ext
 
 **资源文件**：
 - `AnimatedMorphCube.glb` - 从 `third_party/models/` 复制
-- `ecorche_animation_only.glb` - 从 `tmp/test_assets/` 复制（animation-only GLB）
-- `ecorche_full.glb` - 从 `tmp/test_assets/` 复制（包含完整蒙皮数据）
+- `ecorche_animation_only.glb` - 构建时确定性生成的 327-joint / 3-animation fixture
+- `ecorche_full.glb` - 构建时确定性生成的 327-joint skinned mesh / 3-animation fixture
+- `ecorche_mesh_only.glb` - 构建时确定性生成的 327-joint mesh-only fixture
+
+三个 XMuscle fixture 由 `test/fixtures/generate_fixtures.py` 生成，并在写入构建目录前按
+`test/fixtures/manifest.json` 校验 SHA-256。它们不依赖被 Git 忽略的 `tmp/test_assets/`，
+也不会把生产 GLB 复制进 Filament fork。
 
 ## 测试详情
 

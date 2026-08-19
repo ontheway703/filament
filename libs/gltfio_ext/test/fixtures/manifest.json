@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "file": "ecorche_full.glb",
+      "sha256": "402681df9afd94a0b0cee90a775de4f054fd19daaf051bb1e5cc83926ba6faec",
+      "joint_count": 327,
+      "include_mesh": true,
+      "animations": ["Pull", "Push", "Squat"],
+      "animation_duration_seconds": 2.08333325
+    },
+    {
+      "file": "ecorche_mesh_only.glb",
+      "sha256": "24a89a3d061e928c3a2f951e52f6da1c97ebfc6bfc761c9cc4b91a1c8182abb4",
+      "joint_count": 327,
+      "include_mesh": true,
+      "animations": []
+    },
+    {
+      "file": "ecorche_animation_only.glb",
+      "sha256": "1686e3d0784d4ce06e5d0b61e21efe16a56387b81a6ae15b339f4bc7edc51f19",
+      "joint_count": 327,
+      "include_mesh": false,
+      "animations": ["Pull", "Push", "Squat"],
+      "animation_duration_seconds": 2.08333325
+    }
+  ]
+}
