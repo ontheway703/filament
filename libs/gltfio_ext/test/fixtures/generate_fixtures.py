@@ -102,7 +102,14 @@ def create_glb(joint_count, animation_names, duration, *, include_mesh):
             COMPONENT_FLOAT, 3, "VEC3", target=ARRAY_BUFFER,
             minimum=[0.0, 0.0, 0.0], maximum=[1.0, 1.0, 0.0])
         joints = builder.add_accessor(
-            pack_ushorts([0, 0, 0, 0] * 3), COMPONENT_UNSIGNED_SHORT, 3, "VEC4",
+            # Make the final vertex read the final joint matrix. This turns the
+            # 327 / 512 fixtures into real shader-boundary coverage instead of
+            # merely declaring a large skin whose vertices all read joint 0.
+            pack_ushorts([
+                0, 0, 0, 0,
+                0, 0, 0, 0,
+                joint_count - 1, 0, 0, 0,
+            ]), COMPONENT_UNSIGNED_SHORT, 3, "VEC4",
             target=ARRAY_BUFFER)
         weights = builder.add_accessor(
             pack_floats([1.0, 0.0, 0.0, 0.0] * 3), COMPONENT_FLOAT, 3, "VEC4",
@@ -134,7 +141,7 @@ def create_glb(joint_count, animation_names, duration, *, include_mesh):
 
     if animation_names:
         document["animations"] = create_animations(
-            builder, 1 if joint_count > 1 else 0, animation_names, duration)
+            builder, joint_count - 1, animation_names, duration)
 
     document["bufferViews"] = builder.buffer_views
     document["accessors"] = builder.accessors

@@ -3,7 +3,7 @@
   "fixtures": [
     {
       "file": "ecorche_full.glb",
-      "sha256": "402681df9afd94a0b0cee90a775de4f054fd19daaf051bb1e5cc83926ba6faec",
+      "sha256": "de8f2c1fdb17c6a6d2173935fd220229fbad5bcbb9c426d98e5d146077197cd1",
       "joint_count": 327,
       "include_mesh": true,
       "animations": ["Pull", "Push", "Squat"],
@@ -11,18 +11,26 @@
     },
     {
       "file": "ecorche_mesh_only.glb",
-      "sha256": "24a89a3d061e928c3a2f951e52f6da1c97ebfc6bfc761c9cc4b91a1c8182abb4",
+      "sha256": "f5e67da96335db6080d515369529a69a14c41327f5f4a0d19e64373ff41f7ff7",
       "joint_count": 327,
       "include_mesh": true,
       "animations": []
     },
     {
       "file": "ecorche_animation_only.glb",
-      "sha256": "1686e3d0784d4ce06e5d0b61e21efe16a56387b81a6ae15b339f4bc7edc51f19",
+      "sha256": "ef64c19fb54827e27ba8dc98e468ecd7bcca96db274d8f9551067d063141f8fd",
       "joint_count": 327,
       "include_mesh": false,
       "animations": ["Pull", "Push", "Squat"],
       "animation_duration_seconds": 2.08333325
+    },
+    {
+      "file": "xmuscle_skinning_512.glb",
+      "sha256": "4c19676e19fbf7005e563f040bc363cf05632ca54194731a3b0f0f2b69753185",
+      "joint_count": 512,
+      "include_mesh": true,
+      "animations": ["BoneLimit"],
+      "animation_duration_seconds": 1.0
     }
   ]
 }

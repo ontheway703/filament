@@ -70,10 +70,12 @@ cd out/cmake-debug/libs/gltfio_ext
 - `ecorche_animation_only.glb` - 构建时确定性生成的 327-joint / 3-animation fixture
 - `ecorche_full.glb` - 构建时确定性生成的 327-joint skinned mesh / 3-animation fixture
 - `ecorche_mesh_only.glb` - 构建时确定性生成的 327-joint mesh-only fixture
+- `xmuscle_skinning_512.glb` - 构建时确定性生成的 512-joint skinned mesh / 1-animation GPU boundary fixture
 
-三个 XMuscle fixture 由 `test/fixtures/generate_fixtures.py` 生成，并在写入构建目录前按
+四个 XMuscle fixture 由 `test/fixtures/generate_fixtures.py` 生成，并在写入构建目录前按
 `test/fixtures/manifest.json` 校验 SHA-256。它们不依赖被 Git 忽略的 `tmp/test_assets/`，
-也不会把生产 GLB 复制进 Filament fork。
+也不会把生产 GLB 复制进 Filament fork。带 mesh 的 fixture 会将一个顶点绑定到最后一根
+joint，并由内嵌动画驱动该 joint；327 / 512 的 GPU smoke 因此会实际读取边界骨骼矩阵。
 
 ## 测试详情
 

@@ -255,7 +255,8 @@ set(GLTFIO_EXT_FIXTURE_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/manif
 set(GLTFIO_EXT_GENERATED_FIXTURES
         "${CMAKE_CURRENT_BINARY_DIR}/ecorche_animation_only.glb"
         "${CMAKE_CURRENT_BINARY_DIR}/ecorche_full.glb"
-        "${CMAKE_CURRENT_BINARY_DIR}/ecorche_mesh_only.glb")
+        "${CMAKE_CURRENT_BINARY_DIR}/ecorche_mesh_only.glb"
+        "${CMAKE_CURRENT_BINARY_DIR}/xmuscle_skinning_512.glb")
 
 add_custom_command(
         OUTPUT ${GLTFIO_EXT_GENERATED_FIXTURES}
