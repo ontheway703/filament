@@ -20,13 +20,13 @@
 #include <backend/Handle.h>
 
 #include <utils/Allocator.h>
+#include <utils/compiler.h>
 #include <utils/CString.h>
+#include <utils/debug.h>
 #include <utils/ImmutableCString.h>
 #include <utils/Log.h>
-#include <utils/Panic.h>
-#include <utils/compiler.h>
-#include <utils/debug.h>
 #include <utils/ostream.h>
+#include <utils/Panic.h>
 
 #include <tsl/robin_map.h>
 
@@ -41,7 +41,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(FILAMENT_DEBUG_MUTEX) || defined(UTILS_DEBUG_MUTEX)
+#define HandleAllocatorGL   HandleAllocator<32,  96, 312>
+#else
 #define HandleAllocatorGL   HandleAllocator<32,  96, 184>    // ~4520 / pool / MiB
+#endif
 #define HandleAllocatorVK   HandleAllocator<64, 160, 312>    // ~1820 / pool / MiB
 #define HandleAllocatorMTL  HandleAllocator<32,  64, 552>    // ~1660 / pool / MiB
 // TODO WebGPU examine right size of handles
@@ -62,7 +66,7 @@ private:
     // driver thread, but it can be accessed from any thread, because it's called from handle_cast<>
     // which is used by synchronous calls.
     mutable utils::Mutex mDebugTagLock;
-    tsl::robin_map<HandleBase::HandleId, utils::ImmutableCString> mDebugTags;
+    tsl::robin_map<HandleBase::HandleId, utils::ImmutableCString> mDebugTags UTILS_GUARDED_BY(mDebugTagLock);
 };
 
 /*
@@ -190,38 +194,7 @@ public:
             std::is_base_of_v<B, std::remove_pointer_t<Dp>>, Dp>
     handle_cast(Handle<B>& handle) {
         assert_invariant(handle);
-        auto [p, tag] = handleToPointer(handle.getId());
-
-        if (isPoolHandle(handle.getId())) {
-            // check for pool handle use-after-free
-            if (UTILS_UNLIKELY(!mUseAfterFreeCheckDisabled)) {
-                uint8_t const age = (tag & HANDLE_AGE_MASK) >> HANDLE_AGE_SHIFT;
-                auto const pNode = static_cast<typename Allocator::Node*>(p);
-                uint8_t const expectedAge = pNode[-1].age;
-                // getHandleTag() is only called if the check fails.
-                FILAMENT_CHECK_POSTCONDITION(expectedAge == age)
-                        << "use-after-free of Handle with id=" << handle.getId()
-                        << ", tag=" << getHandleTag(handle.getId()).c_str_safe();
-            }
-        } else {
-            // check for heap handle use-after-free
-            if (UTILS_UNLIKELY(!mUseAfterFreeCheckDisabled)) {
-                HandleBase::HandleId const index = (handle.getId() & HANDLE_INDEX_MASK);
-                // if we've already handed out this handle index before, it's definitely a
-                // use-after-free, otherwise it's probably just a corrupted handle
-                if (index < mId.load(std::memory_order_relaxed)) {
-                    FILAMENT_CHECK_POSTCONDITION(p != nullptr)
-                            << "use-after-free of heap Handle with id=" << handle.getId()
-                            << ", tag=" << getHandleTag(handle.getId()).c_str_safe();
-                } else {
-                    FILAMENT_CHECK_POSTCONDITION(p != nullptr)
-                            << "corrupted heap Handle with id=" << handle.getId()
-                            << ", tag=" << getHandleTag(handle.getId()).c_str_safe();
-                }
-            }
-        }
-
-        return static_cast<Dp>(p);
+        return static_cast<Dp>(handleCast(handle.getId()));
     }
 
     utils::ImmutableCString getHandleTag(HandleBase::HandleId key) const noexcept;
@@ -250,21 +223,7 @@ public:
         return handle_cast<Dp>(const_cast<Handle<B>&>(handle));
     }
 
-    void associateTagToHandle(HandleBase::HandleId id, utils::ImmutableCString&& tag) noexcept {
-        if (tag.empty()) {
-            return;
-        }
-        uint32_t key = id;
-        if (UTILS_LIKELY(isPoolHandle(id))) {
-            // Truncate the age to get the debug tag
-            key &= ~(HANDLE_DEBUG_TAG_MASK ^ HANDLE_AGE_MASK);
-            writePoolHandleTag(key, std::move(tag));
-        } else {
-            if (!mHeapHandleTagsDisabled) {
-                writeHeapHandleTag(key, std::move(tag));
-            }
-        }
-    }
+    void associateTagToHandle(HandleBase::HandleId id, utils::ImmutableCString&& tag) noexcept;
 
 private:
 
@@ -422,6 +381,7 @@ private:
     }
 
     void* handleToPointerSlow(HandleBase::HandleId id) const noexcept;
+    void* handleCast(HandleBase::HandleId id) const;
 
     // We inline this because it's just 3 instructions
    HandleBase::HandleId arenaPointerToHandle(void* p, uint32_t tag) const noexcept {
@@ -438,7 +398,7 @@ private:
 
     // Below is only used when running out of space in the HandleArena
     mutable utils::Mutex mLock;
-    tsl::robin_map<HandleBase::HandleId, void*> mOverflowMap;
+    tsl::robin_map<HandleBase::HandleId, void*> mOverflowMap UTILS_GUARDED_BY(mLock);
     std::atomic<HandleBase::HandleId> mId = 0;
 
     // constants

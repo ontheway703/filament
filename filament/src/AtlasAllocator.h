@@ -17,14 +17,14 @@
 #ifndef TNT_FILAMENT_ATLASALLOCATOR_H
 #define TNT_FILAMENT_ATLASALLOCATOR_H
 
-#include <utils/QuadTree.h>
+#include <private/filament/EngineEnums.h>
 
 #include <filament/Viewport.h>
 
-#include <private/filament/EngineEnums.h>
+#include <utils/QuadTree.h>
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 class AtlasAllocator_AllocateFirstLevel_Test;
 class AtlasAllocator_AllocateSecondLevel_Test;
@@ -81,6 +81,11 @@ class AtlasAllocator {
     using NodeId = QuadTree::NodeId;
 
 public:
+
+    static constexpr size_t depth() noexcept {
+        return QUAD_TREE_DEPTH;
+    }
+
     /**
      * Create allocator and specify the maximum texture size.
      *

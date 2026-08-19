@@ -23,6 +23,7 @@ set(PUBLIC_HDRS
         include/filament/Exposure.h
         include/filament/Fence.h
         include/filament/FilamentAPI.h
+        include/filament/FramePacer.h
         include/filament/Frustum.h
         include/filament/IndexBuffer.h
         include/filament/IndirectLight.h
@@ -35,6 +36,7 @@ set(PUBLIC_HDRS
         include/filament/RenderTarget.h
         include/filament/RenderableManager.h
         include/filament/Renderer.h
+        include/filament/FrameHistoryStream.h
         include/filament/Scene.h
         include/filament/SkinningBuffer.h
         include/filament/Skybox.h
@@ -75,6 +77,8 @@ set(SRCS
         src/Fence.cpp
         src/FilamentBuilder.cpp
         src/FrameInfo.cpp
+        src/FramePacer.cpp
+        src/FramePipelineEstimator.cpp
         src/FrameSkipper.cpp
         src/Froxelizer.cpp
         src/Frustum.cpp
@@ -125,9 +129,9 @@ set(SRCS
         src/details/BufferObject.cpp
         src/details/Camera.cpp
         src/details/ColorGrading.cpp
-        src/details/DebugRegistry.cpp
         src/details/Engine.cpp
         src/details/Fence.cpp
+        src/details/FramePacer.cpp
         src/details/IndexBuffer.cpp
         src/details/IndirectLight.cpp
         src/details/InstanceBuffer.cpp
@@ -166,6 +170,7 @@ set(SRCS
         src/fg/ResourceCreationContext.cpp
         src/fsr.cpp
         src/ZstdHelper.cpp
+        src/DynamicSpecConstKey.cpp
 )
 
 set(PRIVATE_HDRS
@@ -177,6 +182,7 @@ set(PRIVATE_HDRS
         src/compact.h
         src/Culler.h
         src/DFG.h
+        src/DynamicSpecConstKey.h
         src/FilamentAPI-impl.h
         src/FrameHistory.h
         src/FrameInfo.h
@@ -215,6 +221,7 @@ set(PRIVATE_HDRS
         src/details/DebugRegistry.h
         src/details/Engine.h
         src/details/Fence.h
+        src/details/FramePacer.h
         src/details/IndexBuffer.h
         src/details/IndirectLight.h
         src/details/InstanceBuffer.h
@@ -288,6 +295,7 @@ set(MATERIAL_SRCS
         src/materials/dof/dofTiles.mat
         src/materials/dof/dofTilesSwizzle.mat
         src/materials/evsm/gaussian.mat
+        src/materials/evsm/gaussianMipmap.mat
         src/materials/evsm/vsmMipmap.mat
         src/materials/flare/flare.mat
         src/materials/fog/fog.mat
@@ -442,10 +450,8 @@ foreach(mat_dir ${MATERIAL_DIRS})
 
         check_in_list(MATERIAL_VULKAN_METAL_SRCS ${mat_src} is_vk_metal)
         if (is_vk_metal)
-            # Remove webgpu and related parameters
-            # The variant-filter=stereo is added in the root folder's CMakeLists.txt for webgpu
-            # Context is that webgpu does not support the stereo variant
-            string(REPLACE "-a;webgpu;--variant-filter=stereo" "" MATC_CUSTOM_FLAGS "${MATC_CUSTOM_FLAGS}")
+            # Remove webgpu
+            string(REPLACE "-a;webgpu" "" MATC_CUSTOM_FLAGS "${MATC_CUSTOM_FLAGS}")
 
             # Remove gl
             string(REPLACE "-a;opengl" "" MATC_CUSTOM_FLAGS "${MATC_CUSTOM_FLAGS}")
@@ -656,6 +662,12 @@ add_custom_command(
         APPEND
 )
 
+add_custom_command(
+        OUTPUT "${MATERIAL_DIR}/gaussianMipmap.filamat"
+        DEPENDS src/materials/evsm/gaussianMipmap.fs
+        APPEND
+)
+
 file(MAKE_DIRECTORY "${GENERATION_ROOT}/generated/data/")
 
 set(output_path_dfg_bin "${GENERATION_ROOT}/generated/data/dfg.bin")
@@ -804,6 +816,10 @@ target_compile_options(${TARGET} PRIVATE
         $<$<AND:$<PLATFORM_ID:Darwin>,$<CONFIG:Release>>:${DARWIN_OPTIMIZATION_FLAGS}>
         $<$<PLATFORM_ID:Linux>:${LINUX_COMPILER_FLAGS}>
 )
+
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(${TARGET} PRIVATE -Wthread-safety)
+endif()
 
 target_link_libraries(${TARGET} PRIVATE
         $<$<AND:$<PLATFORM_ID:Linux>,$<CONFIG:Release>>:${LINUX_LINKER_OPTIMIZATION_FLAGS}>

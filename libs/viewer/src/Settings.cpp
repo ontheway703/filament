@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include <viewer/Settings.h>
-
 #include "jsonParseUtils.h"
 #include "Settings_generated.h"
 
-#include <filament/Engine.h>
+#include <viewer/Settings.h>
+
 #include <filament/Camera.h>
+#include <filament/Engine.h>
 #include <filament/Renderer.h>
 #include <filament/Skybox.h>
 
@@ -493,6 +493,14 @@ static int parse(jsmntok_t const* tokens, int i, const char* jsonChunk,
             i = parse(tokens, i + 1, jsonChunk, &out->shadowBulbRadius);
         } else if (compare(tok, jsonChunk, "transform") == 0) {
             i = parse(tokens, i + 1, jsonChunk, &out->transform.xyzw);
+        } else if (compare(tok, jsonChunk, "penumbraScale") == 0) {
+            i = parse(tokens, i + 1, jsonChunk, &out->penumbraScale);
+        } else if (compare(tok, jsonChunk, "penumbraRatioScale") == 0) {
+            i = parse(tokens, i + 1, jsonChunk, &out->penumbraRatioScale);
+        } else if (compare(tok, jsonChunk, "maxPenumbraRatio") == 0) {
+            i = parse(tokens, i + 1, jsonChunk, &out->maxPenumbraRatio);
+        } else if (compare(tok, jsonChunk, "maxSearchRadius") == 0) {
+            i = parse(tokens, i + 1, jsonChunk, &out->maxSearchRadius);
         } else {
             slog.w << "Invalid shadow options key: '" << STR(tok, jsonChunk) << "'" << io::endl;
             i = parse(tokens, i + 1);
@@ -534,7 +542,7 @@ static int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, LightDef
         } else if (compare(tok, jsonChunk, "sunHaloFalloff") == 0) {
             i = parse(tokens, i + 1, jsonChunk, &out->sunHaloFalloff);
         } else if (compare(tok, jsonChunk, "sunAngularRadius") == 0) {
-            i = parse(tokens, i + 1, jsonChunk, &out->sunAngularRadius);
+            i = parse(tokens, i + 1, jsonChunk, &out->sunAngularRadiusDeg);
         } else if (compare(tok, jsonChunk, "castShadows") == 0) {
             i = parse(tokens, i + 1, jsonChunk, &out->castShadows);
         } else if (compare(tok, jsonChunk, "shadowOptions") == 0) {
@@ -680,6 +688,8 @@ static int parse(jsmntok_t const* tokens, int i, const char* jsonChunk,
             i = parse(tokens, i + 1, jsonChunk, &out->history);
         } else if (compare(tok, jsonChunk, "scaleRate") == 0) {
             i = parse(tokens, i + 1, jsonChunk, &out->scaleRate);
+        } else if (compare(tok, jsonChunk, "interval") == 0) {
+            i = parse(tokens, i + 1, jsonChunk, &out->interval);
         } else {
             slog.w << "Invalid frame rate options key: '" << STR(tok, jsonChunk) << "'" << io::endl;
             i = parse(tokens, i + 1);
@@ -766,6 +776,8 @@ static int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, ViewerOp
             i = parse(tokens, i + 1, jsonChunk, &out->autoInstancingEnabled);
         } else if (compare(tok, jsonChunk, "autoScaleEnabled") == 0) {
             i = parse(tokens, i + 1, jsonChunk, &out->autoScaleEnabled);
+        } else if (compare(tok, jsonChunk, "cameraFrameRate") == 0) {
+            i = parse(tokens, i + 1, jsonChunk, &out->cameraFrameRate);
         } else {
             slog.w << "Invalid viewer options key: '" << STR(tok, jsonChunk) << "'" << io::endl;
             i = parse(tokens, i + 1);
@@ -883,7 +895,7 @@ void applySettings(Engine* engine, const LightSettings& settings, IndirectLight*
         lm->setIntensity(light, settings.sunlight.intensity);
         lm->setSunHaloSize(light, settings.sunlight.sunHaloSize);
         lm->setSunHaloFalloff(light, settings.sunlight.sunHaloFalloff);
-        lm->setSunAngularRadius(light, settings.sunlight.sunAngularRadius);
+        lm->setSunAngularRadius(light, settings.sunlight.sunAngularRadiusDeg);
         lm->setDirection(light, normalize(settings.sunlight.direction));
         lm->setColor(light, settings.sunlight.color);
         lm->setShadowCaster(light, settings.sunlight.castShadows && settings.enableShadows);
@@ -1002,7 +1014,7 @@ static utils::FixedCapacityVector<math::float3> generateCustomLut(CustomLut type
     using namespace filament::math;
     size_t count = size_t(dim) * dim * dim;
     auto lut = utils::FixedCapacityVector<float3>::with_capacity(count);
-    
+
     for (size_t b = 0; b < dim; ++b) {
         for (size_t g = 0; g < dim; ++g) {
             for (size_t r = 0; r < dim; ++r) {
@@ -1218,6 +1230,10 @@ static std::ostream& operator<<(std::ostream& out, const LightManager::ShadowOpt
         << "\"maxShadowDistance\": " << in.maxShadowDistance << ",\n"
         << "\"shadowBulbRadius\": " << in.shadowBulbRadius << ",\n"
         << "\"transform\": " << in.transform.xyzw << ",\n"
+        << "\"penumbraScale\": " << in.penumbraScale << ",\n"
+        << "\"penumbraRatioScale\": " << in.penumbraRatioScale << ",\n"
+        << "\"maxPenumbraRatio\": " << in.maxPenumbraRatio << ",\n"
+        << "\"maxSearchRadius\": " << in.maxSearchRadius << "\n"
         << "}";
 }
 
@@ -1273,7 +1289,7 @@ static std::ostream& operator<<(std::ostream& out, const LightDefinition& in) {
                << "\"spotOuter\": " << in.spotOuter << ",\n"
                << "\"sunHaloSize\": " << in.sunHaloSize << ",\n"
                << "\"sunHaloFalloff\": " << in.sunHaloFalloff << ",\n"
-               << "\"sunAngularRadius\": " << in.sunAngularRadius << ",\n"
+               << "\"sunAngularRadius\": " << in.sunAngularRadiusDeg << ",\n"
                << "\"castShadows\": " << to_string(in.castShadows) << ",\n"
                << "\"shadowOptions\": " << in.shadowOptions << "\n"
                << "}";
@@ -1327,7 +1343,8 @@ static std::ostream& operator<<(std::ostream& out, const ViewerOptions& in) {
                << "\"skyboxEnabled\": " << to_string(in.skyboxEnabled) << ",\n"
                << "\"backgroundColor\": " << (in.backgroundColor) << ",\n"
                << "\"autoInstancingEnabled\": " << to_string(in.autoInstancingEnabled) << ",\n"
-               << "\"autoScaleEnabled\": " << to_string(in.autoScaleEnabled) << "\n"
+               << "\"autoScaleEnabled\": " << to_string(in.autoScaleEnabled) << ",\n"
+               << "\"cameraFrameRate\": " << (in.cameraFrameRate) << "\n"
                << "}";
 }
 

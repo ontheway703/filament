@@ -17,10 +17,10 @@
 #ifndef GLTFIO_EXT_FILAMENTINSTANCE_H
 #define GLTFIO_EXT_FILAMENTINSTANCE_H
 
+#include <filament/Box.h>
+
 #include <utils/compiler.h>
 #include <utils/Entity.h>
-
-#include <filament/Box.h>
 
 namespace filament {
 class MaterialInstance;

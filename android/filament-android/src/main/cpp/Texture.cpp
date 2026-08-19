@@ -318,92 +318,20 @@ Java_com_google_android_filament_Texture_nSetImage3DCompressed(JNIEnv *env, jcla
     });
 }
 
-extern "C" JNIEXPORT jint JNICALL
-Java_com_google_android_filament_Texture_nSetImageCubemap(JNIEnv *env, jclass,
-        jlong nativeTexture, jlong nativeEngine, jint level, jobject storage, jint remaining,
-        jint left, jint top, jint type, jint alignment, jint stride, jint format,
-        jintArray faceOffsetsInBytes_,
-        jobject handler, jobject runnable) {
-    Texture *texture = (Texture *) nativeTexture;
-    Engine *engine = (Engine *) nativeEngine;
-
-    jint *faceOffsetsInBytes = env->GetIntArrayElements(faceOffsetsInBytes_, nullptr);
-    Texture::FaceOffsets faceOffsets;
-    std::copy_n(faceOffsetsInBytes, 6, faceOffsets.offsets);
-    env->ReleaseIntArrayElements(faceOffsetsInBytes_, faceOffsetsInBytes, JNI_ABORT);
-
-    size_t sizeInBytes = 6 * getTextureDataSize(texture, (size_t) level, (Texture::Format) format,
-            (Texture::Type) type, (size_t) stride, 0, (size_t) alignment);
-
-    AutoBuffer nioBuffer(env, storage, 0);
-    if (sizeInBytes > (size_t(remaining) << nioBuffer.getShift())) {
-        // BufferOverflowException
-        return -1;
-    }
-
-    void *buffer = nioBuffer.getData();
-    auto *callback = JniBufferCallback::make(engine, env, handler, runnable, std::move(nioBuffer));
-
-    Texture::PixelBufferDescriptor desc(buffer, sizeInBytes, (backend::PixelDataFormat) format,
-            (backend::PixelDataType) type, (uint8_t) alignment, (uint32_t) left, (uint32_t) top,
-            (uint32_t) stride,
-            callback->getHandler(), &JniBufferCallback::postToJavaAndDestroy, callback);
-
-    return wrapJni<jint>(env, [&]() {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        texture->setImage(*engine, (size_t) level, std::move(desc), faceOffsets);
-#pragma clang diagnostic pop
-        return 0;
-    });
-}
-
-extern "C" JNIEXPORT jint JNICALL
-Java_com_google_android_filament_Texture_nSetImageCubemapCompressed(JNIEnv *env, jclass,
-        jlong nativeTexture, jlong nativeEngine, jint level, jobject storage, jint remaining,
-        jint left, jint top, jint type, jint alignment,
-        jint compressedSizeInBytes, jint compressedFormat, jintArray faceOffsetsInBytes_,
-        jobject handler, jobject runnable) {
-
-    Texture *texture = (Texture *) nativeTexture;
-    Engine *engine = (Engine *) nativeEngine;
-
-    jint *faceOffsetsInBytes = env->GetIntArrayElements(faceOffsetsInBytes_, nullptr);
-    Texture::FaceOffsets faceOffsets;
-    std::copy_n(faceOffsetsInBytes, 6, faceOffsets.offsets);
-    env->ReleaseIntArrayElements(faceOffsetsInBytes_, faceOffsetsInBytes, JNI_ABORT);
-
-    size_t sizeInBytes = 6 * (size_t) compressedSizeInBytes;
-
-    AutoBuffer nioBuffer(env, storage, 0);
-    if (sizeInBytes > (size_t(remaining) << nioBuffer.getShift())) {
-        // BufferOverflowException
-        return -1;
-    }
-
-    void *buffer = nioBuffer.getData();
-    auto *callback = JniBufferCallback::make(engine, env, handler, runnable, std::move(nioBuffer));
-
-    Texture::PixelBufferDescriptor desc(buffer, sizeInBytes,
-            (backend::CompressedPixelDataType) compressedFormat, (uint32_t) compressedSizeInBytes,
-            callback->getHandler(), &JniBufferCallback::postToJavaAndDestroy, callback);
-
-    return wrapJni<jint>(env, [&]() {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        texture->setImage(*engine, (size_t) level, std::move(desc), faceOffsets);
-#pragma clang diagnostic pop
-        return 0;
-    });
-}
-
 extern "C" JNIEXPORT void JNICALL
 Java_com_google_android_filament_Texture_nSetExternalImage(JNIEnv* env, jclass, jlong nativeTexture,
         jlong nativeEngine, jlong eglImage) {
     Texture *texture = (Texture *) nativeTexture;
     Engine *engine = (Engine *) nativeEngine;
     wrapJni(env, [=]() {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
         texture->setExternalImage(*engine, (void*)eglImage);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
     });
 }
 
@@ -426,6 +354,10 @@ Java_com_google_android_filament_Texture_nSetExternalImageByAHB(JNIEnv *env, jcl
     }
 
     return wrapJni<jboolean>(env, [=]() {
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
         if (engine->getBackend() == Backend::OPENGL) {
             // CAVEAT: we assume that Backend::OPENGL on Android implies PlatformEGLAndroid.
 #if UTILS_HAS_RTTI
@@ -453,6 +385,9 @@ Java_com_google_android_filament_Texture_nSetExternalImageByAHB(JNIEnv *env, jcl
 #endif // FILAMENT_SUPPORTS_VULKAN
         // success!
         return JNI_TRUE;
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
     });
 #else
     // other platforms could come here

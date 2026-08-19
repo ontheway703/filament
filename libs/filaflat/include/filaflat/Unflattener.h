@@ -17,11 +17,11 @@
 #ifndef TNT_FILAFLAT_UNFLATTENER_H
 #define TNT_FILAFLAT_UNFLATTENER_H
 
-#include <utils/compiler.h>
-#include <utils/debug.h>
-#include <utils/CString.h>
-
 #include <private/filament/Variant.h>
+
+#include <utils/compiler.h>
+#include <utils/CString.h>
+#include <utils/debug.h>
 
 #include <type_traits>
 
@@ -52,6 +52,9 @@ public:
     bool willOverflow(size_t const size) const noexcept {
         // Evaluate the remaining valid buffer size instead of using pointer arithmetic,
         // preventing arbitrary integer size overflows from pointer wrapping.
+        if (UTILS_UNLIKELY(mCursor > mEnd)) {
+            return true;   // cursor was constructed/advanced past the end
+        }
         return size > size_t(mEnd - mCursor);
     }
 

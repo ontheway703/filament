@@ -20,11 +20,12 @@
 #include "VulkanCommands.h"
 #include "VulkanHandles.h"
 #include "VulkanTexture.h"
+
 #include "vulkan/utils/Conversion.h"  // getComponentType()
 #include "vulkan/utils/Image.h"
 
-#include <utils/Log.h>
 #include <utils/compiler.h>
+#include <utils/Log.h>
 
 using namespace bluevk;
 
@@ -41,7 +42,7 @@ TaskHandler::TaskHandler()
 void TaskHandler::post(WorkloadFunc&& workload, OnCompleteFunc&& oncomplete) {
     assert_invariant(!mShouldStop);
     {
-        std::unique_lock<std::mutex> lock(mTaskQueueMutex);
+        utils::UniqueLock lock(mTaskQueueMutex);
         mTaskQueue.push(std::make_pair(std::move(workload), std::move(oncomplete)));
     }
     mHasTaskCondition.notify_one();
@@ -50,25 +51,25 @@ void TaskHandler::post(WorkloadFunc&& workload, OnCompleteFunc&& oncomplete) {
 void TaskHandler::drain() {
     assert_invariant(!mShouldStop);
 
-    std::mutex syncPointMutex;
-    std::condition_variable syncCondition;
+    utils::Mutex syncPointMutex;
+    utils::Condition syncCondition;
     bool done = false;
     post([] {},
             [&syncPointMutex, &syncCondition, &done] {
                 {
-                    std::unique_lock<std::mutex> lock(syncPointMutex);
+                    utils::UniqueLock lock(syncPointMutex);
                     done = true;
                     syncCondition.notify_one();
                 }
             });
 
-    std::unique_lock<std::mutex> lock(syncPointMutex);
+    utils::UniqueLock lock(syncPointMutex);
     syncCondition.wait(lock, [&done] { return done; });
 }
 
 void TaskHandler::shutdown() {
     {
-        std::unique_lock<std::mutex> lock(mTaskQueueMutex);
+        utils::UniqueLock lock(mTaskQueueMutex);
         mShouldStop = true;
     }
     mHasTaskCondition.notify_one();
@@ -79,7 +80,7 @@ void TaskHandler::shutdown() {
 
 void TaskHandler::loop() {
     while (true) {
-        std::unique_lock<std::mutex> lock(mTaskQueueMutex);
+        utils::UniqueLock lock(mTaskQueueMutex);
         mHasTaskCondition.wait(lock, [this] { return !mTaskQueue.empty() || mShouldStop; });
         if (mShouldStop) {
             break;
@@ -93,7 +94,7 @@ void TaskHandler::loop() {
 
     // Clean-up: we still need to call oncomplete for clients to do clean-up.
     while (true) {
-        std::unique_lock<std::mutex> lock(mTaskQueueMutex);
+        utils::UniqueLock lock(mTaskQueueMutex);
         if (mTaskQueue.empty()) {
             break;
         }
@@ -126,7 +127,7 @@ void VulkanReadPixels::run(fvkmemory::resource_ptr<VulkanRenderTarget> srcTarget
         OnReadCompleteFunction const& readCompleteFunc) {
     bool const isDepthStencil = pbd.format == PixelDataFormat::DEPTH_COMPONENT ||
                          pbd.format == PixelDataFormat::DEPTH_STENCIL;
-    VulkanAttachment const srcAttachment = isDepthStencil ? srcTarget->getDepthStencil() : srcTarget->getColor0();
+    VulkanAttachment const srcAttachment = isDepthStencil ? srcTarget->getDepthStencil() : srcTarget->getColor(0);
     run(srcAttachment.texture, srcAttachment.level, srcAttachment.layer, x, y, width, height,
             graphicsQueueFamilyIndex, std::move(pbd), selectMemoryFunc, readCompleteFunc);
 }

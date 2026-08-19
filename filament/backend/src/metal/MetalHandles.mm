@@ -17,21 +17,21 @@
 #include "MetalHandles.h"
 
 #include "MetalBlitter.h"
-#include "MetalEnums.h"
-#include "MetalUtils.h"
 #include "MetalBufferPool.h"
 #include "MetalDriver.h"
+#include "MetalEnums.h"
+#include "MetalUtils.h"
 
 #include <filament/SwapChain.h>
 
+#include <private/backend/BackendUtils.h>
+
 #include <backend/DriverEnums.h>
 
-#include "private/backend/BackendUtils.h"
-
-#include <utils/Logger.h>
-#include <utils/Panic.h>
 #include <utils/compiler.h>
 #include <utils/debug.h>
+#include <utils/Logger.h>
+#include <utils/Panic.h>
 #include <utils/trap.h>
 
 #include <math/scalar.h>
@@ -116,7 +116,7 @@ MetalSwapChain::MetalSwapChain(
       platform(platform),
       depthStencilFormat(decideDepthStencilFormat(flags)),
       layer(nativeWindow),
-      layerDrawableMutex(std::make_shared<std::mutex>()),
+      layerDrawableMutex(std::make_shared<utils::Mutex>()),
       type(SwapChainType::CAMETALLAYER),
       flags(flags) {
 
@@ -215,7 +215,7 @@ NSUInteger MetalSwapChain::getSurfaceHeight() const {
 
 
 NSUInteger MetalSwapChain::getSampleCount() const {
-    if (flags & flags & SwapChain::CONFIG_MSAA_4_SAMPLES) {
+    if (flags & SwapChain::CONFIG_MSAA_4_SAMPLES) {
         return 4u;
     }
     return 1u;
@@ -227,7 +227,7 @@ bool MetalSwapChain::isAbandoned() const {
 
 void MetalSwapChain::releaseDrawable() {
     if (drawable) {
-        std::lock_guard<std::mutex> lock(*layerDrawableMutex);
+        utils::LockGuard const lock(*layerDrawableMutex);
         drawable = nil;
     }
 }
@@ -352,7 +352,7 @@ public:
     PresentDrawableData& operator=(const PresentDrawableData&) = delete;
 
     static PresentDrawableData* create(id<CAMetalDrawable> drawable,
-            std::shared_ptr<std::mutex> drawableMutex, MetalDriver* driver, uint64_t flags,
+            std::shared_ptr<utils::Mutex> drawableMutex, MetalDriver* driver, uint64_t flags,
             int64_t presentationTimeNs) {
         assert_invariant(drawableMutex);
         assert_invariant(driver);
@@ -384,7 +384,7 @@ public:
     }
 
 private:
-    PresentDrawableData(id<CAMetalDrawable> drawable, std::shared_ptr<std::mutex> drawableMutex,
+    PresentDrawableData(id<CAMetalDrawable> drawable, std::shared_ptr<utils::Mutex> drawableMutex,
             MetalDriver* driver, uint64_t flags, int64_t presentationTimeNs)
             : mDrawable(drawable),
               mDrawableMutex(drawableMutex),
@@ -394,7 +394,7 @@ private:
 
     static void cleanupAndDestroy(PresentDrawableData *that) {
         if (that->mDrawable) {
-            std::lock_guard<std::mutex> lock(*(that->mDrawableMutex));
+            utils::LockGuard const lock(*(that->mDrawableMutex));
             that->mDrawable = nil;
         }
         that->mDrawableMutex.reset();
@@ -403,7 +403,7 @@ private:
     }
 
     id<CAMetalDrawable> mDrawable;
-    std::shared_ptr<std::mutex> mDrawableMutex;
+    std::shared_ptr<utils::Mutex> mDrawableMutex;
     MetalDriver* mDriver = nullptr;
     uint64_t mFlags = 0;
     int64_t mPresentationTimeNs = 0;
@@ -423,7 +423,7 @@ void MetalSwapChain::scheduleFrameScheduledCallback(int64_t presentationTimeNs) 
 
     struct Callback {
         Callback(std::shared_ptr<FrameScheduledCallback> callback, id<CAMetalDrawable> drawable,
-                std::shared_ptr<std::mutex> drawableMutex, MetalDriver* driver, uint64_t flags,
+                std::shared_ptr<utils::Mutex> drawableMutex, MetalDriver* driver, uint64_t flags,
                 int64_t presentationTimeNs)
                 : f(callback),
                   data(PresentDrawableData::create(drawable, drawableMutex, driver, flags,
@@ -525,7 +525,7 @@ MetalAttachment MetalSwapChain::acquireBaseDrawable() {
     // calling -nextDrawable, or when releasing the last known reference
     // to any CAMetalDrawable returned from a previous -nextDrawable.
     {
-        std::lock_guard<std::mutex> lock(*layerDrawableMutex);
+        utils::LockGuard const lock(*layerDrawableMutex);
         drawable = [layer nextDrawable];
     }
 
@@ -634,8 +634,8 @@ MetalVertexBufferInfo::MetalVertexBufferInfo(MetalContext& context, uint8_t buff
 }
 
 MetalVertexBuffer::MetalVertexBuffer(MetalContext& context,
-        uint32_t vertexCount, uint32_t bufferCount, Handle<HwVertexBufferInfo> vbih)
-    : HwVertexBuffer(vertexCount), vbih(vbih), buffers(bufferCount, nullptr) {
+        uint32_t vertexCount, uint32_t bufferCount, Handle<HwVertexBufferInfo> vbih, bool async)
+    : HwVertexBuffer(vertexCount, async), vbih(vbih), buffers(bufferCount, nullptr) {
 }
 
 MetalIndexBuffer::MetalIndexBuffer(MetalContext& context, BufferUsage usage, uint8_t elementSize,
@@ -771,12 +771,12 @@ MetalTexture::MetalTexture(MetalContext& context, MetalTexture const* src, uint8
 }
 
 MetalTexture::MetalTexture(MetalContext& context, MetalTexture const* src, TextureSwizzle r,
-        TextureSwizzle g, TextureSwizzle b, TextureSwizzle a) noexcept
-    : HwTexture(src->target, src->levels, src->samples, src->width, src->height, src->depth,
-              src->format, src->usage, false),
-      context(context),
-      devicePixelFormat(src->devicePixelFormat),
-      externalImage(src->externalImage) {
+        TextureSwizzle g, TextureSwizzle b, TextureSwizzle a, bool async) noexcept
+        : HwTexture(src->target, src->levels, src->samples, src->width, src->height, src->depth,
+                  src->format, src->usage, async),
+          context(context),
+          devicePixelFormat(src->devicePixelFormat),
+          externalImage(src->externalImage) {
     texture = src->getMtlTextureForRead();
     if (context.supportsTextureSwizzling) {
         // Even though we've already checked context.supportsTextureSwizzling, we still need to
@@ -1201,8 +1201,11 @@ void MetalRenderTarget::setUpRenderPassAttachments(MTLRenderPassDescriptor* desc
         descriptor.colorAttachments[i].loadAction = getLoadAction(params, getTargetBufferFlagsAt(i));
         descriptor.colorAttachments[i].storeAction = getStoreAction(params,
                 getTargetBufferFlagsAt(i));
-        descriptor.colorAttachments[i].clearColor = MTLClearColorMake(
-                params.clearColor.r, params.clearColor.g, params.clearColor.b, params.clearColor.a);
+        // Metal's MTLClearColor is always 4 doubles. The texture's pixel format determines whether
+        // those doubles are interpreted as floats, signed ints, or unsigned ints. A double has a
+        // 53-bit mantissa, so any int32_t / uint32_t value round-trips exactly.
+        descriptor.colorAttachments[i].clearColor = MTLClearColorMake(params.clearColor[0],
+                params.clearColor[1], params.clearColor[2], params.clearColor[3]);
 
         if (attachment.getMsaaTexture()) {
             // Check that the loadAction is valid for MSAA targets: either DontCare or Clear.
@@ -1421,7 +1424,7 @@ void MetalFence::encode() {
                           // accessing it.
                           auto lifetime = weakDriverLifetime.lock();
                           if (s && lifetime) {
-                              std::lock_guard<std::mutex> lock(lifetime->mutex);
+                              utils::LockGuard const lock(lifetime->mutex);
                               if (lifetime->driver) {
                                   lifetime->driver->signalFence(
                                           [&] { s->status = FenceStatus::CONDITION_SATISFIED; });
@@ -1460,7 +1463,7 @@ FenceStatus MetalFence::wait(uint64_t timeoutNs) {
             auto const until = std::chrono::steady_clock::now() + ns(timeoutNs);
             status = context.driver->waitForFence(predicate, until);
         }
-        
+
         if (status == FenceStatus::ERROR) {
             return FenceStatus::ERROR;
         }
@@ -1561,7 +1564,7 @@ id<MTLArgumentEncoder> MetalDescriptorSetLayout::getArgumentEncoderSlow(id<MTLDe
                 MTLArgumentDescriptor* samplerArgument = [MTLArgumentDescriptor argumentDescriptor];
                 samplerArgument.index = binding.binding * 2 + 1;
                 samplerArgument.dataType = MTLDataTypeSampler;
-                textureArgument.access = MTLArgumentAccessReadOnly;
+                samplerArgument.access = MTLArgumentAccessReadOnly;
                 [arguments addObject:samplerArgument];
                 break;
             }

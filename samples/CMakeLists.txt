@@ -27,6 +27,8 @@ set(MATERIAL_SRCS
         materials/image.mat
         materials/mirror.mat
         materials/overdraw.mat
+        materials/proceduralEffect.mat
+        materials/proceduralTextureQuad.mat
         materials/sandboxCloth.mat
         materials/sandboxLit.mat
         materials/sandboxLitFade.mat
@@ -223,8 +225,6 @@ target_sources(gltf-demo-resources PRIVATE ${RESGEN_SOURCE})
 
 add_library(samples-common STATIC
     common/arguments.cpp
-    common/configuration.h
-    common/configuration.cpp
 )
 
 target_include_directories(samples-common PRIVATE
@@ -264,6 +264,10 @@ endfunction()
 
 if (NOT ANDROID)
     add_demo(animation)
+    # The XMuscle animation suite is a source subdirectory with the same name.
+    # Keep the upstream sample's filename while avoiding a file/directory clash.
+    set_target_properties(animation PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/upstream-samples")
     add_demo(depthtesting)
     add_demo(frame_generator)
     add_demo(gltf_viewer)
@@ -289,6 +293,8 @@ if (NOT ANDROID)
     if (NOT FILAMENT_SUPPORTS_WEBGPU)
         add_demo(point_sprites)
     endif ()
+    add_demo(procedural_effect)
+    add_demo(procedural_texture_quad)
     add_demo(rendertarget)
     add_demo(sample_cloth)
     add_demo(sample_full_pbr)
@@ -365,5 +371,7 @@ set_target_properties(envs PROPERTIES FOLDER Samples/Assets)
 # ==================================================================================================
 
 if (NOT WEBGL AND NOT ANDROID AND NOT IOS)
-    add_subdirectory(animation)
+    # Keep the XMuscle sample build tree distinct from the upstream `animation`
+    # executable, which is emitted as `${PROJECT_BINARY_DIR}/samples/animation`.
+    add_subdirectory(animation xmuscle-animation)
 endif()

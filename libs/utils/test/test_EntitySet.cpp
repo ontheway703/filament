@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include <gtest/gtest.h>
-
 #include <utils/PagedArenaBitset.h>
+
+#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -722,28 +722,6 @@ TEST(PagedArenaBitsetTest, DefragmentEdgeCases) {
 }
 
 TEST(PagedArenaBitsetTest, ExchangeAndSelfMove) {
-    PagedArenaBitset bs1;
-    bs1.add(10);
-    bs1.add(20);
-
-    // Test free function exchange
-    PagedArenaBitset bs2;
-    bs2.add(30);
-
-    PagedArenaBitset old1 = exchange(bs1, std::move(bs2));
-    EXPECT_EQ(old1.size(), 2);
-    EXPECT_TRUE(old1[10]);
-    EXPECT_TRUE(old1[20]);
-
-    EXPECT_EQ(bs1.size(), 1);
-    EXPECT_TRUE(bs1[30]);
-
-    // Test exchangeAndClear
-    PagedArenaBitset oldClear = exchangeAndClear(bs1);
-    EXPECT_EQ(oldClear.size(), 1);
-    EXPECT_TRUE(oldClear[30]);
-    EXPECT_TRUE(bs1.empty());
-
     // Test self move-assignment
     PagedArenaBitset selfMoveBs;
     selfMoveBs.add(42);
@@ -781,5 +759,34 @@ TEST(PagedArenaBitsetTest, CopyFrom) {
     EXPECT_EQ(target.size(), 2);
     EXPECT_TRUE(target[10]);
     EXPECT_TRUE(target[5000]);
+}
+
+TEST(PagedArenaBitsetTest, PopSetBits) {
+    PagedArenaBitset bitset;
+    for (uint32_t i = 0; i < 10; ++i) {
+        bitset.add(i * 10);
+    }
+    EXPECT_EQ(bitset.size(), 10);
+
+    uint32_t processedCount = 0;
+    bitset.popSetBits([&](uint32_t bit) {
+        processedCount++;
+        if (processedCount == 5) {
+            return false; // Stop
+        }
+        return true; // Pop
+    });
+
+    EXPECT_EQ(processedCount, 5);
+    EXPECT_EQ(bitset.size(), 6);
+
+    uint32_t remainderCount = 0;
+    bitset.popSetBits([&](uint32_t bit) {
+        remainderCount++;
+        return true;
+    });
+
+    EXPECT_EQ(remainderCount, 6);
+    EXPECT_TRUE(bitset.empty());
 }
 

@@ -14,17 +14,19 @@
  * limitations under the License.
  */
 
-#include "backend/platforms/VulkanPlatform.h"
+#include "vulkan/platform/VulkanPlatformSwapChainImpl.h"
+#include "vulkan/utils/Helper.h"
+#include "vulkan/VulkanConstants.h"
+#include "vulkan/VulkanContext.h"
+#include "vulkan/VulkanDriver.h"
 
 #include <backend/DriverEnums.h>
-
-#include "vulkan/VulkanContext.h"
-#include "vulkan/platform/VulkanPlatformSwapChainImpl.h"
-#include "vulkan/VulkanConstants.h"
-#include "vulkan/VulkanDriver.h"
-#include "vulkan/utils/Helper.h"
+#include <backend/platforms/VulkanPlatform.h>
 
 #include <bluevk/BlueVK.h>
+
+#include <private/utils/FeatureFlagManager.h>
+
 #include <utils/Logger.h>
 #include <utils/Panic.h>
 #include <utils/PrivateImplementation-impl.h>
@@ -42,7 +44,7 @@ using ExtensionSet = VulkanPlatform::ExtensionSet;
 
 inline bool setContains(ExtensionSet const& set, utils::CString const& extension) {
     return set.find(extension) != set.end();
-};
+}
 
 #if FVK_ENABLED(FVK_DEBUG_VALIDATION)
 // These strings need to be allocated outside a function stack
@@ -215,23 +217,29 @@ ExtensionSet getDeviceExtensions(VkPhysicalDevice device) {
         // We only support external image for Android for now, but nothing bars us from
         // supporting other platforms.
 #if defined(__ANDROID__)
+
+        // Required for external images
         VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
-        VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
-        VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
-        VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
-        VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
-        // This is needed for external images.  See VulkanPlatformAndroid
         VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME,
+        VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
+        VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+        VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
+
+        // External samplers
+        VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
 #endif
         // MoltenVk is the only non-conformant implementation we're interested in.
 #if defined(__APPLE__)
         VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
 #endif
-        VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME,
         VK_KHR_MULTIVIEW_EXTENSION_NAME,
+
+        // Required for dynamic rendering
         VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
-        // Required for dynamic rendering, enable this too.
+        VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME,
         VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME,
+        VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME,
+
         VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME,
 
 #if FVK_ENABLED(FVK_DEBUG_SHADER_MODULE)
@@ -705,7 +713,7 @@ VulkanPlatform::VulkanPlatform() = default;
 VulkanPlatform::~VulkanPlatform() = default;
 
 utils::CString VulkanPlatform::getDeviceInfo(DeviceInfoType infoType,
-        Driver* driver) const noexcept {
+        Driver* driver) const {
     if (mImpl->mPhysicalDevice == VK_NULL_HANDLE) {
         return {};
     }
@@ -784,15 +792,18 @@ SwapChainPtr VulkanPlatform::createSwapChain(void* nativeWindow, uint64_t flags,
     return swapchain;
 }
 
-Platform::Sync* VulkanPlatform::createSync(VkFence fence,
+Platform::Sync* VulkanPlatform::createSync(
         std::shared_ptr<VulkanCmdFence> fenceStatus) noexcept {
-    return new VulkanSync{.fence = fence, .fenceStatus = fenceStatus};
+    return new(std::nothrow) VulkanSync(std::move(fenceStatus));
 }
 
-void VulkanPlatform::destroySync(Platform::Sync* sync) noexcept {
+void VulkanPlatform::destroySync(Sync* sync) noexcept {
     // Sync must be a VulkanSync*, since it was created by VulkanPlatform's
     // createSync object.
-    delete sync;
+    // Note: the cast is required, as Platform::Sync does not have a virtual
+    // destructor, and therefore it is undefined behavior to delete the base
+    // class.
+    delete static_cast<VulkanSync*>(sync);
 }
 
 VkInstance VulkanPlatform::getInstance() const noexcept {
@@ -983,12 +994,26 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
 
     // Initialize the following fields: physicalDeviceProperties, memoryProperties,
     // physicalDeviceFeatures.
-    vkGetPhysicalDeviceProperties2(mImpl->mPhysicalDevice, &context.mPhysicalDeviceProperties);
-    vkGetPhysicalDeviceFeatures2(mImpl->mPhysicalDevice, &context.mPhysicalDeviceFeatures);
+    if (vkGetPhysicalDeviceProperties2) {
+        vkGetPhysicalDeviceProperties2(mImpl->mPhysicalDevice, &context.mPhysicalDeviceProperties);
+    } else {
+        vkGetPhysicalDeviceProperties(mImpl->mPhysicalDevice, &context.mPhysicalDeviceProperties.properties);
+    }
+
+    if (vkGetPhysicalDeviceFeatures2) {
+        vkGetPhysicalDeviceFeatures2(mImpl->mPhysicalDevice, &context.mPhysicalDeviceFeatures);
+    } else {
+        vkGetPhysicalDeviceFeatures(mImpl->mPhysicalDevice, &context.mPhysicalDeviceFeatures.features);
+    }
+
     vkGetPhysicalDeviceMemoryProperties(mImpl->mPhysicalDevice, &context.mMemoryProperties);
 
     // Store the extension support in the context
-    if (!mImpl->mSharedContext) {
+    if (sharedContext) {
+        VulkanSharedContext const* scontext = (VulkanSharedContext const*) sharedContext;
+        context.mDebugUtilsSupported = scontext->debugUtilsSupported;
+        context.mDebugMarkersSupported = scontext->debugMarkersSupported;
+    } else {
         context.mDebugUtilsSupported =
                 setContains(instExts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         context.mDebugMarkersSupported =
@@ -998,15 +1023,14 @@ void VulkanPlatform::queryAndSetDeviceFeatures(Platform::DriverConfig const& dri
         context.mVertexInputDynamicStateSupported =
                 setContains(deviceExts, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
         context.mGlobalPrioritySupported = globalPriorityFeatures.globalPriorityQuery == VK_TRUE;
-    } else {
-        VulkanSharedContext const* scontext = (VulkanSharedContext const*) sharedContext;
-        context.mDebugUtilsSupported = scontext->debugUtilsSupported;
-        context.mDebugMarkersSupported = scontext->debugMarkersSupported;
     }
 
     // Pass along relevant driver config (feature flags)
     context.mAsyncPipelineCachePrewarmingEnabled = driverConfig.vulkanEnableAsyncPipelineCachePrewarming;
-    context.mParallelShaderCompileDisabled = driverConfig.disableParallelShaderCompile;
+    context.mParallelShaderCompileDisabled =
+            (driverConfig.featureFlagManager ? driverConfig.featureFlagManager->features.backend
+                                                       .disable_parallel_shader_compile
+                                             : false);
     context.mStagingBufferBypassEnabled = driverConfig.vulkanEnableStagingBufferBypass;
 
     // We know we need to allocate the protected version of the VK objects

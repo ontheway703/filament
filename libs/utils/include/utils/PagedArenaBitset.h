@@ -17,14 +17,14 @@
 #ifndef TNT_UTILS_PAGEARENABITSET_H
 #define TNT_UTILS_PAGEARENABITSET_H
 
+#include <utils/algorithm.h>
 #include <utils/compiler.h>
 #include <utils/Slice.h>
-#include <utils/algorithm.h>
 
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <cassert>
 #include <type_traits>
 #include <vector>
 
@@ -119,7 +119,8 @@ public:
     // The allocation granularity of the Arena, expressed as a bit-shift (2^12 = 4096 bits).
     // This is the "Page Size". Every active 4096-bit range allocates exactly one 512-byte
     // Page in memory. This balances L2 Directory footprint against sparse memory overhead.
-    static constexpr uint32_t PAGE_SHIFT = 12;
+    // Note: This is prefixed with FILAMENT_ to avoid collision with a iOS simulator #define.
+    static constexpr uint32_t FILAMENT_PAGE_SHIFT = 12;
 
     // The hardware execution width, expressed as a bit-shift (2^6 = 64 bits).
     // This binds the bitset to the CPU's native 64-bit architecture (uint64_t), ensuring
@@ -181,19 +182,24 @@ public:
     /**
      * @brief Returns the total number of set bits.
      */
-    size_t size() const;
+    size_t size() const noexcept {
+        assert(mSummaryMask.size() == MASK_WORDS && "FATAL: Attempted to use a moved-from PagedArenaBitset!");
+        return mSize;
+    }
 
     /**
      * @brief Checks if the bitset has zero bits set.
      */
-    bool empty() const;
+    bool empty() const noexcept {
+        return size() == 0;
+    }
 
     /**
      * @brief Tests if a specific bit is set.
      * @param index The bit index to test.
      * @return true if the bit is set, false otherwise.
      */
-    bool operator[](uint32_t index) const;
+    bool operator[](uint32_t index) const noexcept;
 
     /**
      * @brief Sets a bit and returns its previous state.
@@ -207,22 +213,26 @@ public:
      * @param index The bit index to clear.
      * @return true if the bit was set before clearing, false if it was already cleared.
      */
-    bool fetchRemove(uint32_t index);
+    bool fetchRemove(uint32_t index) noexcept;
 
     /**
      * @brief Sets a bit.
      */
-    void add(uint32_t index);
+    void add(uint32_t const index) {
+        fetchAdd(index);
+    }
 
     /**
      * @brief Clears a bit.
      */
-    void remove(uint32_t index);
+    void remove(uint32_t const index) noexcept {
+        fetchRemove(index);
+    }
 
     /**
      * @brief Clears all bits, resets the arena, and zeroes internal state.
      */
-    void clear();
+    void clear() noexcept;
 
     /**
      * @brief Eliminates ghost pages and tightly packs active pages in physical memory.
@@ -240,14 +250,14 @@ public:
      * @brief Performs an in-place intersection (this &= other).
      * @param other The bitset to intersect with.
      */
-    PagedArenaBitset& intersect(const PagedArenaBitset& other);
+    PagedArenaBitset& intersect(const PagedArenaBitset& other) noexcept;
 
     /**
      * @brief Variadic intersection (Multi-way Path).
      * @details Handles 3+ arguments by forwarding to the order-independent span implementation.
      */
     template<typename... Rest>
-    static PagedArenaBitset& intersect(PagedArenaBitset* out,
+    static PagedArenaBitset& intersect(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
             const PagedArenaBitset& first,
             const PagedArenaBitset& second,
             const PagedArenaBitset& third,
@@ -288,7 +298,8 @@ public:
         return intersectSizeSpan({inputs.data(), inputs.size()});
     }
 
-    static PagedArenaBitset& intersect(PagedArenaBitset* out, const PagedArenaBitset& a, const PagedArenaBitset& b);
+    static PagedArenaBitset& intersect(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
+            const PagedArenaBitset& a, const PagedArenaBitset& b);
 
     static PagedArenaBitset intersect(const PagedArenaBitset& a, const PagedArenaBitset& b);
 
@@ -307,7 +318,7 @@ public:
      * @details Handles 3+ arguments by forwarding to the order-independent span implementation.
      */
     template<typename... Rest>
-    static PagedArenaBitset& merge(PagedArenaBitset* out,
+    static PagedArenaBitset& merge(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
             const PagedArenaBitset& first,
             const PagedArenaBitset& second,
             const PagedArenaBitset& third,
@@ -349,9 +360,13 @@ public:
         return mergeSizeSpan({inputs.data(), inputs.size()});
     }
 
-    static PagedArenaBitset& merge(PagedArenaBitset* out, const PagedArenaBitset& a, const PagedArenaBitset& b);
+    static PagedArenaBitset& merge(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
+            const PagedArenaBitset& a, const PagedArenaBitset& b);
 
     static PagedArenaBitset merge(const PagedArenaBitset& a, const PagedArenaBitset& b);
+
+    static PagedArenaBitset& mergeSpan(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
+            Slice<const PagedArenaBitset* const> inputs);
 
     // ----------------------------------------------------------------------------------------------------------------
     // difference
@@ -361,14 +376,15 @@ public:
      * @brief Performs an in-place difference (this &= ~other).
      * @param other The bitset to subtract.
      */
-    PagedArenaBitset& difference(const PagedArenaBitset& other);
+    PagedArenaBitset& difference(const PagedArenaBitset& other) noexcept;
 
     /**
      * @brief Calculates the number of bits in `a` that are not set in `b`.
      */
     static uint32_t differenceSize(const PagedArenaBitset& a, const PagedArenaBitset& b) noexcept;
 
-    static PagedArenaBitset& difference(PagedArenaBitset* out, const PagedArenaBitset& a, const PagedArenaBitset& b);
+    static PagedArenaBitset& difference(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
+            const PagedArenaBitset& a, const PagedArenaBitset& b);
 
     static PagedArenaBitset difference(const PagedArenaBitset& a, const PagedArenaBitset& b);
 
@@ -388,6 +404,24 @@ public:
      */
     template <typename Func>
     void forEachSetBit(Func&& callback) const {
+        const_cast<PagedArenaBitset*>(this)->traverseSetBits<false>(std::forward<Func>(callback));
+    }
+
+    /**
+     * @brief Traverses set bits in ascending order, popping (clearing) each bit upon successful processing.
+     * @tparam Func A callable taking `uint32_t` and returning `bool` (or convertible to `bool`).
+     * @param callback Invoked for each set bit. Return `true` to consume/pop the bit; `false` to STOP and leave the bit set.
+     * @return The number of bits successfully popped.
+     */
+    template <typename Func>
+    uint32_t popSetBits(Func&& callback) {
+        return traverseSetBits<true>(std::forward<Func>(callback));
+    }
+
+private:
+    template <bool Destructive, typename Func>
+    uint32_t traverseSetBits(Func&& callback) {
+        uint32_t count = 0;
         for (uint32_t m = 0; m < MASTER_WORDS; ++m) {
             uint64_t masterMask = mMasterMask[m];
             while (masterMask) {
@@ -405,7 +439,7 @@ public:
                     uint16_t const physicalIdx = mDirectory[dirIdx];
 
                     assert(physicalIdx != INVALID_PAGE && "Summary mask desynchronized");
-                    auto const& [activeWordsMask, words] = mArena[physicalIdx];
+                    auto& [activeWordsMask, words] = mArena[physicalIdx];
                     uint64_t activeMask = activeWordsMask;
 
                     while (activeMask != 0) {
@@ -416,12 +450,31 @@ public:
                             word &= word - 1;
 
                             // Calculate the unique Entity ID from the hierarchy indices
-                            uint32_t const id = (dirIdx << PAGE_SHIFT) | (w << WORD_SHIFT) | wBit;
+                            uint32_t const id = (dirIdx << FILAMENT_PAGE_SHIFT) | (w << WORD_SHIFT) | wBit;
 
+                            bool proceed = true;
                             if constexpr (std::is_convertible_v<std::invoke_result_t<Func, uint32_t>, bool>) {
-                                if (!callback(id)) return;
+                                proceed = callback(id);
                             } else {
                                 callback(id);
+                            }
+
+                            if constexpr (Destructive) {
+                                if (UTILS_LIKELY(proceed)) {
+                                    words[w] &= ~(1ULL << wBit);
+                                    if (words[w] == 0) {
+                                        activeWordsMask &= ~(1ULL << w);
+                                    }
+                                    mSize--;
+                                    count++;
+                                } else {
+                                    return count;
+                                }
+                            } else {
+                                if (UTILS_UNLIKELY(!proceed)) {
+                                    return count;
+                                }
+                                count++;
                             }
                         }
                         activeMask &= (activeMask - 1);
@@ -429,8 +482,10 @@ public:
                 }
             }
         }
+        return count;
     }
 
+public:
     // ----------------------------------------------------------------------------------------------------------------
     // subset / superset queries
     // ----------------------------------------------------------------------------------------------------------------
@@ -465,18 +520,18 @@ public:
         return other.isSubsetOf(*this);
     }
 
-    void swap(PagedArenaBitset& other) noexcept;
+    PagedArenaBitset& swap(PagedArenaBitset& other) noexcept;
 
     friend void swap(PagedArenaBitset& a, PagedArenaBitset& b) noexcept {
         a.swap(b);
     }
 
-    friend PagedArenaBitset exchange(PagedArenaBitset& object, PagedArenaBitset&& newValue);
-    friend PagedArenaBitset exchangeAndClear(PagedArenaBitset& object);
-
 private:
+    struct NoInit {};
+    explicit PagedArenaBitset(NoInit) noexcept;
+
     // Directory Size
-    static constexpr uint32_t DIR_SIZE = 1U << (DOMAIN_BITS - PAGE_SHIFT);
+    static constexpr uint32_t DIR_SIZE = 1U << (DOMAIN_BITS - FILAMENT_PAGE_SHIFT);
 
     // Summary Mask Size (1 bit per Directory Entry)
     // Shifting right by WORD_SHIFT is equivalent to dividing by 64.
@@ -487,48 +542,49 @@ private:
     // in case a small domain results in MASK_WORDS < 64.
     static constexpr uint32_t MASTER_WORDS = (MASK_WORDS + ((1U << WORD_SHIFT) - 1)) >> WORD_SHIFT;
 
-    static constexpr uint32_t WORDS_PER_PAGE = 1U << (PAGE_SHIFT - WORD_SHIFT);
+    static constexpr uint32_t WORDS_PER_PAGE = 1U << (FILAMENT_PAGE_SHIFT - WORD_SHIFT);
     static constexpr uint32_t WORD_MASK = ((1U << WORD_SHIFT) - 1);
     static constexpr uint16_t INVALID_PAGE = 0xFFFF;
 
     static_assert(WORDS_PER_PAGE == 64, "WORDS_PER_PAGE must be 64 to match the 64-bit activeWordsMask!");
 
     // Do NOT pad or align this struct to 64 bytes (576) or 512 bytes.
-    // Maintaining a non-cache-line-multiple size (520) creates a natural 
-    // memory stagger. In Multi-Way operations (Merge6, Intersect6), this stagger 
-    // prevents 4K Cache Set Aliasing and L1 Cache Thrashing, resulting in 
+    // Maintaining a non-cache-line-multiple size (520) creates a natural
+    // memory stagger. In Multi-Way operations (Merge6, Intersect6), this stagger
+    // prevents 4K Cache Set Aliasing and L1 Cache Thrashing, resulting in
     // up to an 8x performance increase.
     struct Page {
         uint64_t activeWordsMask = 0;
         uint64_t words[WORDS_PER_PAGE] = {};
-        void clear();
-        uint32_t popcount() const;
+        void clear() noexcept;
+        uint32_t popcount() const noexcept;
     };
 
     std::vector<uint64_t> mSummaryMask;     // always  4 KiB
     std::vector<uint16_t> mDirectory;       // always 64 KiB
     std::vector<Page> mArena;               // each page is 512 bytes
     std::vector<uint16_t> mFreePages;       // list of free pages
-    uint32_t mSize = 0;                     // size of the set (how many bits are 1)
     std::array<uint64_t, MASTER_WORDS> mMasterMask = {};
-
-    PagedArenaBitset(PagedArenaBitset const& rhs);
+    uint32_t mSize = 0;                     // size of the set (how many bits are 1)
 
     uint16_t allocatePage();
     void freePage(uint32_t dirIdx);
     void reserve(size_t size);
 
     template<typename Collection>
-    static PagedArenaBitset& intersectInternal(PagedArenaBitset* out, const Collection& inputs);
-    static PagedArenaBitset& intersectSpan(PagedArenaBitset* out, Slice<const PagedArenaBitset* const> inputs);
+    static PagedArenaBitset& intersectInternal(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
+            const Collection& inputs);
+
+    static PagedArenaBitset& intersectSpan(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
+            Slice<const PagedArenaBitset* const> inputs);
 
     template<typename Collection>
     static uint32_t intersectSizeInternal(const Collection& inputs);
     static uint32_t intersectSizeSpan(Slice<const PagedArenaBitset* const> inputs);
 
     template<typename Collection>
-    static PagedArenaBitset& mergeInternal(PagedArenaBitset* out, const Collection& inputs);
-    static PagedArenaBitset& mergeSpan(PagedArenaBitset* out, Slice<const PagedArenaBitset* const> inputs);
+    static PagedArenaBitset& mergeInternal(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
+            const Collection& inputs);
 
     template<typename Collection>
     static uint32_t mergeSizeInternal(const Collection& inputs);

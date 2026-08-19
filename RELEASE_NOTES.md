@@ -7,6 +7,41 @@ A new header is inserted each time a *tag* is created.
 Instead, if you are authoring a PR for the main branch, add your release note to
 [NEW_RELEASE_NOTES.md](./NEW_RELEASE_NOTES.md).
 
+## v1.75.0
+
+- web: expand JS bindings coverage for Fence, SkinningBuffer, MorphTargetBuffer, and other previously unbound APIs
+- variant: compile MNT variant for unlit materials by default. [⚠️ **Recompile Materials**]
+- materials: fix punctual-only shadow receivers selecting the SSR shader. [⚠️ **Recompile Materials**]
+
+## v1.74.1
+
+
+## v1.73.1
+
+
+## v1.73.0
+
+- Convert DYN variant into a specialization constant. [⚠️ **Recompile Materials**]
+- filamat: add `clipSpacePosition` material property to vertex domain
+
+## v1.72.1
+
+
+## v1.72.0
+
+- filamat: support push constants in fragment stage [⚠️ **Recompile Materials**]
+
+## v1.71.6
+
+- engine: Optimize Color Grading with NEON on armv8+ devices. Performance improvements between 1.3x and 4.5x
+- New `coloredPenumbra` material property can be used to simulate light scattering in shadow 
+  transitions. See Filament's material guide for more information
+- gltfio: Support textures bound to both sRGB and Linear parameters
+
+## v1.71.5
+
+- Support attribute-less procedural rendering
+
 ## v1.71.4
 
 - iOS: add Apple silicon (`arm64`) iOS Simulator support. The sample Xcode projects now require Xcode 16+ (CI is pinned to Xcode 16.2).

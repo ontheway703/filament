@@ -18,6 +18,7 @@
 #define TNT_FILAMENT_ENGINE_H
 
 
+#include <filament/ColorGrading.h>
 #include <filament/FilamentAPI.h>
 
 #include <backend/DriverEnums.h>
@@ -32,8 +33,8 @@
 #include <initializer_list>
 #include <optional>
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 
 namespace utils {
@@ -53,6 +54,7 @@ class Camera;
 class ColorGrading;
 class DebugRegistry;
 class Fence;
+class FramePacer;
 class IndexBuffer;
 class SkinningBuffer;
 class IndirectLight;
@@ -294,17 +296,26 @@ public:
         uint32_t perFrameCommandsSizeMB = FILAMENT_PER_FRAME_COMMANDS_SIZE_IN_MB;
 
         /**
+         * Special value for jobSystemThreadCount, forcing the JobSystem to be single-threaded.
+         */
+        static constexpr uint32_t SINGLE_THREADED = std::numeric_limits<uint32_t>::max();
+
+        /**
          * Number of threads to use in Engine's JobSystem.
          *
-         * Engine uses a utils::JobSystem to carry out paralleization of Engine workloads. This
+         * Engine uses a utils::JobSystem to carry out parallelization of Engine workloads. This
          * value sets the number of threads allocated for JobSystem. Configuring this value can be
          * helpful in CPU-constrained environments where too many threads can cause contention of
          * CPU and reduce performance.
          *
          * The default value is 0, which implies that the Engine will use a heuristic to determine
          * the number of threads to use.
+         *
+         * The special value SINGLE_THREADED forces the JobSystem to be single-threaded and not use
+         * a thread pool (jobs are executed on the calling thread).
          */
         uint32_t jobSystemThreadCount = 0;
+
 
         /**
          * When uploading vertex or index data, the Filament Metal backend copies data
@@ -569,6 +580,13 @@ public:
          * @return A reference to this Builder for chaining calls.
          */
         Builder& features(std::initializer_list<char const *> list) noexcept;
+
+        /**
+         * Sets the builder used to create the default ColorGrading object.
+         * @param colorGrading Builder used to create the default color grading.
+         * @return A reference to this Builder for chaining calls.
+         */
+        Builder& colorGrading(ColorGrading::Builder const& colorGrading) noexcept;
 
 #if UTILS_HAS_THREADING
         /**
@@ -978,6 +996,7 @@ public:
     bool destroy(const Material* UTILS_NULLABLE p);
     bool destroy(const MaterialInstance* UTILS_NULLABLE p); //!< Destroys a MaterialInstance object.
     bool destroy(const Renderer* UTILS_NULLABLE p);         //!< Destroys a Renderer object.
+    bool destroy(const FramePacer* UTILS_NULLABLE p);       //!< Destroys a FramePacer object.
     bool destroy(const Scene* UTILS_NULLABLE p);            //!< Destroys a Scene object.
     bool destroy(const Skybox* UTILS_NULLABLE p);           //!< Destroys a SkyBox object.
     bool destroy(const ColorGrading* UTILS_NULLABLE p);     //!< Destroys a ColorGrading object.

@@ -48,6 +48,7 @@ public:
         struct {
             struct {
                 bool use_1d_lut = false;
+                bool use_optimized_default_builder = true;
             } color_grading;
             struct {
                 bool use_shadow_atlas = false;
@@ -63,7 +64,7 @@ public:
                 bool assert_texture_can_generate_mipmap = CORRECTNESS_ASSERTION_DEFAULT;
             } debug;
             struct {
-                bool disable_gpu_frame_complete_metric = true;
+                bool disable_gpu_complete_metric = false;
             } frame_info;
             // Automatically requests a frame skip when the CPU gets too much ahead of the display. This can prevent
             // stalls on Android, e.g. when running out buffers, but this also keeps the expected latency in check.
@@ -72,7 +73,7 @@ public:
         } engine;
         struct {
             struct {
-                bool assert_native_window_is_valid = false;
+                bool assert_native_window_is_valid = true;
             } opengl;
             struct {
                 // In certain GPU drivers, graphics pipelines are cached based on a subset of their
@@ -91,10 +92,11 @@ public:
             bool disable_handle_use_after_free_check = false;
             bool disable_heap_handle_tags = true; // FIXME: this should be false
             bool enable_asynchronous_operation = false;
+            bool enable_priority_override_mitigation = true;
         } backend;
         struct {
             bool check_crc32_after_loading = false;
-            bool enable_material_instance_uniform_batching = false;
+            bool enable_material_instance_uniform_batching = true;
             bool enable_fog_as_postprocess = false;
         } material;
         struct {

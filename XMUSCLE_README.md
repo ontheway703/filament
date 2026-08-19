@@ -36,12 +36,16 @@ The XMuscle branch currently carries project-specific changes including:
 - `libs/gltfio_ext`, an extended glTF loading and animation library used by XMuscle.
 - iOS / Apple Silicon simulator build script adjustments.
 
+The current synchronization baseline is the official Filament `v1.75.0` tag. Do not use
+`upstream/main` as a release baseline.
+
 Keep these changes isolated from `main` so that the fork always has a clean upstream baseline.
 
 ## Sync Strategy
 
 Do not update XMuscle directly from `upstream/main` for production use. Prefer official Filament
-release tags, for example `v1.71.4`, because they provide a more stable integration target.
+release tags, for example `v1.75.0`, because they provide a stable and reproducible integration
+target.
 
 Recommended flow:
 

@@ -16,16 +16,19 @@
 
 #include "VulkanPlatformSwapChainImpl.h"
 
-#include "vulkan/VulkanConstants.h"
+#ifdef __ANDROID__
+#include "AndroidNativeWindow.h"
+#endif
+
 #include "vulkan/utils/Definitions.h"
 #include "vulkan/utils/Helper.h"
 #include "vulkan/utils/Image.h"
+#include "vulkan/VulkanConstants.h"
 
 #include <backend/DriverEnums.h>
 
-#ifdef __ANDROID__
-#include <AndroidNativeWindow.h>
-#endif
+#include <errno.h>
+
 
 using namespace bluevk;
 using namespace utils;
@@ -141,6 +144,11 @@ bool VulkanPlatformSwapChainBase::queryFrameTimestamps(uint64_t frameId,
     return false;
 }
 
+int VulkanPlatformSwapChainBase::setFrameRate(float,
+        Platform::FrameRateCompatibility, Platform::ChangeFrameRateStrategy) const {
+    return 0;
+}
+
 VulkanPlatformSurfaceSwapChain::VulkanPlatformSurfaceSwapChain(VulkanContext const& context,
         VkPhysicalDevice physicalDevice, VkDevice device, VkQueue queue, VkInstance instance,
         VkSurfaceKHR surface, VkExtent2D fallbackExtent, void* nativeWindow, uint64_t flags)
@@ -158,7 +166,7 @@ VulkanPlatformSurfaceSwapChain::VulkanPlatformSurfaceSwapChain(VulkanContext con
 }
 
 VulkanPlatformSurfaceSwapChain::~VulkanPlatformSurfaceSwapChain() {
-    destroy();
+    VulkanPlatformSurfaceSwapChain::destroy();
     vkDestroySurfaceKHR(mInstance, mSurface, VKALLOC);
 }
 
@@ -166,8 +174,8 @@ VkResult VulkanPlatformSurfaceSwapChain::create() {
 #ifdef __ANDROID__
     NativeWindow::enableFrameTimestamps(static_cast<ANativeWindow*>(mNativeWindow), true);
     // on Android, disable producer throttling
-    if (mProducerThrottling.isSupported()) {
-        mProducerThrottling.setProducerThrottlingEnabled(
+    if (NativeWindow::isProducerThrottlingSupported()) {
+        NativeWindow::setProducerThrottlingEnabled(
                 static_cast<ANativeWindow*>(mNativeWindow), false);
     }
 #endif
@@ -357,14 +365,26 @@ bool VulkanPlatformSurfaceSwapChain::isProtected() const {
     return mIsProtected;
 }
 
+int VulkanPlatformSurfaceSwapChain::setFrameRate(float const frameRate,
+        Platform::FrameRateCompatibility const compatibility,
+        Platform::ChangeFrameRateStrategy const strategy) const {
+#ifdef __ANDROID__
+    return mNativeWindow ? NativeWindow::setFrameRate(
+            static_cast<ANativeWindow*>(mNativeWindow), frameRate, compatibility, strategy) : -ENOSYS;
+#else
+    return 0;
+#endif
+}
+
 bool VulkanPlatformSurfaceSwapChain::queryCompositorTiming(
         CompositorTiming* outCompositorTiming) const {
 #ifdef __ANDROID__
     // fallback to private APIs
     if (UTILS_VERY_LIKELY(mNativeWindow)) {
+        CompositorTiming::duration_ns dummyCompositeDeadlineLatency;
         int const status = NativeWindow::getCompositorTiming(
                 static_cast<ANativeWindow*>(mNativeWindow),
-                &outCompositorTiming->compositeDeadline,
+                &dummyCompositeDeadlineLatency,
                 &outCompositorTiming->compositeInterval,
                 &outCompositorTiming->compositeToPresentLatency);
         if (status == 0) {
@@ -468,7 +488,7 @@ VulkanPlatformHeadlessSwapChain::VulkanPlatformHeadlessSwapChain(VulkanContext c
 }
 
 VulkanPlatformHeadlessSwapChain::~VulkanPlatformHeadlessSwapChain() {
-    destroy();
+    VulkanPlatformHeadlessSwapChain::destroy();
 }
 
 VkResult VulkanPlatformHeadlessSwapChain::present(uint32_t index, VkSemaphore finished) {
@@ -480,6 +500,15 @@ VkResult VulkanPlatformHeadlessSwapChain::acquire(VulkanPlatform::ImageSyncData*
     outImageSyncData->imageIndex = mCurrentIndex;
     mCurrentIndex = (mCurrentIndex + 1) % HEADLESS_SWAPCHAIN_SIZE;
     return VK_SUCCESS;
+}
+
+int VulkanPlatformHeadlessSwapChain::setFrameRate(float,
+        Platform::FrameRateCompatibility, Platform::ChangeFrameRateStrategy) const {
+#ifdef __ANDROID__
+    return -ENOSYS;
+#else
+    return 0;
+#endif
 }
 
 void VulkanPlatformHeadlessSwapChain::destroy() {

@@ -18,10 +18,13 @@ set(MATERIAL_DIR  "${GENERATION_ROOT}/generated/material")
 # ==================================================================================================
 
 set(PUBLIC_HDRS
+        include/filamentapp/AssetLoader.h
+        include/filamentapp/DesktopAssetLoader.h
         include/filamentapp/Config.h
         include/filamentapp/Cube.h
         include/filamentapp/Grid.h
         include/filamentapp/FilamentApp.h
+        include/filamentapp/FilamentApp2.h
         include/filamentapp/IBL.h
         include/filamentapp/IcoSphere.h
         include/filamentapp/MeshAssimp.h
@@ -31,37 +34,65 @@ set(PUBLIC_HDRS
 
 set(SRCS
         src/Cube.cpp
+        src/DesktopAssetLoader.cpp
         src/Grid.cpp
         src/FilamentApp.cpp
+        src/FilamentApp2.cpp
         src/IBL.cpp
         src/IcoSphere.cpp
         src/MeshAssimp.cpp
         src/Sphere.cpp
-        src/KeyInputConversion.h
+        src/PlatformHelper.cpp
+        src/PlatformHelper.h
+        include/filamentapp/DisplayManager.h
+        include/filamentapp/AppEvent.h
+        src/FilamentAppGui.h
+        src/FilamentAppGui.cpp
 )
 
+if (IS_HOST_PLATFORM)
+    list(APPEND SRCS
+            src/display_managers/SDLDisplayManager.h
+            src/display_managers/SDLDisplayManager.cpp
+            src/display_managers/HtmlDisplayManager.h
+            src/display_managers/HtmlDisplayManager.cpp
+    )
+endif()
+
 if (FILAMENT_SUPPORTS_VULKAN)
-    list(APPEND SRCS src/VulkanPlatformHelper.cpp)
+    list(APPEND SRCS
+            src/backend_platforms/VulkanPlatformHelperCommon.h
+            src/backend_platforms/VulkanPlatformHelperCommon.cpp
+    )
 endif()
 
 set(LIBS
         assimp
         camutils
-        filagui
         filamat
         filament
         filament-iblprefilter
         geometry
-        
         image
-        imageio
-        imgui
         ktxreader
         math
-        sdl2
         stb
         utils
 )
+
+if (IS_HOST_PLATFORM)
+    list(APPEND LIBS
+        civetweb
+        filagui
+        imgui
+        imageio
+        sdl2
+    )
+else()
+    list(APPEND LIBS
+        imageio-lite
+    )
+endif()
 
 set(MATERIAL_SRCS
         materials/aiDefaultMat.mat
@@ -71,25 +102,34 @@ set(MATERIAL_SRCS
 )
 
 if (APPLE)
-    list(APPEND SRCS src/NativeWindowHelperCocoa.mm)
+    list(APPEND SRCS src/display_managers/NativeWindowHelperCocoa.mm)
     if (FILAMENT_SUPPORTS_VULKAN)
-        list(APPEND SRCS src/VulkanPlatformHelperApple.mm)
+        list(APPEND SRCS src/backend_platforms/VulkanPlatformHelperApple.mm)
+    endif()
+    if (FILAMENT_SUPPORTS_WEBGPU)
+        list(APPEND SRCS src/backend_platforms/WebGPUPlatformHelperApple.mm)
     endif()
     list(APPEND LIBS "-framework Cocoa -framework QuartzCore")
 endif()
 
 if (LINUX)
-    list(APPEND SRCS src/NativeWindowHelperLinux.cpp)
+    list(APPEND SRCS src/display_managers/NativeWindowHelperLinux.cpp)
     if (FILAMENT_SUPPORTS_VULKAN)
-        list(APPEND SRCS src/VulkanPlatformHelperLinux.cpp)
+        list(APPEND SRCS src/backend_platforms/VulkanPlatformHelperLinux.cpp)
+    endif()
+    if (FILAMENT_SUPPORTS_WEBGPU)
+        list(APPEND SRCS src/backend_platforms/WebGPUPlatformHelperLinux.cpp)
     endif()
 endif()
 
 if (WIN32)
-    list(APPEND SRCS src/NativeWindowHelperWindows.cpp)
+    list(APPEND SRCS src/display_managers/NativeWindowHelperWindows.cpp)
 
     if (FILAMENT_SUPPORTS_VULKAN)
-        list(APPEND SRCS src/VulkanPlatformHelperWindows.cpp)
+        list(APPEND SRCS src/backend_platforms/VulkanPlatformHelperWindows.cpp)
+    endif()
+    if (FILAMENT_SUPPORTS_WEBGPU)
+        list(APPEND SRCS src/backend_platforms/WebGPUPlatformHelperWindows.cpp)
     endif()
 
     list(APPEND LIBS sdl2main)
@@ -97,7 +137,10 @@ endif()
 
 if (ANDROID)
     if (FILAMENT_SUPPORTS_VULKAN)
-        list(APPEND SRCS src/VulkanPlatformHelperAndroid.cpp)
+        list(APPEND SRCS src/backend_platforms/VulkanPlatformHelperAndroid.cpp)
+    endif()
+    if (FILAMENT_SUPPORTS_WEBGPU)
+        list(APPEND SRCS src/backend_platforms/WebGPUPlatformHelperAndroid.cpp)
     endif()
 endif()
 
@@ -157,6 +200,35 @@ add_custom_command(OUTPUT ${DUMMY_SRC} COMMAND echo "//" > ${DUMMY_SRC})
 add_library(filamentapp-resources ${DUMMY_SRC} ${RESGEN_SOURCE})
 set_target_properties(filamentapp-resources PROPERTIES FOLDER Samples/Resources)
 
+# Web Display Manager resources
+set(WEB_RESOURCE_DIR "${GENERATION_ROOT}/generated/web_resources")
+file(MAKE_DIRECTORY ${WEB_RESOURCE_DIR})
+
+set(WEB_RESOURCE_BINS
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/display_managers/web/index.html
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/display_managers/web/style.css
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/display_managers/web/app.js
+)
+
+get_resgen_vars(${WEB_RESOURCE_DIR} filamentapp_web_resources)
+
+add_custom_command(
+        OUTPUT ${RESGEN_OUTPUTS}
+        COMMAND resgen -t ${RESGEN_FLAGS} ${WEB_RESOURCE_BINS}
+        DEPENDS resgen ${WEB_RESOURCE_BINS}
+        COMMENT "Bundling display manager web resources"
+)
+
+if (DEFINED RESGEN_SOURCE_FLAGS)
+    set_source_files_properties(${RESGEN_SOURCE} PROPERTIES COMPILE_FLAGS ${RESGEN_SOURCE_FLAGS})
+endif()
+
+set(WEB_DUMMY_SRC "${WEB_RESOURCE_DIR}/dummy.c")
+add_custom_command(OUTPUT ${WEB_DUMMY_SRC} COMMAND echo "//" > ${WEB_DUMMY_SRC})
+
+add_library(filamentapp-web-resources ${WEB_DUMMY_SRC} ${RESGEN_SOURCE})
+set_target_properties(filamentapp-web-resources PROPERTIES FOLDER Samples/Resources)
+
 # ==================================================================================================
 # Include and target definitions
 # ==================================================================================================
@@ -169,11 +241,19 @@ if (FILAMENT_SUPPORTS_WEBGPU)
 target_link_libraries(${TARGET} PRIVATE dawncpp_headers)
 endif()
 
-target_link_libraries(${TARGET} PUBLIC ${LIBS} filamentapp-resources)
+if (IS_HOST_PLATFORM)
+    target_link_libraries(${TARGET} PUBLIC ${LIBS} filamentapp-resources filamentapp-web-resources)
+else()
+    target_link_libraries(${TARGET} PUBLIC ${LIBS} filamentapp-resources)
+endif()
 
 target_include_directories(${TARGET} PUBLIC ${PUBLIC_HDR_DIR})
 set_target_properties(${TARGET} PROPERTIES FOLDER Libs)
-target_include_directories(${TARGET} PRIVATE ${GENERATION_ROOT})
+target_include_directories(${TARGET} PRIVATE
+        ${GENERATION_ROOT}
+        ${ROOT_DIR}/imageio/include
+        ${ROOT_DIR}/../third_party/libassimp/include
+)
 
 # ==================================================================================================
 # Compiler flags
@@ -193,3 +273,13 @@ if (_isMultiConfig)
 else()
     target_compile_definitions(${TARGET} PRIVATE RELATIVE_ASSET_PATH=".")
 endif()
+
+if (IS_HOST_PLATFORM)
+    target_compile_definitions(${TARGET} PRIVATE FILAMENTAPP_HAS_SDL FILAMENTAPP_HAS_IMGUI FILAMENTAPP_HAS_WEB_UI)
+endif()
+
+
+# ==================================================================================================
+# Installation
+# ==================================================================================================
+install(TARGETS filamentapp filamentapp-resources ARCHIVE DESTINATION lib/${DIST_DIR} LIBRARY DESTINATION lib/${DIST_DIR})

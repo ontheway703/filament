@@ -51,6 +51,7 @@
 
 namespace filament::backend {
 
+class WebGPUProgram;
 class WebGPUSwapChain;
 class WebGPUQueueManager;
 
@@ -90,7 +91,7 @@ private:
     void* mNativeWindow = nullptr;
     WebGPUSwapChain* mSwapChain = nullptr;
     uint64_t mNextFakeHandle = 1;
-    wgpu::TextureView mTextureView = nullptr;
+    wgpu::TextureView mSwapChainView = nullptr;
     wgpu::RenderPassEncoder mRenderPassEncoder = nullptr;
     WebGPURenderTarget* mDefaultRenderTarget = nullptr;
     WebGPURenderTarget* mCurrentRenderTarget = nullptr;
@@ -101,6 +102,11 @@ private:
     WebGPUMsaaTextureResolver mMsaaTextureResolver{};
     WebGPUBlitter mBlitter;
     webgpuutils::AsyncTaskCounter mReadPixelMapsCounter{};
+
+    struct {
+        // For push constant
+        WebGPUProgram* program = nullptr;
+    } mPipelineState {};
 
     struct DescriptorSetBindingInfo{
         wgpu::BindGroup bindGroup;

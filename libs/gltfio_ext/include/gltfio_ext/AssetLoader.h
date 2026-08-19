@@ -17,13 +17,13 @@
 #ifndef GLTFIO_EXT_ASSETLOADER_H
 #define GLTFIO_EXT_ASSETLOADER_H
 
-#include <filament/Engine.h>
-#include <filament/Material.h>
-
 #include <gltfio_ext/AnimationAsset.h>
 #include <gltfio_ext/FilamentAsset.h>
 #include <gltfio_ext/FilamentInstance.h>
 #include <gltfio_ext/MaterialProvider.h>
+
+#include <filament/Engine.h>
+#include <filament/Material.h>
 
 #include <utils/compiler.h>
 
@@ -270,6 +270,11 @@ public:
      * @see AnimationAsset
      */
     std::unique_ptr<AnimationAsset> loadAnimationAsset(const uint8_t* bytes, uint32_t nbytes);
+
+    /**
+     * @brief Performs a Garbage Collection sweep over all internal component managers.
+     */
+    void gc() noexcept;
 
     /**
      * Gets a weak reference to an array of cached materials, used internally to create material

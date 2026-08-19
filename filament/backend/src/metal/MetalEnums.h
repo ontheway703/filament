@@ -17,13 +17,12 @@
 #ifndef TNT_FILAMENT_DRIVER_METALENUMS_H
 #define TNT_FILAMENT_DRIVER_METALENUMS_H
 
-#include "private/backend/Driver.h"
-
-#include <Metal/Metal.h>
+#include <private/backend/Driver.h>
 
 #include <utils/Panic.h>
 
 #include <Availability.h>
+#include <Metal/Metal.h>
 
 namespace filament {
 namespace backend {
@@ -273,6 +272,21 @@ constexpr inline bool isMetalFormatSignedInteger(MTLPixelFormat format) {
 
 constexpr inline bool isMetalFormatInteger(MTLPixelFormat format) {
     return isMetalFormatUnsignedInteger(format) || isMetalFormatSignedInteger(format);
+}
+
+constexpr inline bool isMetalFormatDepth(MTLPixelFormat format) {
+    switch (format) {
+        case MTLPixelFormatDepth16Unorm:
+        case MTLPixelFormatDepth32Float:
+        case MTLPixelFormatDepth32Float_Stencil8:
+#if !defined(FILAMENT_IOS)
+        case MTLPixelFormatDepth24Unorm_Stencil8:
+#endif
+            return true;
+
+        default:
+            return false;
+    }
 }
 
 constexpr inline bool isMetalFormatStencil(MTLPixelFormat format) {

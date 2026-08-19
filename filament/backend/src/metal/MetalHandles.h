@@ -17,12 +17,6 @@
 #ifndef TNT_FILAMENT_DRIVER_METALHANDLES_H
 #define TNT_FILAMENT_DRIVER_METALHANDLES_H
 
-#include "metal/MetalDriver.h"
-
-#include <CoreVideo/CVPixelBuffer.h>
-#include <Metal/Metal.h>
-#include <QuartzCore/QuartzCore.h> // for CAMetalLayer
-
 #include "MetalBuffer.h"
 #include "MetalContext.h"
 #include "MetalEnums.h"
@@ -30,18 +24,24 @@
 #include "MetalFlags.h"
 #include "MetalState.h" // for MetalState::VertexDescription
 
+#include "metal/MetalDriver.h"
+
 #include <backend/DriverEnums.h>
 #include <backend/platforms/PlatformMetal.h>
 
 #include <utils/bitset.h>
 #include <utils/CString.h>
 #include <utils/FixedCapacityVector.h>
+#include <utils/Mutex.h>
 #include <utils/Panic.h>
 
 #include <math/vec2.h>
 
+#include <CoreVideo/CVPixelBuffer.h>
+#include <Metal/Metal.h>
+#include <QuartzCore/QuartzCore.h> // for CAMetalLayer
+
 #include <atomic>
-#include <condition_variable>
 #include <memory>
 #include <type_traits>
 #include <vector>
@@ -187,7 +187,7 @@ private:
     NSUInteger headlessWidth = 0;
     NSUInteger headlessHeight = 0;
     CAMetalLayer* layer = nullptr;
-    std::shared_ptr<std::mutex> layerDrawableMutex;
+    std::shared_ptr<utils::Mutex> layerDrawableMutex;
     MetalExternalImage externalImage;
     SwapChainType type;
     uint64_t flags;
@@ -256,7 +256,8 @@ struct MetalVertexBufferInfo : public HwVertexBufferInfo {
 
 struct MetalVertexBuffer : public HwVertexBuffer {
     MetalVertexBuffer(MetalContext& context,
-            uint32_t vertexCount, uint32_t bufferCount, Handle<HwVertexBufferInfo> vbih);
+            uint32_t vertexCount, uint32_t bufferCount, Handle<HwVertexBufferInfo> vbih,
+            bool async = false);
 
     Handle<HwVertexBufferInfo> vbih;
     utils::FixedCapacityVector<MetalBuffer*> buffers;
@@ -314,7 +315,7 @@ public:
     MetalTexture(MetalContext& context, MetalTexture const* src, uint8_t baseLevel,
             uint8_t levelCount) noexcept;
     MetalTexture(MetalContext& context, MetalTexture const* src, TextureSwizzle r, TextureSwizzle g,
-            TextureSwizzle b, TextureSwizzle a) noexcept;
+            TextureSwizzle b, TextureSwizzle a, bool async = false) noexcept;
 
     // Constructor for importing an id<MTLTexture> outside of Filament.
     MetalTexture(MetalContext& context, SamplerType target, uint8_t levels, TextureFormat format,

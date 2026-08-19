@@ -32,10 +32,10 @@
 #include <math/vec3.h>
 #include <math/vec4.h>
 
+#include <string>
+
 #include <stddef.h>
 #include <stdint.h>
-
-#include <string>
 
 namespace filament {
 
@@ -254,7 +254,7 @@ struct LightDefinition {
     float spotOuter = 0.0f;
     float sunHaloSize = 10.0f;
     float sunHaloFalloff = 80.0f;
-    float sunAngularRadius = 1.9f;
+    float sunAngularRadiusDeg = 0.545f;
     bool castShadows = false;
     LightManager::ShadowOptions shadowOptions;
 };
@@ -313,6 +313,7 @@ struct ViewerOptions {
     sRGBColor backgroundColor = { 0.0f };
     bool autoScaleEnabled = true;
     bool autoInstancingEnabled = false;
+    float cameraFrameRate = 0.0f;
 };
 
 struct DebugOptions {

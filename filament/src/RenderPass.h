@@ -18,34 +18,34 @@
 #define TNT_FILAMENT_RENDERPASS_H
 
 #include "Allocators.h"
-
+#include "DynamicSpecConstKey.h"
 #include "SharedHandle.h"
 
 #include "details/Camera.h"
 #include "details/Scene.h"
 
-#include "private/filament/Variant.h"
-#include "private/filament/EngineEnums.h"
+#include <private/filament/EngineEnums.h>
+#include <private/filament/Variant.h>
 
 #include <backend/DriverApiForward.h>
 #include <backend/DriverEnums.h>
 #include <backend/Handle.h>
 
 #include <utils/Allocator.h>
+#include <utils/architecture.h>
 #include <utils/BitmaskEnum.h>
+#include <utils/debug.h>
 #include <utils/FixedCapacityVector.h>
 #include <utils/Range.h>
 #include <utils/Slice.h>
-#include <utils/architecture.h>
-#include <utils/debug.h>
 
 #include <math/mathfwd.h>
 
 #include <functional>
 #include <limits>
 #include <optional>
-#include <type_traits>
 #include <tuple>
+#include <type_traits>
 #include <vector>
 
 #include <stddef.h>
@@ -251,25 +251,28 @@ public:
             FMaterialInstance const* mi;
             uint64_t padding; // make this field 64 bits on all platforms
         };
-        backend::RenderPrimitiveHandle rph;                 // 4 bytes
-        backend::VertexBufferInfoHandle vbih;               // 4 bytes
-        backend::DescriptorSetHandle dsh;                   // 4 bytes
-        uint32_t indexOffset;                               // 4 bytes
-        uint32_t indexCount;                                // 4 bytes
-        uint32_t index = 0;                                 // 4 bytes
-        uint32_t skinningOffset = 0;                        // 4 bytes
-        uint32_t morphingOffset = 0;                        // 4 bytes
+        backend::RenderPrimitiveHandle rph;    // 4 bytes
+        backend::VertexBufferInfoHandle vbih;  // 4 bytes
+        backend::DescriptorSetHandle dsh;      // 4 bytes
+        uint32_t offset;                       // 4 bytes, isIndexed ? index offset : vertex offset
+        uint32_t count;                        // 4 bytes, isIndexed ? index count : vertex count
+        uint32_t index = 0;                    // 4 bytes
+        uint32_t skinningOffset = 0;           // 4 bytes
+        uint32_t morphingOffset = 0;           // 4 bytes
 
-        backend::RasterState rasterState;                   // 4 bytes
+        backend::RasterState rasterState;      // 4 bytes
 
-        uint16_t instanceCount;                             // 2 bytes [MSb: user]
-        Variant materialVariant;                            // 1 byte
-        backend::PrimitiveType type : 3;                    // 1 byte       3 bits
-        bool hasSkinning : 1;                               //              1 bit
-        bool hasMorphing : 1;                               //              1 bit
-        bool hasHybridInstancing : 1;                       //              1 bit
+        uint16_t instanceCount;                // 2 bytes [MSb: user]
+        Variant materialVariant;               // 1 byte
+        backend::PrimitiveType type : 3;       // 1 byte       3 bits
+        bool hasSkinning : 1;                  //              1 bit
+        bool hasMorphing : 1;                  //              1 bit
+        bool hasHybridInstancing : 1;          //              1 bit
+        bool isIndexed : 1;                    //              1 bit
 
-        uint32_t rfu[2];                                    // 8 bytes
+        DynamicSpecConstKey dynamicSpecConstKey;            // 2 bytes
+        uint16_t rfu_padding;                               // 2 bytes
+        uint32_t rfu[1];                                    // 4 bytes
     };
     static_assert(sizeof(PrimitiveInfo) == 56);
 
@@ -428,6 +431,7 @@ private:
             RenderFlags renderFlags,
             FScene::VisibleMaskType visibilityMask,
             Variant variant,
+            DynamicSpecConstKey specKey,
             math::float3 cameraPosition,
             math::float3 cameraForwardVector) const noexcept;
 
@@ -454,20 +458,19 @@ private:
             "Size of Commands jobs must be multiple of a cache-line size");
 
     static inline void generateCommands(CommandTypeFlags commandTypeFlags, Command* commands,
-            FScene::RenderableSoa const& soa, utils::Range<uint32_t> range,
-            Variant variant, RenderFlags renderFlags,
-            FScene::VisibleMaskType visibilityMask,
-            math::float3 cameraPosition, math::float3 cameraForward,
-            uint8_t instancedStereoEyeCount) noexcept;
+            FScene::RenderableSoa const& soa, utils::Range<uint32_t> range, Variant variant,
+            DynamicSpecConstKey specKey, RenderFlags renderFlags,
+            FScene::VisibleMaskType visibilityMask, math::float3 cameraPosition,
+            math::float3 cameraForward, uint8_t instancedStereoEyeCount) noexcept;
 
     template<CommandTypeFlags commandTypeFlags>
-    static Command* generateCommandsImpl(CommandTypeFlags extraFlags,
-            Command* curr, FScene::RenderableSoa const& soa, utils::Range<uint32_t> range,
-            Variant variant, RenderFlags renderFlags, FScene::VisibleMaskType visibilityMask,
-            math::float3 cameraPosition, math::float3 cameraForward,
-            uint8_t instancedStereoEyeCount) noexcept;
+    static Command* generateCommandsImpl(CommandTypeFlags extraFlags, Command* curr,
+            FScene::RenderableSoa const& soa, utils::Range<uint32_t> range, Variant variant,
+            DynamicSpecConstKey specKey, RenderFlags renderFlags,
+            FScene::VisibleMaskType visibilityMask, math::float3 cameraPosition,
+            math::float3 cameraForward, uint8_t instancedStereoEyeCount) noexcept;
 
-    static void setupColorCommand(Command& cmdDraw, Variant variant,
+    static void setupColorCommand(Command& cmdDraw, Variant variant, DynamicSpecConstKey specKey,
             FMaterialInstance const* mi, bool inverseFrontFaces, bool hasDepthClamp) noexcept;
 
     static void updateSummedPrimitiveCounts(
@@ -500,6 +503,7 @@ class RenderPassBuilder {
     math::float3 mCameraForwardVector{};
     RenderPass::RenderFlags mFlags{};
     Variant mVariant{};
+    DynamicSpecConstKey mDynamicSpecConstKey{};
     ColorPassDescriptorSet const* mColorPassDescriptorSet = nullptr;
     FScene::VisibleMaskType mVisibilityMask = std::numeric_limits<FScene::VisibleMaskType>::max();
 
@@ -560,7 +564,12 @@ public:
         return *this;
     }
 
-    // variant to use
+    RenderPassBuilder& dynamicSpecConstKey(DynamicSpecConstKey const key) noexcept {
+        mDynamicSpecConstKey = key;
+        return *this;
+    }
+
+    // colorPassDescriptorSet to use
     RenderPassBuilder& colorPassDescriptorSet(ColorPassDescriptorSet const* colorPassDescriptorSet) noexcept {
         mColorPassDescriptorSet = colorPassDescriptorSet;
         return *this;

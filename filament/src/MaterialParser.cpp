@@ -17,30 +17,30 @@
 
 #include "MaterialParser.h"
 
-#include <filaflat/ChunkContainer.h>
-#include <filaflat/MaterialChunk.h>
-#include <filaflat/DictionaryReader.h>
-#include <filaflat/Unflattener.h>
+#include <private/filament/BufferInterfaceBlock.h>
+#include <private/filament/ConstantInfo.h>
+#include <private/filament/EngineEnums.h>
+#include <private/filament/PushConstantInfo.h>
+#include <private/filament/SamplerInterfaceBlock.h>
+#include <private/filament/SubpassInfo.h>
+#include <private/filament/Variant.h>
 
 #include <filament/MaterialChunkType.h>
 
-#include <private/filament/SamplerInterfaceBlock.h>
-#include <private/filament/BufferInterfaceBlock.h>
-#include <private/filament/SubpassInfo.h>
-#include <private/filament/Variant.h>
-#include <private/filament/ConstantInfo.h>
-#include <private/filament/PushConstantInfo.h>
-#include <private/filament/EngineEnums.h>
+#include <filaflat/ChunkContainer.h>
+#include <filaflat/DictionaryReader.h>
+#include <filaflat/MaterialChunk.h>
+#include <filaflat/Unflattener.h>
 
 #include <backend/DriverEnums.h>
 #include <backend/Program.h>
-
-#include <zstd.h>
 
 #include <utils/compiler.h>
 #include <utils/CString.h>
 #include <utils/FixedCapacityVector.h>
 #include <utils/Hash.h>
+
+#include <zstd.h>
 
 #include <array>
 #include <atomic>
@@ -48,8 +48,8 @@
 #include <tuple>
 #include <utility>
 
-#include <stdlib.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 using namespace utils;
@@ -265,6 +265,12 @@ bool MaterialParser::getSourceShader(CString* cstring) const noexcept {
     const size_t decompressBound =
             ZSTD_getFrameContentSize(compressed, compressedSize);
     if (ZSTD_isError(decompressBound)) {
+        return false;
+    }
+    // Reject implausibly large declared sizes to prevent unbounded allocation
+    // from attacker-controlled .filamat files (decompression bomb).
+    static constexpr size_t MAX_ZSTD_DECOMPRESSED_SIZE = 256u * 1024u * 1024u; // 256 MiB
+    if (UTILS_UNLIKELY(decompressBound > MAX_ZSTD_DECOMPRESSED_SIZE)) {
         return false;
     }
 
@@ -844,6 +850,15 @@ bool ChunkMaterialConstants::unflatten(Unflattener& unflattener,
         return false;
     }
 
+    // FixedCapacityVector::size_type is 32 bits, so a count of 2^32 or more is silently
+    // truncated by reserve()/resize() while the loop below iterates the full 64-bit count,
+    // which would write past the allocation. A count larger than the bytes remaining in the
+    // chunk cannot be valid either. Reject both before sizing the container.
+    if (numConstants > std::numeric_limits<decltype(materialConstants->size())>::max() ||
+            unflattener.willOverflow(numConstants)) {
+        return false;
+    }
+
     materialConstants->reserve(numConstants);
     materialConstants->resize(numConstants);
 
@@ -884,6 +899,15 @@ bool ChunkMaterialPushConstants::unflatten(Unflattener& unflattener,
     // Read number of constants.
     uint64_t numConstants = 0;
     if (!unflattener.read(&numConstants)) {
+        return false;
+    }
+
+    // FixedCapacityVector::size_type is 32 bits, so a count of 2^32 or more is silently
+    // truncated by reserve()/resize() while the loop below iterates the full 64-bit count,
+    // which would write past the allocation. A count larger than the bytes remaining in the
+    // chunk cannot be valid either. Reject both before sizing the container.
+    if (numConstants > std::numeric_limits<decltype(materialPushConstants->size())>::max() ||
+            unflattener.willOverflow(numConstants)) {
         return false;
     }
 

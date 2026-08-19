@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 
-#include <gltfio_ext/Animator.h>
-#include <gltfio_ext/AnimationAsset.h>
-#include <gltfio_ext/AnimationBinding.h>
-#include <gltfio_ext/math.h>
-
+#include "downcast.h"
 #include "FFilamentAsset.h"
 #include "FFilamentInstance.h"
 #include "FTrsTransformManager.h"
-#include "downcast.h"
 
-#include <filament/VertexBuffer.h>
+#include <gltfio_ext/AnimationAsset.h>
+#include <gltfio_ext/AnimationBinding.h>
+#include <gltfio_ext/Animator.h>
+#include <gltfio_ext/math.h>
+
 #include <filament/RenderableManager.h>
 #include <filament/TransformManager.h>
+#include <filament/VertexBuffer.h>
 
 #include <utils/Log.h>
 #include <utils/Logger.h>
@@ -56,6 +56,7 @@ struct Sampler {
     TimeValues times;
     SourceValues values;
     enum { LINEAR, STEP, CUBIC } interpolation;
+    size_t inputCount = 0;
 };
 
 struct Channel {
@@ -234,6 +235,12 @@ static void createSampler(const cgltf_animation_sampler& src, Sampler& dst) {
     for (size_t i = 0, len = timelineAccessor->count; i < len; ++i) {
         dst.times[timelineFloats[i]] = i;
     }
+    dst.inputCount = timelineAccessor->count;
+    if (UTILS_UNLIKELY(dst.times.size() != dst.inputCount)) {
+        GLTFIO_EXT_WARN("Animation sampler has duplicate timestamps; animation disabled.");
+        dst.times.clear();
+        return;
+    }
 
     // Convert source data to float.
     const cgltf_accessor* valuesAccessor = src.output;
@@ -311,6 +318,12 @@ static void convertSampler(const AnimationSampler& srcSampler, Sampler& dstSampl
     for (size_t i = 0; i < srcSampler.times.size(); i++) {
         dstSampler.times[srcSampler.times[i]] = i;
     }
+    dstSampler.inputCount = srcSampler.times.size();
+    if (UTILS_UNLIKELY(dstSampler.times.size() != dstSampler.inputCount)) {
+        GLTFIO_EXT_WARN("External animation sampler has duplicate timestamps; animation disabled.");
+        dstSampler.times.clear();
+        return;
+    }
 
     // 2. 直接复制值数组（无需转换）
     dstSampler.values = srcSampler.values;
@@ -350,7 +363,40 @@ static void convertAnimation(const AnimationAsset::Animation& srcAnim, Animation
     dstAnim.channels.clear();
 }
 
+static bool accessorFitsView(const cgltf_accessor* accessor) {
+    const cgltf_buffer_view* view = accessor->buffer_view;
+    if (!view || accessor->is_sparse || accessor->count == 0) {
+        return false;
+    }
+    const cgltf_size elementSize = cgltf_calc_size(accessor->type, accessor->component_type);
+    const cgltf_size stride = accessor->stride ? accessor->stride : elementSize;
+    if (elementSize == 0 || stride == 0 || accessor->offset > view->size) {
+        return false;
+    }
+    const cgltf_size available = view->size - accessor->offset;
+    if (elementSize > available) {
+        return false;
+    }
+    return accessor->count <= (available - elementSize) / stride + 1;
+}
+
+static bool validateSampler(const cgltf_animation_sampler& sampler) {
+    if (!sampler.input || !sampler.output) {
+        return false;
+    }
+    if (sampler.input->type != cgltf_type_scalar ||
+            sampler.input->component_type != cgltf_component_type_r_32f) {
+        return false;
+    }
+    return accessorFitsView(sampler.input) && accessorFitsView(sampler.output);
+}
+
 static bool validateAnimation(const cgltf_animation& anim) {
+    for (cgltf_size j = 0; j < anim.samplers_count; ++j) {
+        if (!validateSampler(anim.samplers[j])) {
+            return false;
+        }
+    }
     for (cgltf_size j = 0; j < anim.channels_count; ++j) {
         const cgltf_animation_channel& channel = anim.channels[j];
         const cgltf_animation_sampler* sampler = channel.sampler;
@@ -367,8 +413,32 @@ static bool validateAnimation(const cgltf_animation& anim) {
             }
             components = channel.target_node->mesh->primitives[0].targets_count;
         }
+        cgltf_type expectedType;
+        switch (channel.target_path) {
+            case cgltf_animation_path_type_translation:
+            case cgltf_animation_path_type_scale:
+                expectedType = cgltf_type_vec3;
+                break;
+            case cgltf_animation_path_type_rotation:
+                expectedType = cgltf_type_vec4;
+                break;
+            case cgltf_animation_path_type_weights:
+                expectedType = cgltf_type_scalar;
+                break;
+            case cgltf_animation_path_type_invalid:
+            case cgltf_animation_path_type_max_enum:
+                return false;
+        }
+        if (sampler->output->type != expectedType) {
+            return false;
+        }
+
         cgltf_size values = sampler->interpolation == cgltf_interpolation_type_cubic_spline ? 3 : 1;
-        if (sampler->input->count * components * values != sampler->output->count) {
+        if (components == 0 || sampler->output->count % values != 0) {
+            return false;
+        }
+        cgltf_size outputCount = sampler->output->count / values;
+        if (outputCount % components != 0 || outputCount / components != sampler->input->count) {
             return false;
         }
     }
@@ -597,16 +667,16 @@ void AnimatorImpl::stashCrossFade() {
     // are added into the hierarchy.
     auto recursiveCount = [&tm](Instance node, size_t count, auto& fn) -> size_t {
         ++count;
-        for (auto iter = tm.getChildrenBegin(node); iter != tm.getChildrenEnd(node); ++iter) {
-            count = fn(*iter, count, fn);
+        for (auto child : tm.getChildrenRange(node)) {
+            count = fn(child, count, fn);
         }
         return count;
     };
 
     auto recursiveStash = [&tm, &stash](Instance node, size_t index, auto& fn) -> size_t {
         stash[index++] = tm.getTransform(node);
-        for (auto iter = tm.getChildrenBegin(node); iter != tm.getChildrenEnd(node); ++iter) {
-            index = fn(*iter, index, fn);
+        for (auto child : tm.getChildrenRange(node)) {
+            index = fn(child, index, fn);
         }
         return index;
     };
@@ -633,8 +703,8 @@ void AnimatorImpl::applyCrossFade(float alpha) {
         const quatf rotation = slerp(rotation0, rotation1, alpha);
         const float3 translation = mix(translation0, translation1, alpha);
         tm.setTransform(node, composeMatrix(translation, rotation, scale));
-        for (auto iter = tm.getChildrenBegin(node); iter != tm.getChildrenEnd(node); ++iter) {
-            index = fn(*iter, index, fn);
+        for (auto child : tm.getChildrenRange(node)) {
+            index = fn(child, index, fn);
         }
         return index;
     };
@@ -680,7 +750,6 @@ void AnimatorImpl::addChannels(const FixedCapacityVector<Entity>& nodeMap,
 void AnimatorImpl::applyAnimation(const Channel& channel, float t, size_t prevIndex,
         size_t nextIndex) {
     const Sampler* sampler = channel.sourceData;
-    const TimeValues& times = sampler->times;
     TrsTransformManager::Instance trsNode = trsTransformManager->getInstance(channel.targetEntity);
     TransformManager::Instance node = transformManager->getInstance(channel.targetEntity);
 
@@ -736,8 +805,8 @@ void AnimatorImpl::applyAnimation(const Channel& channel, float t, size_t prevIn
 
         case Channel::WEIGHTS: {
             const float* const samplerValues = sampler->values.data();
-            assert(sampler->values.size() % times.size() == 0);
-            const int valuesPerKeyframe = sampler->values.size() / times.size();
+            assert(sampler->values.size() % sampler->inputCount == 0);
+            const int valuesPerKeyframe = (int)(sampler->values.size() / sampler->inputCount);
 
             if (sampler->interpolation == Sampler::CUBIC) {
                 assert(valuesPerKeyframe % 3 == 0);

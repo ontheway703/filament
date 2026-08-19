@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "FFilamentInstance.h"
 #include "FFilamentAsset.h"
+#include "FFilamentInstance.h"
 
 #include <gltfio_ext/Animator.h>
 

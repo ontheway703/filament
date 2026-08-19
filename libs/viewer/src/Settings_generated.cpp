@@ -2,13 +2,14 @@
 
 #include "Settings_generated.h"
 
+#include "jsonParseUtils.h"
+
 #include <filament/Options.h>
+
 #include <utils/Log.h>
 
-#include <ostream>
 #include <cstring>
-
-#include "jsonParseUtils.h"
+#include <ostream>
 
 using namespace utils;
 
@@ -33,6 +34,18 @@ std::ostream& writeJson(std::ostream& oss, const float* v, int count) {
     return oss;
 }
 
+std::ostream& writeJson(std::ostream& oss, const double* v, int count) {
+    oss << "[";
+    for (int i = 0; i < count; i++) {
+        oss << v[i];
+        if (i < count - 1) {
+            oss << ", ";
+        }
+    }
+    oss << "]";
+    return oss;
+}
+
 std::ostream& operator<<(std::ostream& out, math::float2 v) {
     return writeJson(out, v.v, 2);
 }
@@ -42,6 +55,10 @@ std::ostream& operator<<(std::ostream& out, math::float3 v) {
 }
 
 std::ostream& operator<<(std::ostream& out, math::float4 v) {
+    return writeJson(out, v.v, 4);
+}
+
+std::ostream& operator<<(std::ostream& out, math::double4 v) {
     return writeJson(out, v.v, 4);
 }
 
@@ -90,6 +107,25 @@ int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, float* vals, in
     return i;
 }
 
+int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, double* val) {
+    CHECK_TOKTYPE(tokens[i], JSMN_PRIMITIVE);
+    *val = strtod(jsonChunk + tokens[i].start, nullptr);
+    return i + 1;
+}
+
+int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, double* vals, int size) {
+    CHECK_TOKTYPE(tokens[i], JSMN_ARRAY);
+    if (tokens[i].size != size) {
+        slog.w << "Expected " << size << " doubles, got " << tokens[i].size << io::endl;
+        return i + 1 + tokens[i].size;
+    }
+    ++i;
+    for (int j = 0; j < size; ++j) {
+        i = parse(tokens, i, jsonChunk, &vals[j]);
+    }
+    return i;
+}
+
 int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, bool* val) {
     CHECK_TOKTYPE(tokens[i], JSMN_PRIMITIVE);
     if (0 == compare(tokens[i], jsonChunk, "true")) {
@@ -119,6 +155,13 @@ int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, math::float3* v
 
 int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, math::float4* val) {
     float values[4];
+    i = parse(tokens, i, jsonChunk, values, 4);
+    *val = {values[0], values[1], values[2], values[3]};
+    return i;
+}
+
+int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, math::double4* val) {
+    double values[4];
     i = parse(tokens, i, jsonChunk, values, 4);
     *val = {values[0], values[1], values[2], values[3]};
     return i;
@@ -1017,6 +1060,10 @@ int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, SoftShadowOptio
             i = parse(tokens, i + 1, jsonChunk, &out->penumbraScale);
         } else if (compare(tok, jsonChunk, "penumbraRatioScale") == 0) {
             i = parse(tokens, i + 1, jsonChunk, &out->penumbraRatioScale);
+        } else if (compare(tok, jsonChunk, "maxPenumbraRatio") == 0) {
+            i = parse(tokens, i + 1, jsonChunk, &out->maxPenumbraRatio);
+        } else if (compare(tok, jsonChunk, "maxSearchRadius") == 0) {
+            i = parse(tokens, i + 1, jsonChunk, &out->maxSearchRadius);
         } else {
             slog.w << "Invalid SoftShadowOptions key: '" << STR(tok, jsonChunk) << "'" << io::endl;
             i = parse(tokens, i + 1);
@@ -1032,7 +1079,9 @@ int parse(jsmntok_t const* tokens, int i, const char* jsonChunk, SoftShadowOptio
 std::ostream& operator<<(std::ostream& out, const SoftShadowOptions& in) {
     return out << "{\n"
         << "\"penumbraScale\": " << (in.penumbraScale) << ",\n"
-        << "\"penumbraRatioScale\": " << (in.penumbraRatioScale) << "\n"
+        << "\"penumbraRatioScale\": " << (in.penumbraRatioScale) << ",\n"
+        << "\"maxPenumbraRatio\": " << (in.maxPenumbraRatio) << ",\n"
+        << "\"maxSearchRadius\": " << (in.maxSearchRadius) << "\n"
         << "}";
 }
 

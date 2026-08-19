@@ -15,7 +15,8 @@
  */
 
 #include "details/View.h"
-#include "filament/View.h"
+
+#include <filament/View.h>
 
 #include <stdint.h>
 
@@ -357,6 +358,10 @@ math::float4 View::getMaterialGlobal(uint32_t const index) const {
 
 utils::Entity View::getFogEntity() const noexcept {
     return downcast(this)->getFogEntity();
+}
+
+int32_t View::getVisibleRenderableCount() const noexcept {
+    return downcast(this)->getVisibleRenderableCount();
 }
 
 void View::clearFrameHistory(Engine& engine) noexcept {

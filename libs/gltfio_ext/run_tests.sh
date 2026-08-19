@@ -61,6 +61,7 @@ cd "$TEST_DIR"
 
 REQUIRED_FIXTURES=(
     "AnimatedMorphCube.glb"
+    "DamagedHelmetWebp.glb"
     "ecorche_animation_only.glb"
     "ecorche_full.glb"
     "ecorche_mesh_only.glb"

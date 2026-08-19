@@ -15,18 +15,18 @@
  */
 
 #include "OpenGLContext.h"
-#include "OpenGLState.h"
 
 #include "GLUtils.h"
+#include "OpenGLState.h"
 #include "OpenGLTimerQuery.h"
 
-#include <backend/platforms/OpenGLPlatform.h>
 #include <backend/DriverEnums.h>
 #include <backend/Platform.h>
+#include <backend/platforms/OpenGLPlatform.h>
 
-#include <utils/Logger.h>
 #include <utils/compiler.h>
 #include <utils/debug.h>
+#include <utils/Logger.h>
 #include <utils/ostream.h>
 
 #include <algorithm>
@@ -359,6 +359,16 @@ void OpenGLContext::initBugs(Bugs* bugs, Extensions const& exts,
     (void)shader;
 
     const bool isAngle = strstr(renderer, "ANGLE");
+
+    // ANGLE's D3D11 path doesn't fold a spec-constant-initialized `const int` into a
+    // uniform-block array length, so instanced draws bind a range smaller than the block the
+    // shader declares ("uniform buffer too small" -> dropped draw -> black materials). Renderer
+    // string looks like "ANGLE (NVIDIA, NVIDIA GeForce ... Direct3D11 vs_5_0 ps_5_0)". This is
+    // observed on Chromium/Firefox-on-Windows, including through WebGL. (b/...)
+    if (isAngle && strstr(renderer, "Direct3D11")) {
+        bugs->spec_constant_array_size_not_folded = true;
+    }
+
     if (!isAngle) {
         if (strstr(renderer, "Adreno")) {
             // Qualcomm GPU
@@ -486,15 +496,20 @@ void OpenGLContext::initBugs(Bugs* bugs, Extensions const& exts,
         }
 
         if (strstr(vendor, "Mesa")) {
+            // Seen on
+            //  [Mesa],
+            //  [Intel(R) HD Graphics 505 (APL 3)],
+            //  [GLES 3.2 Mesa 23.1.9],
+            //  [3.20]
+            // and
+            //  [Mesa]
+            //  [llvmpipe (LLVM 17.0.6, 256 bits)],
+            //  [4.5 (Core Profile) Mesa 24.0.6-1],
+            //  [4.50]
+            // not known which version are affected
+            bugs->rebind_buffer_after_deletion = true;
+            
             if (strstr(renderer, "llvmpipe")) {
-                // Seen on
-                //  [Mesa],
-                //  [llvmpipe (LLVM 17.0.6, 256 bits)],
-                //  [4.5 (Core Profile) Mesa 24.0.6-1],
-                //  [4.50]
-                // not known which version are affected
-                bugs->rebind_buffer_after_deletion = true;
-
                 // Seen on
                 // [Mesa]
                 // [llvmpipe (LLVM 17.0.6, 256 bits)]

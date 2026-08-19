@@ -19,14 +19,14 @@
 
 #include "downcast.h"
 
-#include "backend/DriverApiForward.h"
-
 #include <filament/LightManager.h>
+
+#include <backend/DriverApiForward.h>
 
 #include <utils/Entity.h>
 #include <utils/SingleInstanceComponentManager.h>
 
-#include <math/mat4.h>
+#include <cstddef>
 
 namespace filament {
 
@@ -44,7 +44,7 @@ public:
 
     void terminate() noexcept;
 
-    void gc(utils::EntityManager& em) noexcept;
+    void gc() noexcept;
 
     /*
      * Component Manager APIs
@@ -74,9 +74,17 @@ public:
         return mManager.getEntities();
     }
 
+    const utils::PagedArenaBitset& getEntityBitset() const noexcept {
+        return mManager.getEntityBitset();
+    }
+
     void create(const Builder& builder, utils::Entity entity);
 
-    void destroy(utils::Entity e) noexcept;
+    void destroyComponents(utils::Entity const* entities, size_t count) noexcept;
+
+    void destroy(utils::Entity e) noexcept {
+        destroyComponents(&e, 1);
+    }
 
     void prepare(backend::DriverApi& driver) const noexcept;
 
@@ -122,7 +130,7 @@ public:
     UTILS_NOINLINE void setIntensity(Instance i, float intensity, IntensityUnit unit) noexcept;
     UTILS_NOINLINE void setFalloff(Instance i, float radius) noexcept;
     UTILS_NOINLINE void setShadowCaster(Instance i, bool shadowCaster) noexcept;
-    UTILS_NOINLINE void setSunAngularRadius(Instance i, float angularRadius) noexcept;
+    UTILS_NOINLINE void setSunAngularRadiusRad(Instance i, float angularRadiusRad) noexcept;
     UTILS_NOINLINE void setSunHaloSize(Instance i, float haloSize) noexcept;
     UTILS_NOINLINE void setSunHaloFalloff(Instance i, float haloFalloff) noexcept;
 
@@ -145,7 +153,7 @@ public:
     }
 
     bool isPointLight(Instance const i) const noexcept {
-        return getType(i) == Type::POINT; 
+        return getType(i) == Type::POINT;
     }
 
     bool isSpotLight(Instance const i) const noexcept {
@@ -163,7 +171,7 @@ public:
     }
 
     bool isSunLight(Instance const i) const noexcept {
-        return getType(i) == Type::SUN; 
+        return getType(i) == Type::SUN;
     }
 
     uint32_t getShadowMapSize(Instance const i) const noexcept {
@@ -194,8 +202,8 @@ public:
         return mManager[i].intensity;
     }
 
-    float getSunAngularRadius(Instance const i) const noexcept {
-        return mManager[i].sunAngularRadius;
+    float getSunAngularRadiusRad(Instance const i) const noexcept {
+        return mManager[i].sunAngularRadiusRad;
     }
 
     float getSunHaloSize(Instance const i) const noexcept {
@@ -250,6 +258,8 @@ public:
 
     void setShadowOptions(Instance i, ShadowOptions const& options) noexcept;
 
+    float getEffectiveBulbRadius(Instance li) const noexcept;
+
 private:
     friend class FScene;
 
@@ -284,6 +294,7 @@ private:
     >;
 
     struct Sim : public Base {
+        explicit Sim(utils::EntityManager& em) noexcept : Base(em, "LightManager") {}
         using Base::gc;
         using Base::swap;
 
@@ -301,7 +312,7 @@ private:
                 Field<COLOR>                color;
                 Field<SHADOW_PARAMS>        shadowParams;
                 Field<SPOT_PARAMS>          spotParams;
-                Field<SUN_ANGULAR_RADIUS>   sunAngularRadius;
+                Field<SUN_ANGULAR_RADIUS>   sunAngularRadiusRad;
                 Field<SUN_HALO_SIZE>        sunHaloSize;
                 Field<SUN_HALO_FALLOFF>     sunHaloFalloff;
                 Field<INTENSITY>            intensity;

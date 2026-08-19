@@ -20,11 +20,11 @@
 #include "RenderPrimitive.h"
 #include "ShadowMap.h"
 
+#include "components/RenderableManager.h"
+
 #include "details/Material.h"
 #include "details/MaterialInstance.h"
 #include "details/View.h"
-
-#include "components/RenderableManager.h"
 
 #include <private/filament/EngineEnums.h>
 #include <private/filament/UibStructs.h>
@@ -32,24 +32,24 @@
 
 #include <filament/MaterialEnums.h>
 
+#include <private/backend/CircularBuffer.h>
+#include <private/backend/CommandStream.h>
+
 #include <backend/BufferDescriptor.h>
 #include <backend/DriverApiForward.h>
 #include <backend/DriverEnums.h>
 #include <backend/Handle.h>
 #include <backend/PipelineState.h>
 
-#include "private/backend/CircularBuffer.h"
-#include "private/backend/CommandStream.h"
-
 #include <private/utils/Tracing.h>
 
+#include <utils/compiler.h>
+#include <utils/debug.h>
 #include <utils/JobSystem.h>
 #include <utils/Logger.h>
 #include <utils/Panic.h>
 #include <utils/Range.h>
 #include <utils/Slice.h>
-#include <utils/compiler.h>
-#include <utils/debug.h>
 
 #include <algorithm>
 #include <functional>
@@ -145,6 +145,7 @@ RenderPass::RenderPass(FEngine const& engine, backend::DriverApi& driver,
             builder.mFlags,
             builder.mVisibilityMask,
             builder.mVariant,
+            builder.mDynamicSpecConstKey,
             builder.mCameraPosition,
             builder.mCameraForwardVector);
 
@@ -189,6 +190,7 @@ void RenderPass::appendCommands(FEngine const& engine, backend::DriverApi& drive
         RenderFlags const renderFlags,
         FScene::VisibleMaskType const visibilityMask,
         Variant const variant,
+        DynamicSpecConstKey const specKey,
         float3 const cameraPosition,
         float3 const cameraForwardVector) const noexcept {
     FILAMENT_TRACING_CALL(FILAMENT_TRACING_CATEGORY_FILAMENT);
@@ -216,12 +218,12 @@ void RenderPass::appendCommands(FEngine const& engine, backend::DriverApi& drive
     auto stereoscopicEyeCount = engine.getConfig().stereoscopicEyeCount;
 
     auto work = [commandTypeFlags, curr, &soa,
-                 variant, renderFlags, visibilityMask,
+                 variant, specKey, renderFlags, visibilityMask,
                  cameraPosition, cameraForwardVector, stereoscopicEyeCount]
             (uint32_t const startIndex, uint32_t const indexCount) {
         generateCommands(commandTypeFlags, curr,
                 soa, { startIndex, startIndex + indexCount },
-                variant, renderFlags, visibilityMask,
+                variant, specKey, renderFlags, visibilityMask,
                 cameraPosition, cameraForwardVector, stereoscopicEyeCount);
     };
 
@@ -243,7 +245,7 @@ void RenderPass::appendCommands(FEngine const& engine, backend::DriverApi& drive
     // This must be done from the main thread.
     for (Command const* first = curr, *last = curr + commandCount ; first != last ; ++first) {
         if (UTILS_LIKELY((first->key & CUSTOM_MASK) == uint64_t(CustomCommand::PASS))) {
-            first->info.mi->prepareProgram(driver, first->info.materialVariant,
+            first->info.mi->prepareProgram(driver, first->info.materialVariant, first->info.dynamicSpecConstKey,
                     CompilerPriorityQueue::CRITICAL);
         }
     }
@@ -314,8 +316,8 @@ RenderPass::Command* RenderPass::instanceify(
         return lhs.info.mi == rhs.info.mi &&
                lhs.info.rph == rhs.info.rph &&
                lhs.info.vbih == rhs.info.vbih &&
-               lhs.info.indexOffset == rhs.info.indexOffset &&
-               lhs.info.indexCount == rhs.info.indexCount &&
+               lhs.info.offset == rhs.info.offset &&
+               lhs.info.count == rhs.info.count &&
                lhs.info.rasterState == rhs.info.rasterState;
     };
 
@@ -407,7 +409,7 @@ void RenderPass::finalize(FEngine const& engine, DriverApi& driver) {
 /* static */
 UTILS_ALWAYS_INLINE // This function exists only to make the code more readable. we want it inlined.
 inline              // and we don't need it in the compilation unit
-void RenderPass::setupColorCommand(Command& cmdDraw, Variant variant,
+void RenderPass::setupColorCommand(Command& cmdDraw, Variant variant, DynamicSpecConstKey const specKey,
         FMaterialInstance const* const UTILS_RESTRICT mi,
         bool const inverseFrontFaces, bool const hasDepthClamp) noexcept {
 
@@ -450,6 +452,8 @@ void RenderPass::setupColorCommand(Command& cmdDraw, Variant variant,
     cmdDraw.info.rasterState.inverseFrontFaces = inverseFrontFaces;
     cmdDraw.info.rasterState.depthClamp = hasDepthClamp;
     cmdDraw.info.materialVariant = variant;
+    cmdDraw.info.dynamicSpecConstKey = DynamicSpecConstKey::filterProgramSpecKey(
+            variant, specKey, ma->getMaterialDomain(), ma->isVariantLit());
     // we keep "RasterState::colorWrite" to the value set by material (could be disabled)
 }
 
@@ -457,7 +461,7 @@ void RenderPass::setupColorCommand(Command& cmdDraw, Variant variant,
 UTILS_NOINLINE
 void RenderPass::generateCommands(CommandTypeFlags commandTypeFlags, Command* const commands,
         FScene::RenderableSoa const& soa, Range<uint32_t> const range,
-        Variant const variant, RenderFlags const renderFlags,
+        Variant const variant, DynamicSpecConstKey const specKey, RenderFlags const renderFlags,
         FScene::VisibleMaskType const visibilityMask,
         float3 const cameraPosition, float3 const cameraForward,
         uint8_t instancedStereoEyeCount) noexcept {
@@ -492,13 +496,13 @@ void RenderPass::generateCommands(CommandTypeFlags commandTypeFlags, Command* co
         case CommandTypeFlags::COLOR:
             curr = generateCommandsImpl<CommandTypeFlags::COLOR>(commandTypeFlags, curr,
                     soa, range,
-                    variant, renderFlags, visibilityMask, cameraPosition, cameraForward,
+                    variant, specKey, renderFlags, visibilityMask, cameraPosition, cameraForward,
                     instancedStereoEyeCount);
             break;
         case CommandTypeFlags::DEPTH:
             curr = generateCommandsImpl<CommandTypeFlags::DEPTH>(commandTypeFlags, curr,
                     soa, range,
-                    variant, renderFlags, visibilityMask, cameraPosition, cameraForward,
+                    variant, specKey, renderFlags, visibilityMask, cameraPosition, cameraForward,
                     instancedStereoEyeCount);
             break;
         default:
@@ -521,7 +525,7 @@ UTILS_NOINLINE
 RenderPass::Command* RenderPass::generateCommandsImpl(CommandTypeFlags extraFlags,
         Command* UTILS_RESTRICT curr,
         FScene::RenderableSoa const& UTILS_RESTRICT soa, Range<uint32_t> range,
-        Variant const variant, RenderFlags renderFlags, FScene::VisibleMaskType visibilityMask,
+        Variant const variant, DynamicSpecConstKey const specKey, RenderFlags renderFlags, FScene::VisibleMaskType visibilityMask,
         float3 cameraPosition, float3 cameraForward, uint8_t instancedStereoEyeCount) noexcept {
 
     constexpr bool isColorPass  = bool(commandTypeFlags & CommandTypeFlags::COLOR);
@@ -565,6 +569,8 @@ RenderPass::Command* RenderPass::generateCommandsImpl(CommandTypeFlags extraFlag
 
     if constexpr (isDepthPass) {
         cmd.info.materialVariant = variant;
+        cmd.info.dynamicSpecConstKey = DynamicSpecConstKey::filterProgramSpecKey(
+                variant, specKey, MaterialDomain::SURFACE, true);
         cmd.info.rasterState = {};
         cmd.info.rasterState.colorWrite = Variant::isPickingVariant(variant) || Variant::isDepthMomentsVariant(variant);
         cmd.info.rasterState.depthWrite = true;
@@ -613,17 +619,11 @@ RenderPass::Command* RenderPass::generateCommandsImpl(CommandTypeFlags extraFlag
         bool const hasSkinning = soaSkinningData[i].skinning;
         bool const hasSkinningOrMorphing = hasSkinning || hasMorphing;
 
-        // if we are already an SSR variant, the SRE bit is already set
-        static_assert(Variant::SPECIAL_SSR_VARIANT & Variant::SRE);
         Variant renderableVariant{ variant };
 
-        // we can't have SSR and shadowing together by construction
-        bool const isSsrVariant = Variant::isSSRVariant(variant);
-        assert_invariant((isSsrVariant && !hasShadowing) || !isSsrVariant);
-        if (!isSsrVariant) {
-            // set the SRE variant, unless we're in SSR mode
-            renderableVariant.setShadowReceiver(soaVisibility[i].receiveShadows && hasShadowing);
-        }
+        // We can't have SSR and shadowing together by construction.
+        assert_invariant(!Variant::isSSRVariant(variant) || !hasShadowing);
+        renderableVariant.setShadowReceiver(soaVisibility[i].receiveShadows && hasShadowing);
 
         renderableVariant.setSkinning(hasSkinningOrMorphing);
 
@@ -692,16 +692,17 @@ RenderPass::Command* RenderPass::generateCommandsImpl(CommandTypeFlags extraFlag
             cmd.info.mi = mi;
             cmd.info.rph = primitive.getHwHandle();
             cmd.info.vbih = primitive.getVertexBufferInfoHandle();
-            cmd.info.indexOffset = primitive.getIndexOffset();
-            cmd.info.indexCount = primitive.getIndexCount();
+            cmd.info.offset = primitive.getOffset();
+            cmd.info.count = primitive.getCount();
             cmd.info.type = primitive.getPrimitiveType();
+            cmd.info.isIndexed = primitive.isIndexed();
             cmd.info.morphingOffset = primitive.getMorphingBufferOffset();
 // FIXME: morphtarget buffer
 //            cmd.info.morphTargetBuffer = morphing.morphTargetBuffer ?
 //                    morphing.morphTargetBuffer->getHwHandle() : SamplerGroupHandle{};
 
             if constexpr (isColorPass) {
-                setupColorCommand(cmd, renderableVariant, mi,
+                setupColorCommand(cmd, renderableVariant, specKey, mi,
                         inverseFrontFaces, hasDepthClamp);
                 const bool blendPass = Pass(cmd.key & PASS_MASK) == Pass::BLENDED;
                 if (blendPass) {
@@ -1088,7 +1089,7 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
                     mi->use(driver, info.materialVariant);
                 }
 
-                pipeline.program = mi->getProgram(info.materialVariant);
+                pipeline.program = mi->getProgram(info.materialVariant, info.dynamicSpecConstKey);
 
                 if (UTILS_UNLIKELY(memcmp(&pipeline, &currentPipeline, sizeof(PipelineState)) != 0)) {
                     currentPipeline = pipeline;
@@ -1114,7 +1115,13 @@ void RenderPass::Executor::execute(FEngine const& engine, DriverApi& driver,
                             +PushConstantIds::MORPHING_BUFFER_OFFSET, int32_t(info.morphingOffset));
                 }
 
-                driver.draw2(info.indexOffset, info.indexCount, info.instanceCount);
+                if (UTILS_LIKELY(info.isIndexed)) {
+                    // For indexed draws, offset/count carry indexOffset/indexCount.
+                    driver.draw2(info.offset, info.count, info.instanceCount);
+                } else {
+                    // For non-indexed draws, offset/count carry vertexOffset/vertexCount.
+                    driver.drawArrays(info.offset, info.count, info.instanceCount);
+                }
             }
         }
 

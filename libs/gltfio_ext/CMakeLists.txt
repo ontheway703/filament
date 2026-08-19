@@ -248,6 +248,7 @@ function(add_test_gltf SOURCE TARGET)
 endfunction()
 
 add_test_gltf("third_party/models/AnimatedMorphCube/AnimatedMorphCube.glb" "AnimatedMorphCube.glb")
+add_test_gltf("third_party/models/DamagedHelmet/DamagedHelmetWebp.glb" "DamagedHelmetWebp.glb")
 
 set(GLTFIO_EXT_FIXTURE_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/generate_fixtures.py")
 set(GLTFIO_EXT_FIXTURE_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/manifest.json")

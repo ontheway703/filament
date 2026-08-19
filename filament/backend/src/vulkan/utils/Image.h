@@ -20,9 +20,9 @@
 #include <backend/DriverEnums.h>
 #include <backend/platforms/VulkanPlatform.h>
 
-#include <utils/Log.h>
-
 #include <bluevk/BlueVK.h>
+
+#include <utils/Log.h>
 
 namespace filament::backend {
 
@@ -56,10 +56,10 @@ enum class VulkanLayout : uint8_t {
 };
 
 struct VulkanLayoutTransition {
-    VkImage image;
-    VulkanLayout oldLayout;
-    VulkanLayout newLayout;
-    VkImageSubresourceRange subresources;
+    VkImage image {};
+    VulkanLayout oldLayout {};
+    VulkanLayout newLayout {};
+    VkImageSubresourceRange subresources {};
 };
 
 namespace fvkutils {

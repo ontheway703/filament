@@ -23,13 +23,14 @@
 
 #include <bluevk/BlueVK.h>
 
+#include <utils/compiler.h>
 #include <utils/CString.h>
 #include <utils/FixedCapacityVector.h>
 #include <utils/Hash.h>
 #include <utils/PrivateImplementation.h>
 
-#include <cstring>
 #include <cstddef>
+#include <cstring>
 #include <functional>
 #include <tuple>
 #include <unordered_set>
@@ -53,7 +54,7 @@ struct VulkanCmdFence;
 /**
  * A Platform interface that creates a Vulkan backend.
  */
-class VulkanPlatform : public Platform, utils::PrivateImplementation<VulkanPlatformPrivate> {
+class UTILS_SHARED_LINKING VulkanPlatform : public Platform, utils::PrivateImplementation<VulkanPlatformPrivate> {
 public:
     /**
      * Encapsulates information required to instantiate a known external format,
@@ -142,7 +143,7 @@ public:
         return 0;
     }
 
-    utils::CString getDeviceInfo(DeviceInfoType infoType, Driver* driver) const noexcept override;
+    utils::CString getDeviceInfo(DeviceInfoType infoType, Driver* driver) const override;
 
     // ----------------------------------------------------
     // ---------- Platform Customization options ----------
@@ -262,12 +263,10 @@ public:
     /**
      * Creates a Platform::Sync object, which tracks a fence and its status,
      * and allows conversion to an external sync.
-     * @param fence         The underlying VkFence to use for synchronization.
-     * @param fenceStatus   An object tracking the fence's state
+     * @param fenceStatus   An object tracking the fence and its current state.
      * @return              A Platform::Sync object tracking the provided fence.
      */
-    virtual Platform::Sync* createSync(VkFence fence,
-            std::shared_ptr<VulkanCmdFence> fenceStatus) noexcept;
+    virtual Platform::Sync* createSync(std::shared_ptr<VulkanCmdFence> fenceStatus) noexcept;
 
     /**
      * Destroys a sync. If called with a sync not created by this platform
@@ -367,6 +366,11 @@ public:
         uint32_t height;
 
         /**
+         * The number of mipmap levels of the external image
+         */
+        uint32_t mipLevels;
+
+        /**
          * The layer count of the external image
          */
         uint32_t layers;
@@ -425,6 +429,20 @@ public:
          * Ycbcr y chroma offset
          */
         VkChromaLocation yChromaOffset;
+
+        /*
+         * YUV is software decoded (YV12 or 8Cb8Cr8_420) for use to 
+         * copy from staging to a GPU sampleable tiled YUV image
+         */
+       bool isStagingRequired;
+
+       /*
+        * Adding an explicit field for chroma conversion
+        * requirement.
+        * Per Vulkan requirement all YUV texture require the creation of a VkSamplerYcbcrModelConversion
+        * https://docs.vulkan.org/refpages/latest/refpages/source/VkSamplerYcbcrModelConversion.html
+        */
+       bool isChromaConversionRequired;
     };
 
 
@@ -434,10 +452,19 @@ public:
         return {};
     }
 
+    // We need a platform agnostic way to copy from ExternalImageHandleRef for the YUV staging path
+    virtual bool copyExternalImageToMemoryYUV(ExternalImageHandleRef image, void* dstData,
+            uint32_t width, uint32_t height) const {
+        return false;
+    }
+
     struct ImageData {
         struct Bundle {
             VkImage image = VK_NULL_HANDLE;
             VkDeviceMemory memory = VK_NULL_HANDLE;
+            // For CPU decoded YUV images we need a CPU staging buffer
+            VkBuffer stagingBuffer = VK_NULL_HANDLE;
+            VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
 
             inline bool valid() const noexcept {
                 return image != VK_NULL_HANDLE;
@@ -452,13 +479,15 @@ public:
         Bundle external;
     };
 
-    virtual ImageData createVkImageFromExternal(ExternalImageHandleRef image) const {
+    virtual ImageData createVkImageFromExternal(ExternalImageHandleRef image,
+            uint32_t logicalWidth, uint32_t logicalHeight) const {
         return {};
     }
 
 protected:
-    struct VulkanSync : public Platform::Sync {
-        VkFence fence;
+    struct VulkanSync : public Sync {
+        explicit VulkanSync(std::shared_ptr<VulkanCmdFence> fence) noexcept
+            : fenceStatus(std::move(fence)) {}
         std::shared_ptr<VulkanCmdFence> fenceStatus;
     };
 

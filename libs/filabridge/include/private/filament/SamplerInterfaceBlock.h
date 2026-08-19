@@ -17,6 +17,7 @@
 #ifndef TNT_FILAMENT_SAMPLERINTERFACEBLOCK_H
 #define TNT_FILAMENT_SAMPLERINTERFACEBLOCK_H
 
+#include <private/filament/DescriptorSets.h>
 
 #include <backend/DriverEnums.h>
 
@@ -24,10 +25,9 @@
 #include <utils/FixedCapacityVector.h>
 #include <utils/ImmutableCString.h>
 
-#include <private/filament/DescriptorSets.h>
+#include <tsl/robin_map.h>
 
 #include <initializer_list>
-#include <unordered_map>
 #include <string_view>
 #include <vector>
 
@@ -154,7 +154,7 @@ private:
     utils::CString mName;
     backend::ShaderStageFlags mStageFlags{}; // It's needed to check if MAX_SAMPLER_COUNT is exceeded.
     utils::FixedCapacityVector<SamplerInfo> mSamplersInfoList;
-    std::unordered_map<std::string_view, uint32_t> mInfoMap;
+    tsl::robin_map<std::string_view, uint32_t> mInfoMap;
 };
 
 } // namespace filament

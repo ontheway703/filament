@@ -15,11 +15,6 @@
  */
 
 #include "fg/FrameGraph.h"
-#include "fg/details/DependencyGraph.h"
-#include "fg/details/PassNode.h"
-#include "fg/details/Resource.h"
-#include "fg/details/ResourceNode.h"
-#include "fg/details/ResourceCreationContext.h"
 
 #include "FrameGraphId.h"
 #include "FrameGraphPass.h"
@@ -28,6 +23,12 @@
 
 #include "details/View.h"
 
+#include "fg/details/DependencyGraph.h"
+#include "fg/details/PassNode.h"
+#include "fg/details/Resource.h"
+#include "fg/details/ResourceCreationContext.h"
+#include "fg/details/ResourceNode.h"
+
 #include <backend/DriverEnums.h>
 #include <backend/Handle.h>
 
@@ -35,10 +36,10 @@
 
 #include <utils/compiler.h>
 #include <utils/CString.h>
-#include <utils/StaticString.h>
 #include <utils/debug.h>
 #include <utils/ostream.h>
 #include <utils/Panic.h>
+#include <utils/StaticString.h>
 
 #include <algorithm>
 #include <functional>
@@ -81,7 +82,7 @@ FrameGraphId<FrameGraphTexture> FrameGraph::Builder::declareRenderPass(
 FrameGraph::FrameGraph(TextureCacheInterface& resourceAllocator,
         Mode const mode)
         : mResourceAllocator(resourceAllocator),
-          mArena("FrameGraph Arena", 262144),
+          mArena("FrameGraph Arena", 524288),
           mMode(mode),
           mResourceSlots(mArena),
           mResources(mArena),

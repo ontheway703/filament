@@ -15,10 +15,9 @@
  */
 
 #include "evsm.h"
-
 #include "generated/resources/evsm.h"
 
-#include <materials/StaticMaterialInfo.h>
+#include "materials/StaticMaterialInfo.h"
 
 #include <utils/Slice.h>
 
@@ -30,6 +29,7 @@ namespace filament {
 static const StaticMaterialInfo sMaterialList[] = {
     {"vsmMipmap", MATERIAL(EVSM, VSMMIPMAP)},
     {"gaussian", MATERIAL(EVSM, GAUSSIAN)},
+    {"gaussianMipmap", MATERIAL(EVSM, GAUSSIANMIPMAP)},
 };
 
 utils::Slice<const StaticMaterialInfo> getEvsmMaterialList() noexcept {

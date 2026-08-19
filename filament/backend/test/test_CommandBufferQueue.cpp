@@ -14,21 +14,21 @@
  * limitations under the License.
  */
 
-#include <gtest/gtest.h>
-
-#include "private/backend/CommandBufferQueue.h"
-#include "private/backend/CommandStream.h" // For NoopCommand
-#include "private/backend/CircularBuffer.h"
+#include <private/backend/CircularBuffer.h>
+#include <private/backend/CommandBufferQueue.h>
+#include <private/backend/CommandStream.h>
 
 #include <utils/Panic.h> // For assert_invariant
 
-#include <thread>
-#include <vector>
-#include <numeric>
+#include <gtest/gtest.h>
+
 #include <atomic>
 #include <chrono>
-#include <future>
 #include <cstring>
+#include <future>
+#include <numeric>
+#include <thread>
+#include <vector>
 
 using namespace std::chrono_literals;
 
@@ -68,7 +68,7 @@ TEST_F(CommandBufferQueueTest, BasicProduceConsume) {
     // Test with a standard, valid configuration.
     CommandBufferQueue queue(1024, 4096, false);
     std::atomic<bool> consumerFinished = false;
-    const size_t testDataSize = 500;
+    const size_t testDataSize = CommandBase::align(500);
 
     // Consumer thread
     std::thread consumer([&]() {
@@ -93,7 +93,8 @@ TEST_F(CommandBufferQueueTest, MultipleFlushes) {
     CommandBufferQueue queue(1024, 4096, false);
     std::atomic<int> buffersProcessed = 0;
 
-    const size_t sizes[] = { 100, 200, 50 };
+    const size_t sizes[] = { CommandBase::align(100), CommandBase::align(200),
+        CommandBase::align(50) };
     const uint8_t values[] = { 1, 2, 3 };
     constexpr int NUM_BUFFERS = 3;
 
@@ -219,7 +220,7 @@ TEST_F(CommandBufferQueueTest, Pause) {
     const size_t blockSize = CircularBuffer::getBlockSize();
     CommandBufferQueue queue(blockSize, blockSize*2, false);
 
-    writeData(queue.getCircularBuffer(), 100, 0xCC);
+    writeData(queue.getCircularBuffer(), CommandBase::align(100), 0xCC);
     queue.flush();
 
     queue.setPaused(true);
@@ -261,7 +262,7 @@ TEST_F(CommandBufferQueueTest, StressTest) {
     // Producer thread
     std::thread producer([&]() {
         for (int i = 0; i < 500; ++i) {
-            size_t size = 1024 + (i * 13) % 8192;
+            size_t size = CommandBase::align(1024 + (i * 13) % 8192);
             void* p = queue.getCircularBuffer().allocate(size);
             ASSERT_NE(p, nullptr);
             *((int*)p) = i; // Write a sequence number for verification.

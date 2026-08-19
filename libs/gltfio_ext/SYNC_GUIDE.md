@@ -73,7 +73,18 @@ Apply these changes from `gltfio` to `gltfio_ext`:
 1. **Namespace Replacement**: All `filament::gltfio` → `filament::gltfio_ext`
 2. **API Preservation**: Never remove gltfio APIs (backward compatibility requirement)
 3. **Additive Changes**: gltfio_ext enhancements supplement, not replace, gltfio features
-4. **Test-Driven**: All 117 tests must pass after synchronization
+4. **Test-Driven**: Classify every test as passed, failed, or skipped; a missing dependency is a failure, not a pass
+
+### Current Sync Baseline
+
+- Upstream baseline: official Filament tag `v1.75.0` (`0e58877c09afb1aacd09ff640f74d2adcd2a7e80`)
+- Previous upstream baseline: official Filament tag `v1.71.4` (`a0ecdbbeba5f1005bbad0a4c8b2fe6955788cdee`)
+- Fixture source: deterministic generators under `test/fixtures/`, verified by SHA-256
+- Expected host result: 124 tests total, 119 passed, 5 explicitly skipped, 0 failed
+
+The five skips exercise bone-matrix updates on the NOOP backend. They are not evidence that the
+327- or 512-bone path works on a real GPU; release validation still requires Metal and Android GPU
+smoke tests.
 
 ---
 
@@ -91,7 +102,7 @@ Before starting synchronization:
   ```bash
   cd out/cmake-debug/libs/gltfio_ext
   ./run_tests.sh
-  # Expected: 117 tests (112 passing + 5 skipped)
+  # Expected: 124 tests (119 passing + 5 explicitly skipped)
   ```
 
 - [ ] **Review gltfio changes**: Inspect upstream commits
@@ -298,22 +309,22 @@ cd out/cmake-debug/libs/gltfio_ext
 gltfio_ext 单元测试套件
 ========================================
 
-✓ test_animation_asset: 21 tests passed
-✓ test_gltfio_ext: 3 tests passed
+✓ test_animation_asset: 22 tests passed
+✓ test_gltfio_ext: 10 tests passed
 ✓ test_asset_loader: 12 tests passed
 ✓ test_animation_binding: 9 tests passed
 ⊘ test_bone_matrices: 5 tests skipped (NOOP backend)
 ✓ test_animator_lifecycle: 9 tests passed
-✓ test_animator_playback: 13 tests passed  # Including 2 compatibility tests
+✓ test_animator_playback: 14 tests passed  # Including compatibility tests
 ✓ test_animator_cache: 3 tests passed
 ✓ test_animator_crossfade: 7 tests passed
-✓ test_animation_cache: 34 tests passed
+✓ test_animation_cache: 33 tests passed
 
 ========================================
 测试总结
 ========================================
-总测试数: 117
-通过: 112
+总测试数: 124
+通过: 119
 跳过: 5
 失败: 0
 
@@ -418,7 +429,7 @@ Preserved gltfio_ext features:
 - Multi-instance animator support
 - External animation loading
 
-Tests: 117/117 passing (5 skipped)
+Tests: 119 passed, 5 explicitly skipped, 0 failed (124 total)
 "
 ```
 
@@ -491,5 +502,5 @@ libs/gltfio_ext/
 
 ---
 
-**Last Updated**: 2025-01-02
+**Last Updated**: 2026-08-20
 **gltfio Version Tracking**: Check `libs/gltfio` git history for reference

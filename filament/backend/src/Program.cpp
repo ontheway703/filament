@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include <backend/Program.h>
 #include <backend/DriverEnums.h>
+#include <backend/Program.h>
 
 #include <utils/CString.h>
-#include <utils/Invocable.h>
-#include <utils/Panic.h>
 #include <utils/debug.h>
+#include <utils/Invocable.h>
 #include <utils/ostream.h>
+#include <utils/Panic.h>
 
 #include <utility>
 
@@ -106,7 +106,11 @@ Program& Program::multiview(bool const multiview) noexcept {
 
 io::ostream& operator<<(io::ostream& out, const Program& builder) {
     out << "Program{";
-    builder.mLogger(builder.mName, out);
+    if (builder.mLogger) {
+        builder.mLogger(builder.mName, out);
+    } else {
+        out << builder.mName.c_str_safe();
+    }
     out << "}";
     return out;
 }

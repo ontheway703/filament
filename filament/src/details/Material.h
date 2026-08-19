@@ -24,15 +24,19 @@
 
 #include "ds/DescriptorSetLayout.h"
 
-#include <filament/Material.h>
-#include <filament/MaterialEnums.h>
-
-#include <private/filament/EngineEnums.h>
 #include <private/filament/BufferInterfaceBlock.h>
+#include <private/filament/ConstantInfo.h>
+#include <private/filament/EngineEnums.h>
 #include <private/filament/SamplerInterfaceBlock.h>
 #include <private/filament/SubpassInfo.h>
 #include <private/filament/Variant.h>
-#include <private/filament/ConstantInfo.h>
+
+#include <filament/Material.h>
+#include <filament/MaterialEnums.h>
+
+#if FILAMENT_ENABLE_MATDBG
+#include <matdbg/DebugServer.h>
+#endif
 
 #include <backend/CallbackHandler.h>
 #include <backend/DriverEnums.h>
@@ -50,10 +54,6 @@
 
 #include <stddef.h>
 #include <stdint.h>
-
-#if FILAMENT_ENABLE_MATDBG
-#include <matdbg/DebugServer.h>
-#endif
 
 namespace filament {
 
@@ -110,13 +110,14 @@ public:
 
     void compile(CompilerPriorityQueue priority,
         utils::FixedCapacityVector<Variant> const& variants,
+        utils::FixedCapacityVector<DynamicSpecConstKey> const& specKeys,
         backend::CallbackHandler* handler,
         utils::Invocable<void(Material*)>&& callback) noexcept;
 
     // Creates an instance of this material, specifying the batching mode.
     FMaterialInstance* createInstance(const char* name) const noexcept;
 
-    bool hasParameter(const char* name) const noexcept;
+    bool hasParameter(std::string_view name) const noexcept;
 
     bool isSampler(const char* name) const noexcept;
 
@@ -223,14 +224,11 @@ public:
     }
 
     inline bool isSharedVariant(Variant const variant) const {
-        // HACK: The default material "should" have MNT | DEP, but then we'd have to compile it as a
-        // lit material, which would increase binary size. Perhaps we could specially compile it
-        // with this variant, but with the shader program cache in active development, the days of
-        // the default material are numbered anyway.
-        constexpr Variant::type_t vsmAndDep = Variant::MNT | Variant::DEP;
+        // The default material explicitly filters VSM variants to reduce binary size, so it cannot
+        // provide the MNT | DEP variant as a shared program.
         return mDefinition.materialDomain == MaterialDomain::SURFACE && !mIsDefaultMaterial &&
                !mDefinition.hasCustomDepthShader && Variant::isValidDepthVariant(variant) &&
-               (variant.key & vsmAndDep) != vsmAndDep;
+               !Variant::isDepthMomentsVariant(variant);
     }
 
     MaterialParser const& getMaterialParser() const noexcept {

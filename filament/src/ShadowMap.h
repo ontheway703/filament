@@ -17,20 +17,22 @@
 #ifndef TNT_FILAMENT_DETAILS_SHADOWMAP_H
 #define TNT_FILAMENT_DETAILS_SHADOWMAP_H
 
-#include <filament/Box.h>
-
 #include "Culler.h"
-#include "ds/ShadowMapDescriptorSet.h"
+
+#include "components/LightManager.h"
 
 #include "details/Camera.h"
 #include "details/Scene.h"
 
-#include "components/LightManager.h"
+#include "ds/ShadowMapDescriptorSet.h"
+
+#include <filament/Box.h>
 
 #include <backend/DriverApiForward.h>
 #include <backend/DriverEnums.h>
 
 #include <utils/compiler.h>
+#include <utils/Entity.h>
 
 #include <math/mathfwd.h>
 
@@ -68,7 +70,7 @@ static constexpr Culler::result_type VISIBLE_DYN_SHADOW_RENDERABLE = 1u << VISIB
 class ShadowMap {
 public:
 
-    enum class ShadowType : uint8_t {
+    enum class ShadowLightType : uint8_t {
         DIRECTIONAL,
         SPOT,
         POINT
@@ -106,7 +108,7 @@ public:
     struct SceneInfo {
 
         SceneInfo() noexcept = default;
-        SceneInfo(FScene const& scene, uint8_t visibleLayers) noexcept;
+        SceneInfo(FScene::RenderableSoa const& renderableData, uint8_t visibleLayers) noexcept;
 
         // scratch data: light's near/far expressed in light-space, calculated from the scene's
         // content assuming the light is at the origin.
@@ -128,8 +130,8 @@ public:
     static math::mat4f getPointLightViewMatrix(backend::TextureCubemapFace face,
             math::float3 position) noexcept;
 
-    void initialize(size_t lightIndex, ShadowType shadowType, bool vsm, uint16_t shadowIndex, uint8_t face,
-            LightManager::ShadowOptions const* options);
+    void initialize(size_t lightSoAIndex, ShadowLightType shadowType, uint8_t shadowIndex, uint8_t face,
+                    utils::Entity lightEntity, LightManager::ShadowOptions const* options);
 
     struct ShaderParameters {
         math::mat4f lightSpace{};
@@ -150,12 +152,12 @@ public:
     ShaderParameters updateSpot(FEngine& engine,
             const FScene::LightSoa& lightData, size_t index,
             CameraInfo const& camera,
-            const ShadowMapInfo& shadowMapInfo, FScene const& scene,
+            const ShadowMapInfo& shadowMapInfo, FScene::RenderableSoa const& renderableData,
             SceneInfo sceneInfo) noexcept;
 
     ShaderParameters updatePoint(FEngine& engine,
             const FScene::LightSoa& lightData, size_t index, CameraInfo const& camera,
-            const ShadowMapInfo& shadowMapInfo, FScene const& scene, uint8_t face) noexcept;
+            const ShadowMapInfo& shadowMapInfo, FScene::RenderableSoa const& renderableData, uint8_t face) noexcept;
 
     // Do we have visible shadows. Valid after calling update().
     bool hasVisibleShadows() const noexcept { return mHasVisibleShadows; }
@@ -167,17 +169,18 @@ public:
     FCamera const* getDebugCamera() const noexcept { return mDebugCamera; }
 
     // Update SceneInfo struct for a given light
-    static void updateSceneInfoDirectional(const math::mat4f& Mv, FScene const& scene,
+    static void updateSceneInfoDirectional(const math::mat4f& Mv, FScene::RenderableSoa const& renderableData,
             SceneInfo& sceneInfo);
 
-    static void updateSceneInfoSpot(const math::mat4f& Mv, FScene const& scene,
+    static void updateSceneInfoSpot(const math::mat4f& Mv, FScene::RenderableSoa const& renderableData,
             SceneInfo& sceneInfo);
 
     LightManager::ShadowOptions const& getShadowOptions() const noexcept {
             assert_invariant(mOptions);
             return *mOptions;
     }
-    size_t getLightIndex() const { return mLightIndex; }
+    utils::Entity getLightEntity() const { return mLightEntity; }
+    size_t getLightIndex() const { return mLightSoAIndex; }
     uint16_t getShadowIndex() const { return mShadowIndex; }
     void setAllocation(uint8_t layer, backend::Viewport viewport) noexcept;
 
@@ -185,11 +188,14 @@ public:
     backend::Viewport getViewport() const noexcept;
     backend::Viewport getScissor() const noexcept;
 
-    bool isDirectionalShadow() const noexcept { return mShadowType == ShadowType::DIRECTIONAL; }
-    bool isSpotShadow() const noexcept { return mShadowType == ShadowType::SPOT; }
-    bool isPointShadow() const noexcept { return mShadowType == ShadowType::POINT; }
-    ShadowType getShadowType() const noexcept { return mShadowType; }
+    bool isDirectionalShadow() const noexcept { return mShadowLightType == ShadowLightType::DIRECTIONAL; }
+    bool isSpotShadow() const noexcept { return mShadowLightType == ShadowLightType::SPOT; }
+    bool isPointShadow() const noexcept { return mShadowLightType == ShadowLightType::POINT; }
+    ShadowLightType getShadowLightType() const noexcept { return mShadowLightType; }
     uint8_t getFace() const noexcept { return mFace; }
+
+    void setWrapExponent(float const wrapExponent) noexcept { mWrapExponent = wrapExponent; }
+    float getWrapExponent() const noexcept { return mWrapExponent; }
 
     using Transaction = ShadowMapDescriptorSet::Transaction;
 
@@ -204,7 +210,7 @@ public:
     static void prepareShadowMapping(Transaction const& transaction,
             float vsmExponent, float vsmMaxMoment) noexcept;
     static ShadowMapDescriptorSet::Transaction open(backend::DriverApi& driver) noexcept;
-    void commit(Transaction& transaction, FEngine& engine, backend::DriverApi& driver) const noexcept;
+    void commit(Transaction& transaction, FEngine const& engine, backend::DriverApi& driver) const noexcept;
     void bind(backend::DriverApi& driver) const noexcept;
 
 private:
@@ -277,7 +283,7 @@ private:
             math::float3 const* vertices, size_t count) noexcept;
 
     template<typename Visitor>
-    static void visitScene(FScene const& scene, uint32_t visibleLayers, Visitor visitor) noexcept;
+    static void visitScene(FScene::RenderableSoa const& soa, uint32_t visibleLayers, Visitor visitor) noexcept;
 
     static inline Aabb compute2DBounds(const math::mat4f& lightView,
             math::float3 const* wsVertices, size_t count) noexcept;
@@ -321,8 +327,15 @@ private:
 
     math::float4 getClampToEdgeCoords(ShadowMapInfo const& shadowMapInfo) const noexcept;
 
-    static math::float2 texelSizeWorldSpace(const math::mat3f& clipFromWorld, uint16_t shadowDimension) noexcept;
-    static math::float2 texelSizeWorldSpace(const math::mat4f& clipFromWorld, uint16_t shadowDimension) noexcept;
+    // faster overload for point/spot lights
+    static math::float2 texelSizeWorldSpaceAtOneMeter(
+                    math::mat4f const& Mp,
+                    uint16_t shadowDimension) noexcept;
+
+    static math::float2 texelSizeWorldSpaceAt(
+                    math::mat4f const& S,
+                    math::float3 const& p,
+                    uint16_t shadowDimension) noexcept;
 
     static constexpr Segment sBoxSegments[12] = {
             { 0, 1 }, { 1, 3 }, { 3, 2 }, { 2, 0 },
@@ -338,7 +351,7 @@ private:
             { 2, 6, 7, 3 },  // top
     };
 
-    mutable ShadowMapDescriptorSet mPerShadowMapUniforms;                   // 48
+    mutable ShadowMapDescriptorSet mPerShadowMapUniforms;                   // 64
 
     FCamera* mCamera = nullptr;                                             //  8
     FCamera* mDebugCamera = nullptr;                                        //  8
@@ -346,16 +359,17 @@ private:
     // The data below technically belongs to ShadowMapManager, but it simplifies allocations
     // to store it here. This data is always associated with this shadow map anyway.
     LightManager::ShadowOptions const* mOptions = nullptr;                  // 8
-    uint32_t mLightIndex = 0;   // which light are we shadowing             // 4
-    uint16_t mShadowIndex = 0;  // our index in the shadowMap vector        // 2
-    uint8_t mLayer = 0;         // our layer in the shadowMap texture       // 1
-    ShadowType mShadowType  : 2;                                            // :2
+    utils::Entity mLightEntity{};                                           // 4
+    uint16_t mLightSoAIndex = 0;                                            // 2
+    uint16_t mShadowIndex = 0;                                              // 2
+    uint8_t mLayer = 0;                                                     // 1
+    ShadowLightType mShadowLightType  : 2;                                  // :2
     bool mHasVisibleShadows : 1;                                            // :1
-    bool mVsm               : 1;                                            // :1
     UTILS_UNUSED bool mReservedBit : 1;                                     // :1
     uint8_t mFace           : 3;                                            // :3
+    UTILS_UNUSED uint8_t mReserved[2] = {};                                 // 2
     math::ushort2 mOffset{};                                                // 4
-    UTILS_UNUSED uint8_t reserved[4] = {};                                  // 4
+    float mWrapExponent = 0.0f;                                             // 4
 };
 
 } // namespace filament

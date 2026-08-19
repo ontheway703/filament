@@ -19,11 +19,11 @@
 
 #include "downcast.h"
 
+#include <filament/Texture.h>
+
 #include <backend/DriverApiForward.h>
 #include <backend/DriverEnums.h>
 #include <backend/Handle.h>
-
-#include <filament/Texture.h>
 
 #include <utils/compiler.h>
 #include <utils/Invocable.h>
@@ -62,10 +62,6 @@ public:
             uint32_t xoffset, uint32_t yoffset, uint32_t zoffset,
             uint32_t width, uint32_t height, uint32_t depth,
             PixelBufferDescriptor&& buffer) const;
-
-    UTILS_DEPRECATED
-    void setImage(FEngine& engine, size_t level,
-            PixelBufferDescriptor&& buffer, const FaceOffsets& faceOffsets) const;
 
     AsyncCallId setImageAsync(FEngine& engine, size_t level,
             uint32_t xoffset, uint32_t yoffset, uint32_t zoffset,

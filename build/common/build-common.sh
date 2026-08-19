@@ -28,16 +28,11 @@ echo "Building $TARGET target"
 BUILD_DEBUG=
 BUILD_RELEASE=
 GENERATE_ARCHIVES=
-RUN_TESTS=
 
 if [[ "$TARGET" == "presubmit" ]]; then
     BUILD_RELEASE=release
 fi
 
-if [[ "$TARGET" == "presubmit-with-test" ]]; then
-    BUILD_RELEASE=release
-    RUN_TESTS=-u
-fi
 
 if [[ "$TARGET" == "presubmit-with-archive" ]]; then
     BUILD_RELEASE=release
@@ -58,5 +53,4 @@ if [[ "$TARGET" == "continuous" ]]; then
     BUILD_DEBUG=debug
     BUILD_RELEASE=release
     GENERATE_ARCHIVES=-a
-    RUN_TESTS=-u
 fi

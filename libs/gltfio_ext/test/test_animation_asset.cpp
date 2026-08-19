@@ -28,7 +28,7 @@
  * AnimationAsset 是一个轻量级数据结构，用于表示"只包含动画数据"的资产，
  * 与传统的 FilamentAsset（包含 mesh + 动画）不同。
  *
- * 测试用例总数：20 个
+ * 测试用例总数：22 个
  * 覆盖范围：
  * - 基础功能：空资产、节点查找、时长计算、多动画访问
  * - 数据验证：通道索引、采样器索引、时间序列、层级循环
@@ -268,6 +268,35 @@ TEST_F(AnimationAssetTest, ValidateUnsortedTimes) {
     asset->animations.push_back(std::move(anim));
 
     EXPECT_FALSE(asset->validate());  // 应该验证失败
+}
+
+/**
+ * 测试用例：检测重复的时间戳
+ *
+ * 重复时间戳会让插值区间长度为零，必须和乱序时间戳一样拒绝。
+ */
+TEST_F(AnimationAssetTest, ValidateDuplicateTimes) {
+    AnimationAsset::Animation anim;
+    anim.name = "TestAnim";
+
+    AnimationSampler sampler;
+    sampler.times = {0.0f, 1.0f, 1.0f};
+    sampler.values = {
+            0.0f, 0.0f, 0.0f,
+            1.0f, 1.0f, 1.0f,
+            2.0f, 2.0f, 2.0f,
+    };
+    anim.samplers.push_back(std::move(sampler));
+
+    AnimationChannel channel;
+    channel.targetNodeIndex = 1;
+    channel.samplerIndex = 0;
+    channel.path = AnimationPathType::TRANSLATION;
+    anim.channels.push_back(std::move(channel));
+
+    asset->animations.push_back(std::move(anim));
+
+    EXPECT_FALSE(asset->validate());
 }
 
 /**

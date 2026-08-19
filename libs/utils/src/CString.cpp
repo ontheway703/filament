@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-#include <utils/CString.h>
-
 #include <utils/compiler.h>
+#include <utils/CString.h>
 #include <utils/Logger.h>
 #include <utils/ostream.h>
 #include <utils/Panic.h>
@@ -160,6 +159,12 @@ CString& CString::replace(size_type const pos, size_type len, char const* str, s
 
 #if !defined(NDEBUG)
 io::ostream& operator<<(io::ostream& out, const CString& rhs) {
+    return out << rhs.c_str_safe();
+}
+#endif
+
+#if defined(FILAMENT_USE_ABSEIL_LOGGING)
+std::ostream& operator<<(std::ostream& out, const CString& rhs) {
     return out << rhs.c_str_safe();
 }
 #endif

@@ -10,7 +10,7 @@
 
 ```bash
 # 配置构建（首次运行）
-cd /Users/xuan/Desktop/Code/my/filament
+cd /path/to/filament
 cmake -B out/cmake-debug
 
 # 编译所有测试
@@ -47,23 +47,26 @@ cd out/cmake-debug/libs/gltfio_ext
 
 ## 测试概览
 
-总计：**10个测试可执行文件，116个测试用例**，覆盖 gltfio_ext 特有功能和核心场景。
+总计：**10个测试可执行文件，124个测试用例**。当前 host 基线为
+**119 passed / 5 explicitly skipped / 0 failed**；缺少 fixture 或测试可执行文件时 runner 会失败，
+不会把依赖缺失记为通过。
 
 | 测试文件 | 类型 | 用例数 | 依赖库 | 需要资源 | 功能覆盖 |
 |---------|------|-------|--------|---------|---------|
-| test_animation_asset.cpp | 单元测试 | 21 | gltfio_ext_core | 否 | AnimationAsset 数据验证 |
-| test_gltfio_ext.cpp | 集成测试 | 3 | gltfio_ext + uberarchive_ext | 是 | 基础加载流程 |
-| test_asset_loader.cpp | 集成测试 | 13 | gltfio_ext + uberarchive_ext | 是 | loadAnimationAsset() API |
+| test_animation_asset.cpp | 单元测试 | 22 | gltfio_ext_core | 否 | AnimationAsset 数据验证 |
+| test_gltfio_ext.cpp | 集成测试 | 10 | gltfio_ext + uberarchive_ext | 是 | 基础加载流程与上游损坏输入回归测试 |
+| test_asset_loader.cpp | 集成测试 | 12 | gltfio_ext + uberarchive_ext | 是 | loadAnimationAsset() API |
 | test_animation_binding.cpp | 集成测试 | 9 | gltfio_ext + uberarchive_ext | 是 | 骨骼名称映射（含实例化）|
 | test_bone_matrices.cpp | 集成测试 | 5 | gltfio_ext + uberarchive_ext | 是 | 骨骼矩阵更新 |
 | test_animator_lifecycle.cpp | 集成测试 | 9 | gltfio_ext + uberarchive_ext | 是 | 资源生命周期 |
-| test_animator_playback.cpp | 集成测试 | 11 | gltfio_ext + uberarchive_ext | 是 | 外部动画播放 |
+| test_animator_playback.cpp | 集成测试 | 14 | gltfio_ext + uberarchive_ext | 是 | 外部动画播放 |
 | test_animator_cache.cpp | 集成测试 | 3 | gltfio_ext + uberarchive_ext | 是 | Animator 缓存集成 |
 | test_animator_crossfade.cpp | 集成测试 | 7 | gltfio_ext + uberarchive_ext | 是 | 动画混合 |
-| test_animation_cache.cpp | 单元测试 | 34 | gltfio_ext + uberarchive_ext | 是 | LRU 缓存系统 |
+| test_animation_cache.cpp | 单元测试 | 33 | gltfio_ext + uberarchive_ext | 是 | LRU 缓存系统 |
 
 **资源文件**：
 - `AnimatedMorphCube.glb` - 从 `third_party/models/` 复制
+- `DamagedHelmetWebp.glb` - 从 `third_party/models/` 复制，用于上游纹理路径回归测试
 - `ecorche_animation_only.glb` - 构建时确定性生成的 327-joint / 3-animation fixture
 - `ecorche_full.glb` - 构建时确定性生成的 327-joint skinned mesh / 3-animation fixture
 - `ecorche_mesh_only.glb` - 构建时确定性生成的 327-joint mesh-only fixture
@@ -78,7 +81,7 @@ cd out/cmake-debug/libs/gltfio_ext
 
 **功能**：测试 `AnimationAsset` 数据结构和验证逻辑。
 
-**20个测试用例包括**：
+**22个测试用例包括**（含严格递增时间戳回归测试）：
 
 #### 基础功能（5个）
 - `EmptyAssetIsValid` - 空资产验证
@@ -93,6 +96,7 @@ cd out/cmake-debug/libs/gltfio_ext
 - `ValidateInvalidSamplerIndex` - 检测无效采样器索引
 - `ValidateEmptySamplerTimes` - 检测空时间数组
 - `ValidateUnsortedTimes` - 检测未排序时间
+- `ValidateDuplicateTimes` - 检测重复时间戳
 - `ValidateCyclicHierarchy` - 检测循环层级
 - `ValidateTranslationInsufficientValues` - 检测平移动画数据不足（精确值数量验证）
 - `ValidateRotationInvalidValueCount` - 检测旋转动画数据错误（四元数格式验证）

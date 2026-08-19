@@ -32,7 +32,7 @@ FenceStatus WebGPUSubmissionState::waitForCompletion(uint64_t timeout) {
         until = now + nanoseconds(timeout);
     }
 
-    std::unique_lock<std::mutex> lock(mLock);
+    utils::UniqueLock lock(mLock);
     mCond.wait_until(lock, until, [this] {
         return mStatus == FenceStatus::CONDITION_SATISFIED || mStatus == FenceStatus::ERROR;
     });
@@ -44,7 +44,7 @@ FenceStatus WebGPUSubmissionState::waitForCompletion(uint64_t timeout) {
 
 
 void WebGPUSubmissionState::setStatus(FenceStatus status) {
-    std::lock_guard<std::mutex> const lock(mLock);
+    utils::LockGuard const lock(mLock);
     mStatus = status;
     mCond.notify_all();
 }
@@ -67,6 +67,14 @@ wgpu::CommandEncoder WebGPUQueueManager::getCommandEncoder() {
         mLatestSubmissionState = std::make_shared<WebGPUSubmissionState>();
     }
     return mCommandEncoder;
+}
+
+// Returns the command encoder and the submission state of the encoder.
+std::pair<wgpu::CommandEncoder, std::shared_ptr<WebGPUSubmissionState>>
+        WebGPUQueueManager::getCommandEncoderWithState() {
+    auto encoder = getCommandEncoder();
+    auto state = getLatestSubmissionState();
+    return { encoder, state };
 }
 
 void WebGPUQueueManager::flush() {

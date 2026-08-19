@@ -22,11 +22,14 @@
 #include <filament/TransformManager.h>
 
 #include <utils/compiler.h>
-#include <utils/SingleInstanceComponentManager.h>
 #include <utils/Entity.h>
+#include <utils/SingleInstanceComponentManager.h>
 #include <utils/Slice.h>
 
 #include <math/mat4.h>
+
+#include <utility>
+#include <variant>
 
 namespace filament {
 
@@ -34,7 +37,7 @@ class UTILS_PRIVATE FTransformManager : public TransformManager {
 public:
     using Instance = Instance;
 
-    FTransformManager() noexcept;
+    explicit FTransformManager(utils::EntityManager& em) noexcept;
     ~FTransformManager() noexcept;
 
     // free-up all resources
@@ -69,6 +72,10 @@ public:
         return mManager.getEntities();
     }
 
+    const utils::PagedArenaBitset& getEntityBitset() const noexcept {
+        return mManager.getEntityBitset();
+    }
+
     void setAccurateTranslationsEnabled(bool enable) noexcept;
 
     bool isAccurateTranslationsEnabled() const noexcept {
@@ -81,7 +88,11 @@ public:
 
     void create(utils::Entity entity, Instance parent, const math::mat4& localTransform);
 
-    void destroy(utils::Entity e) noexcept;
+    void destroyComponents(utils::Entity const* entities, size_t count) noexcept;
+
+    void destroy(utils::Entity e) noexcept {
+        destroyComponents(&e, 1);
+    }
 
     void setParent(Instance i, Instance newParent) noexcept;
 
@@ -95,11 +106,13 @@ public:
 
     children_iterator getChildrenEnd(Instance parent) const noexcept;
 
+    children_range getChildrenRange(Instance parent) const noexcept;
+
     void openLocalTransformTransaction() noexcept;
 
     void commitLocalTransformTransaction() noexcept;
 
-    void gc(utils::EntityManager& em) noexcept;
+    void gc() noexcept;
 
     void registerChangeCallback(void const* token, utils::SingleInstanceComponentManagerBase::ChangeCallback callback) noexcept {
         mManager.registerChangeCallback(token, std::move(callback));
@@ -146,6 +159,8 @@ public:
 private:
     struct Sim;
 
+    void createImpl(utils::Entity entity, Instance parent, std::variant<math::mat4, math::mat4f> localTransform);
+
     void validateNode(Instance i) noexcept;
     void removeNode(Instance i) noexcept;
     void updateNode(Instance i) noexcept;
@@ -186,6 +201,7 @@ private:
     >;
 
     struct Sim : public Base {
+        explicit Sim(utils::EntityManager& em) noexcept : Base(em, "TransformManager") {}
         using Base::gc;
         using Base::swap;
 

@@ -17,7 +17,7 @@
 #ifndef TNT_SHAREDSHADERSCONSTANTS_H
 #define TNT_SHAREDSHADERSCONSTANTS_H
 
-#include "math/mathfwd.h"
+#include <math/mathfwd.h>
 
 enum class ShaderUniformType : uint8_t {
     None,
@@ -57,7 +57,8 @@ enum class VertexShaderType : uint8_t {
 enum class FragmentShaderType : uint8_t {
     White,
     SolidColored,
-    Textured
+    Textured,
+    TexturedLod,
 };
 
 #endif //TNT_SHAREDSHADERSCONSTANTS_H

@@ -43,6 +43,7 @@
 #include "backend/DriverEnums.h"
 
 #include "DriverBase.h"
+#include "JobQueue.h"
 #include "private/backend/Driver.h"
 
 #include <utils/FixedCapacityVector.h>
@@ -129,10 +130,49 @@ private:
     void bindPipelineImpl(PipelineState const& pipelineState, VkPipelineLayout pipelineLayout,
             fvkutils::DescriptorSetMask descriptorSetMask);
 
+    // Common methods shared by the synchronous and asynchronous variants of the driver API.
+    void createVertexBufferCommon(Handle<HwVertexBuffer> vbh, uint32_t vertexCount,
+            Handle<HwVertexBufferInfo> vbih, bool asynchronous, utils::ImmutableCString&& tag);
+    void createIndexBufferCommon(Handle<HwIndexBuffer> ibh, ElementType elementType,
+            uint32_t indexCount, bool asynchronous, utils::ImmutableCString&& tag);
+    void createBufferObjectCommon(Handle<HwBufferObject> boh, uint32_t byteCount,
+            BufferObjectBinding bindingType, BufferUsage usage, bool asynchronous,
+            utils::ImmutableCString&& tag);
+    void createTextureCommon(Handle<HwTexture> th, SamplerType target, uint8_t levels,
+            TextureFormat format, uint8_t samples, uint32_t w, uint32_t h, uint32_t depth,
+            TextureUsage usage, bool asynchronous, utils::ImmutableCString&& tag);
+    void createTextureViewSwizzleCommon(Handle<HwTexture> th, Handle<HwTexture> srch,
+            backend::TextureSwizzle r, backend::TextureSwizzle g, backend::TextureSwizzle b,
+            backend::TextureSwizzle a, utils::ImmutableCString&& tag);
+    void importTextureCommon(Handle<HwTexture> th, intptr_t id, SamplerType target, uint8_t levels,
+            TextureFormat format, uint8_t samples, uint32_t w, uint32_t h, uint32_t depth,
+            TextureUsage usage, utils::ImmutableCString&& tag);
+    void setVertexBufferObjectCommon(resource_ptr<VulkanVertexBuffer> vb, uint32_t index,
+            resource_ptr<VulkanBufferObject> bo);
+    void updateIndexBufferCommon(resource_ptr<VulkanIndexBuffer> ib, BufferDescriptor&& p,
+            uint32_t byteOffset);
+    void updateBufferObjectCommon(resource_ptr<VulkanBufferObject> bo, BufferDescriptor&& bd,
+            uint32_t byteOffset);
+    void update3DImageCommon(resource_ptr<VulkanTexture> texture, uint32_t level, uint32_t xoffset,
+            uint32_t yoffset, uint32_t zoffset, uint32_t width, uint32_t height, uint32_t depth,
+            PixelBufferDescriptor&& data);
+
+    // Common preamble for indexed and non-indexed draws: handles deferred pipeline-layout
+    // binding (for external samplers) and commits descriptor sets.
+    void prepareDraw();
+
     // Flush the current command buffer and reset the pipeline state.
     void endCommandRecording();
 
-    void acquireNextSwapchainImage();
+    // Returns whether the acquire was successful
+    bool acquireNextSwapchainImage();
+
+    bool skipDueToEmptyRenderPass() const {
+        return !bool(mCurrentRenderPass.renderTarget);
+    }
+
+    JobQueue* getJobQueue() const noexcept { return mJobQueue.get(); }
+    JobWorker* getJobWorker() const noexcept { return mJobWorker.get(); }
 
     VulkanPlatform* mPlatform = nullptr;
     fvkmemory::ResourceManager mResourceManager;
@@ -167,8 +207,8 @@ private:
     // synchronous calls, making access to VulkanSwapchain unsafe (this difference vs other backends
     // is due to the ref-counting of vulkan resources).
     struct {
-        std::mutex lock;
-        std::unordered_map<HandleId, Platform::SwapChain*> nativeSwapchains;
+        utils::Mutex lock;
+        std::unordered_map<HandleId, Platform::SwapChain*> nativeSwapchains UTILS_GUARDED_BY(lock);
     } mTiming;
 
     // This is necessary for us to write to push constants after binding a pipeline.
@@ -190,7 +230,7 @@ private:
         fvkutils::DescriptorSetMask descriptorSetMask = {};
 
         std::pair<bool, BindInDrawBundle> bindInDraw = {false, {}};
-    } mPipelineState = {};
+    } mPipelineState {};
 
     struct {
         // This tracks whether the app has seen external samplers bound to a the descriptor set.
@@ -201,7 +241,12 @@ private:
         bool hasExternalSamplers() const noexcept {
             return hasExternalSamplerLayouts && hasBoundExternalImages;
         }
-    } mAppState;
+    } mAppState {};
+
+    struct {
+        // Indicates whether a render primitive has been bound for draw.
+        bool bound = false;
+    } mRenderPrimitiveState {};
 
     bool const mIsSRGBSwapChainSupported;
     bool const mIsMSAASwapChainSupported;
@@ -209,6 +254,11 @@ private:
     backend::StereoscopicType const mStereoscopicType;
     uint8_t const mStereoscopicEyeCount;
     backend::AsynchronousMode const mAsynchronousMode;
+
+    JobQueue::Ptr mJobQueue;
+    JobWorker::Ptr mJobWorker;
+
+    uint8_t mTicksSinceLastGc = 0;
 
     // setAcquiredImage is a DECL_DRIVER_API_SYNCHRONOUS_N which means we don't necessarily have the
     // data to process it at call time. So we store it and process it during updateStreams.

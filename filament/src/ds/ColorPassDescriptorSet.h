@@ -17,24 +17,23 @@
 #ifndef TNT_FILAMENT_PERVIEWUNIFORMS_H
 #define TNT_FILAMENT_PERVIEWUNIFORMS_H
 
-#include <filament/Viewport.h>
-
 #include "DescriptorSet.h"
-
 #include "TypedUniformBuffer.h"
 
 #include <private/filament/EngineEnums.h>
 #include <private/filament/UibStructs.h>
+
+#include <filament/Viewport.h>
 
 #include <backend/DriverEnums.h>
 #include <backend/Handle.h>
 
 #include <utils/EntityInstance.h>
 
+#include <math/mat4.h>
 #include <math/vec2.h>
 #include <math/vec3.h>
 #include <math/vec4.h>
-#include <math/mat4.h>
 
 #include <array>
 
@@ -124,8 +123,6 @@ public:
             VsmShadowOptions const& options) noexcept;
 
     void prepareShadowPCF(TextureHandle texture) noexcept;
-
-    void prepareShadowDPCF(TextureHandle texture) noexcept;
 
     void prepareShadowPCSS(TextureHandle texture) noexcept;
 

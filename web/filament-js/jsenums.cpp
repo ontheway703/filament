@@ -14,10 +14,16 @@
  * limitations under the License.
  */
 
+#include <viewer/AutomationEngine.h>
+#include <viewer/Settings.h>
+
+#include <ktxreader/Ktx2Reader.h>
+
 #include <filament/BufferObject.h>
 #include <filament/Camera.h>
-#include <filament/ColorGrading.h>
 #include <filament/Color.h>
+#include <filament/ColorGrading.h>
+#include <filament/Fence.h>
 #include <filament/Frustum.h>
 #include <filament/IndexBuffer.h>
 #include <filament/LightManager.h>
@@ -27,8 +33,6 @@
 #include <filament/TextureSampler.h>
 #include <filament/VertexBuffer.h>
 #include <filament/View.h>
-
-#include <ktxreader/Ktx2Reader.h>
 
 #include <backend/DriverEnums.h>
 
@@ -116,6 +120,20 @@ enum_<LightManager::Type>("LightManager$Type")
     .value("POINT", LightManager::Type::POINT)
     .value("FOCUSED_SPOT", LightManager::Type::FOCUSED_SPOT)
     .value("SPOT", LightManager::Type::SPOT);
+
+enum_<Fence::Mode>("Fence$Mode")
+    .value("FLUSH", Fence::Mode::FLUSH)
+    .value("DONT_FLUSH", Fence::Mode::DONT_FLUSH);
+
+enum_<backend::FenceStatus>("FenceStatus")
+    .value("ERROR", backend::FenceStatus::ERROR)
+    .value("CONDITION_SATISFIED", backend::FenceStatus::CONDITION_SATISFIED)
+    .value("TIMEOUT_EXPIRED", backend::FenceStatus::TIMEOUT_EXPIRED);
+
+enum_<RenderableManager::Builder::GeometryType>("RenderableManager$Builder$GeometryType")
+    .value("DYNAMIC", RenderableManager::Builder::GeometryType::DYNAMIC)
+    .value("STATIC_BOUNDS", RenderableManager::Builder::GeometryType::STATIC_BOUNDS)
+    .value("STATIC", RenderableManager::Builder::GeometryType::STATIC);
 
 enum_<RenderableManager::PrimitiveType>("RenderableManager$PrimitiveType")
     .value("POINTS", RenderableManager::PrimitiveType::POINTS)
@@ -454,5 +472,32 @@ enum_<ktxreader::Ktx2Reader::Result>("Ktx2Reader$Result")
         .value("METAL", backend::Backend::METAL)
         .value("WEBGPU", backend::Backend::WEBGPU)
         .value("NOOP", backend::Backend::NOOP);
+
+    enum_<filament::viewer::ToneMapping>("viewer$ToneMapping")
+        .value("LINEAR", filament::viewer::ToneMapping::LINEAR)
+        .value("ACES_LEGACY", filament::viewer::ToneMapping::ACES_LEGACY)
+        .value("ACES", filament::viewer::ToneMapping::ACES)
+        .value("FILMIC", filament::viewer::ToneMapping::FILMIC)
+        .value("AGX", filament::viewer::ToneMapping::AGX)
+        .value("GENERIC", filament::viewer::ToneMapping::GENERIC)
+        .value("PBR_NEUTRAL", filament::viewer::ToneMapping::PBR_NEUTRAL)
+        .value("GT7", filament::viewer::ToneMapping::GT7)
+        .value("DISPLAY_RANGE", filament::viewer::ToneMapping::DISPLAY_RANGE);
+
+    enum_<filament::viewer::CustomLut>("viewer$CustomLut")
+        .value("NONE", filament::viewer::CustomLut::NONE)
+        .value("NEGATIVE", filament::viewer::CustomLut::NEGATIVE)
+        .value("GRAYSCALE", filament::viewer::CustomLut::GRAYSCALE)
+        .value("SEPIA", filament::viewer::CustomLut::SEPIA)
+        .value("TEAL_AND_ORANGE", filament::viewer::CustomLut::TEAL_AND_ORANGE);
+
+    enum_<filament::AgxToneMapper::AgxLook>("AgxToneMapper$AgxLook")
+        .value("NONE", filament::AgxToneMapper::AgxLook::NONE)
+        .value("PUNCHY", filament::AgxToneMapper::AgxLook::PUNCHY)
+        .value("GOLDEN", filament::AgxToneMapper::AgxLook::GOLDEN);
+
+    enum_<filament::viewer::AutomationEngine::Options::ExportFormat>("AutomationEngine$ExportFormat")
+        .value("TIFF", filament::viewer::AutomationEngine::Options::ExportFormat::TIFF)
+        .value("PPM", filament::viewer::AutomationEngine::Options::ExportFormat::PPM);
 
 }

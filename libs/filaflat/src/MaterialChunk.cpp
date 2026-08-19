@@ -14,23 +14,22 @@
  * limitations under the License.
  */
 
-#include <filaflat/MaterialChunk.h>
+#include "private/filament/Variant.h"
 
 #include <private/filament/LineDictionaryUtils.h>
 
-
-#include "private/filament/Variant.h"
-
-#include <filaflat/ChunkContainer.h>
-
 #include <filament/MaterialChunkType.h>
 
+#include <filaflat/ChunkContainer.h>
+#include <filaflat/MaterialChunk.h>
+
 #include <utils/compiler.h>
-#include <utils/Invocable.h>
 #include <utils/debug.h>
+#include <utils/Invocable.h>
 #include <utils/Log.h>
 
 #include <charconv>
+
 #include <string_view>
 #include <vector>
 
@@ -388,7 +387,13 @@ size_t MaterialChunk::getDictionaryOccurrences(std::vector<uint32_t>& outOccurre
         ShaderStage stage;
         decodeKey(chunk.first, &model, &variant, &stage);
 
-        Unflattener unflattener(mBase + chunk.second, mContainer.getChunkRange(mMaterialTag).second);
+        auto const matRange = mContainer.getChunkRange(mMaterialTag);
+        // chunk.second (offsetValue) is attacker-controlled; reject offsets that would place
+        // the cursor outside the material chunk before forming the pointer (parity with setCursor()).
+        if (chunk.second >= size_t(matRange.second - mBase)) {
+            continue;
+        }
+        Unflattener unflattener(mBase + chunk.second, matRange.second);
 
         uint32_t shaderSize = 0;
         if (!unflattener.read(&shaderSize)) {

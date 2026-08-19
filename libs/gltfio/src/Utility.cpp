@@ -108,9 +108,15 @@ bool decodeMeshoptCompression(cgltf_data* data) {
                 << " (actual=" << compression->count << ") given stride of " << compression->stride
                 << ".";
 
+        const size_t decodedSize = compression->count * compression->stride;
+
         // This memory is freed by cgltf.
-        void* destination = malloc(compression->count * compression->stride);
-        assert_invariant(destination);
+        void* destination = malloc(decodedSize);
+        if (UTILS_UNLIKELY(!destination)) {
+            slog.e << "gltfio: meshopt decompression allocation failed ("
+                   << decodedSize << " bytes)" << io::endl;
+            return false;
+        }
 
         int error = 0;
         switch (compression->mode) {
@@ -182,7 +188,16 @@ uint32_t computeBindingSize(cgltf_accessor const* accessor) {
         return 0;
     }
     cgltf_size element_size = cgltf_calc_size(accessor->type, accessor->component_type);
-    return uint32_t(accessor->stride * (accessor->count - 1) + element_size);
+    cgltf_size stride = accessor->stride > 0 ? accessor->stride : element_size;
+    if (stride > 0 && accessor->count - 1 >
+                              (std::numeric_limits<cgltf_size>::max() - element_size) / stride) {
+        return 0;
+    }
+    cgltf_size size = stride * (accessor->count - 1) + element_size;
+    if (size > std::numeric_limits<uint32_t>::max()) {
+        return 0;
+    }
+    return uint32_t(size);
 }
 
 void convertBytesToShorts(uint16_t* dst, uint8_t const* src, size_t count) {
@@ -277,12 +292,10 @@ bool loadCgltfBuffers(cgltf_data const* gltf, char const* gltfPath,
 
     FILAMENT_TRACING_NAME_END(FILAMENT_TRACING_CATEGORY_GLTFIO);
 
-#ifndef NDEBUG
     if (cgltf_validate((cgltf_data*) gltf) != cgltf_result_success) {
         slog.e << "Failed cgltf validation." << io::endl;
         return false;
     }
-#endif
     return true;
 }
 

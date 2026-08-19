@@ -18,13 +18,14 @@
 #define TNT_FILAMENT_BACKEND_VULKAN_MEMORY_RESOURCEMANAGER_H
 
 #include "vulkan/memory/Resource.h"
-
 #include "vulkan/VulkanAsyncHandles.h"
 
 #include <private/backend/HandleAllocator.h>
 
-#include <utils/Panic.h>
 #include <utils/ImmutableCString.h>
+#include <utils/Panic.h>
+
+#include <type_traits>
 
 namespace filament::backend::fvkmemory {
 
@@ -49,11 +50,7 @@ private:
     using AllocatorImpl = HandleAllocatorVK;
 
     template<typename D>
-    using requires_thread_safety = typename std::disjunction<
-            std::is_same<D, VulkanProgram>,
-            std::is_same<D, VulkanFence>,
-            std::is_same<D, VulkanTimerQuery>,
-            std::is_same<D, VulkanSync>>;
+    using requires_thread_safety = std::is_base_of<ThreadSafeResource, D>;
 
     template<typename D, typename B, typename... ARGS>
     inline D* construct(Handle<B> const& handle, ARGS&&... args) noexcept {

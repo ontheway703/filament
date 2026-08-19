@@ -17,18 +17,20 @@
 #define TNT_FILAMENT_MATERIALDEFINITION_H
 
 #include "ProgramSpecialization.h"
-#include "backend/DriverApiForward.h"
 
-#include <private/filament/Variant.h>
+#include "ds/DescriptorSetLayout.h"
+
 #include <private/filament/BufferInterfaceBlock.h>
+#include <private/filament/ConstantInfo.h>
 #include <private/filament/SamplerInterfaceBlock.h>
 #include <private/filament/SubpassInfo.h>
-#include <private/filament/ConstantInfo.h>
+#include <private/filament/Variant.h>
 
-#include <ds/DescriptorSetLayout.h>
-
+#include <backend/DriverApiForward.h>
 #include <backend/DriverEnums.h>
 #include <backend/Program.h>
+
+#include <tsl/robin_set.h>
 
 namespace filament {
 
@@ -90,7 +92,10 @@ struct MaterialDefinition {
     utils::Slice<const Variant> getVariants() const noexcept;
     utils::Slice<const Variant> getDepthVariants() const noexcept;
 
-    bool hasVariant(Variant const variant,
+    // Checks whether a given combination of Variant and DynamicSpecConstKey produces a valid and
+    // compiled shader program for this material under the specified shader model and platform
+    // capabilities.
+    bool isValidProgram(Variant const variant, DynamicSpecConstKey const specKey,
             backend::ShaderModel const sm, bool isStereoSupported) const noexcept;
 
     backend::DescriptorSetLayout const& getPerViewDescriptorSetLayoutDescription(
@@ -141,6 +146,7 @@ struct MaterialDefinition {
     SamplerInterfaceBlock samplerInterfaceBlock;
     BufferInterfaceBlock uniformInterfaceBlock;
     SubpassInfo subpassInfo;
+    tsl::robin_set<std::string_view> parameterNames;
 
     BindingUniformInfoContainer bindingUniformInfo;
     AttributeInfoContainer attributeInfo;
@@ -173,6 +179,7 @@ private:
             std::unique_ptr<MaterialParser> parser);
 
     void processMain();
+    void processParameterNames();
     void processBlendingMode();
     void processSpecializationConstants(FEngine& engine);
     void processPushConstants();

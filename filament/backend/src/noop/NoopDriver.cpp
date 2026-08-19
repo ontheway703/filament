@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
+#include "noop/NoopDriver.h"
+
+#include "CommandStreamDispatcher.h"
+
 #include <backend/DriverEnums.h>
 #include <backend/Handle.h>
 #include <backend/Platform.h>
-
-#include "noop/NoopDriver.h"
-#include "CommandStreamDispatcher.h"
 
 #include <utils/ImmutableCString.h>
 
@@ -125,6 +126,10 @@ void NoopDriver::destroyRenderTarget(Handle<HwRenderTarget> rth) {
 void NoopDriver::destroySwapChain(Handle<HwSwapChain> sch) {
 }
 
+void NoopDriver::setFrameRate(Handle<HwSwapChain>, float,
+        Platform::FrameRateCompatibility, Platform::ChangeFrameRateStrategy) {
+}
+
 void NoopDriver::destroyStream(Handle<HwStream> sh) {
 }
 
@@ -211,7 +216,7 @@ bool NoopDriver::isFrameBufferFetchMultiSampleSupported() {
 }
 
 bool NoopDriver::isFrameTimeSupported() {
-    return true;
+    return false;
 }
 
 bool NoopDriver::isAutoDepthResolveSupported() {
@@ -229,6 +234,7 @@ bool NoopDriver::isMSAASwapChainSupported(uint32_t) {
 bool NoopDriver::isProtectedContentSupported() {
     return false;
 }
+
 
 bool NoopDriver::isStereoSupported() {
     return false;
@@ -417,6 +423,10 @@ void NoopDriver::bindRenderPrimitive(Handle<HwRenderPrimitive> rph) {
 }
 
 void NoopDriver::draw2(uint32_t indexOffset, uint32_t indexCount, uint32_t instanceCount) {
+}
+
+void NoopDriver::drawArrays(uint32_t vertexOffset, uint32_t vertexCount,
+        uint32_t instanceCount) {
 }
 
 void NoopDriver::draw(PipelineState pipelineState, Handle<HwRenderPrimitive> rph,

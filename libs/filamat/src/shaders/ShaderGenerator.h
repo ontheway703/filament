@@ -20,14 +20,12 @@
 
 #include "MaterialInfo.h"
 
-#include "UibGenerator.h"
+#include <private/filament/EngineEnums.h>
+#include <private/filament/Variant.h>
 
 #include <filament/MaterialEnums.h>
 
 #include <filamat/MaterialBuilder.h>
-
-#include <private/filament/EngineEnums.h>
-#include <private/filament/Variant.h>
 
 #include <backend/DriverEnums.h>
 
@@ -35,9 +33,6 @@
 #include <utils/sstream.h>
 
 #include <string>
-
-#include <stdint.h>
-#include <stddef.h>
 
 namespace filamat {
 
@@ -132,6 +127,8 @@ private:
     static bool hasStereo(
             filament::Variant variant,
             MaterialBuilder::FeatureLevel featureLevel) noexcept;
+
+    static bool hasLighting(MaterialInfo const& material, filament::Variant variant) noexcept;
 
     MaterialBuilder::PropertyList mProperties;
     MaterialBuilder::VariableList mVariables;

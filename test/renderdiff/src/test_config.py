@@ -110,14 +110,14 @@ class PresetConfig(RenderingConfig):
         assert 0 <= tolerance['maxFailingPixelsFraction'] <= 1.0, "maxFailingPixelsFraction must be 0.0-1.0"
 
 class TestConfig(RenderingConfig):
-  def __init__(self, data, existing_models, presets, backends):
+  def __init__(self, data, existing_models, presets, renderers):
     RenderingConfig.__init__(self, data)
     description = data.get('description')
     if description:
       assert _is_string(description)
       self.description = description
 
-    self.backends = data.get('backends', backends)
+    self.renderers = data.get('renderers', renderers)
 
     apply_presets = data.get('apply_presets')
     rendering = {}
@@ -133,7 +133,8 @@ class TestConfig(RenderingConfig):
       # Tolerance is inherited from the LAST preset that has one defined
       for preset in apply_presets:
         rendering.update(given_presets[preset].rendering)
-        preset_models = given_presets[preset].models
+        if given_presets[preset].models:
+          preset_models = given_presets[preset].models
         if given_presets[preset].tolerance:
           preset_tolerance = given_presets[preset].tolerance
 
@@ -178,9 +179,9 @@ class RenderTestConfig():
     assert _is_string(name)
     self.name = name
 
-    assert 'backends' in data
-    backends = data['backends']
-    assert _is_list_of_strings(backends)
+    assert 'renderers' in data
+    renderers = data['renderers']
+    assert _is_list_of_strings(renderers)
 
     assert 'model_search_paths' in data
     model_search_paths = data.get('model_search_paths')
@@ -200,7 +201,7 @@ class RenderTestConfig():
       presets = [PresetConfig(p, self.models) for p in preset_data]
 
     assert 'tests' in data
-    self.tests = [TestConfig(t, self.models, presets, backends) for t in data['tests']]
+    self.tests = [TestConfig(t, self.models, presets, renderers) for t in data['tests']]
     test_names = list([t.name for t in self.tests])
 
     # We cannot have duplicate test names

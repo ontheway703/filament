@@ -111,7 +111,6 @@ if (FILAMENT_SUPPORTS_OPENGL AND NOT FILAMENT_USE_EXTERNAL_GLES3)
         list(APPEND SRCS src/AndroidNdk.cpp)
         list(APPEND SRCS src/AndroidNativeWindow.cpp)
         list(APPEND SRCS src/AndroidSwapChainHelper.cpp)
-        list(APPEND SRCS src/AndroidFrameCallback.cpp)
         list(APPEND SRCS src/opengl/platforms/ExternalStreamManagerAndroid.cpp)
         list(APPEND SRCS src/opengl/platforms/PlatformEGLAndroid.cpp)
     elseif (IOS)
@@ -210,6 +209,8 @@ if (FILAMENT_SUPPORTS_VULKAN)
             src/vulkan/VulkanDriverFactory.h
             src/vulkan/VulkanExternalImageManager.cpp
             src/vulkan/VulkanExternalImageManager.h
+            src/vulkan/VulkanFencePool.h
+            src/vulkan/VulkanFencePool.cpp
             src/vulkan/VulkanStreamedImageManager.cpp
             src/vulkan/VulkanStreamedImageManager.h
             src/vulkan/VulkanFboCache.cpp
@@ -317,6 +318,8 @@ if (FILAMENT_SUPPORTS_WEBGPU)
             src/webgpu/WebGPUPipelineLayoutCache.h
             src/webgpu/WebGPUProgram.cpp
             src/webgpu/WebGPUProgram.h
+            src/webgpu/WebGPUPushConstantDescription.cpp
+            src/webgpu/WebGPUPushConstantDescription.h
             src/webgpu/WebGPUQueueManager.cpp
             src/webgpu/WebGPUQueueManager.h
             src/webgpu/WebGPURenderPassMipmapGenerator.cpp
@@ -534,6 +537,10 @@ target_compile_options(${TARGET} PRIVATE
         $<$<AND:$<PLATFORM_ID:Darwin>,$<CONFIG:Release>>:${DARWIN_OPTIMIZATION_FLAGS}>
 )
 
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(${TARGET} PRIVATE -Wthread-safety)
+endif()
+
 if (FILAMENT_SUPPORTS_METAL)
     target_compile_definitions(${TARGET} PRIVATE $<$<BOOL:${FILAMENT_METAL_PROFILING}>:FILAMENT_METAL_PROFILING>)
 endif()
@@ -597,6 +604,7 @@ if (FILAMENT_BUILD_TESTING)
             test/test_JobQueue.cpp
             test/test_MemoryMappedBuffer.cpp
             test/test_MsaaSwapChain.cpp
+            test/test_FrameRateControl.cpp
             test/test_MRT.cpp
             test/test_PushConstants.cpp
             test/test_LoadImage.cpp

@@ -14,20 +14,9 @@
  * limitations under the License.
  */
 
-#include "filamat/MaterialBuilder.h"
-
-#include <filamat/Enums.h>
-#include <filamat/Package.h>
-
 #include "GLSLPostProcessor.h"
 #include "MaterialVariants.h"
 #include "PushConstantDefinitions.h"
-
-#include "sca/GLSLTools.h"
-
-#include "shaders/MaterialInfo.h"
-#include "shaders/ShaderGenerator.h"
-#include "shaders/UibGenerator.h"
 
 #include "eiff/BlobDictionary.h"
 #include "eiff/ChunkContainer.h"
@@ -40,9 +29,14 @@
 #include "eiff/MaterialTextChunk.h"
 #include "eiff/ShaderEntry.h"
 
+#include "sca/GLSLTools.h"
+
+#include "shaders/MaterialInfo.h"
+#include "shaders/ShaderGenerator.h"
+#include "shaders/UibGenerator.h"
+
 #include <private/filament/BufferInterfaceBlock.h>
 #include <private/filament/ConstantInfo.h>
-#include <private/filament/DescriptorSets.h>
 #include <private/filament/SamplerInterfaceBlock.h>
 #include <private/filament/UibStructs.h>
 #include <private/filament/Variant.h>
@@ -50,19 +44,23 @@
 #include <filament/MaterialChunkType.h>
 #include <filament/MaterialEnums.h>
 
+#include <filamat/Enums.h>
+#include <filamat/MaterialBuilder.h>
+#include <filamat/Package.h>
+
 #include <backend/DriverEnums.h>
 #include <backend/Program.h>
 
 #include <utils/BitmaskEnum.h>
+#include <utils/compiler.h>
+#include <utils/debug.h>
 #include <utils/FixedCapacityVector.h>
 #include <utils/Hash.h>
 #include <utils/JobSystem.h>
 #include <utils/Logger.h>
 #include <utils/Mutex.h>
-#include <utils/Panic.h>
-#include <utils/compiler.h>
-#include <utils/debug.h>
 #include <utils/ostream.h>
+#include <utils/Panic.h>
 
 #include <math/vec3.h>
 
@@ -77,8 +75,8 @@
 #include <utility>
 #include <vector>
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 namespace filamat {
@@ -340,6 +338,8 @@ MaterialBuilder& MaterialBuilder::constant(const char* name, ConstantType const 
         FILAMENT_CHECK_POSTCONDITION(type == ConstantType::BOOL)
                 << "Constant " << name << " was declared with type " << toString(type)
                 << " but given a bool default value.";
+        // Zero-initialize the union to prevent garbage values.
+        constant.defaultValue.i = 0;
         constant.defaultValue.b = defaultValue;
     } else {
         assert_invariant(false);
@@ -510,6 +510,11 @@ MaterialBuilder& MaterialBuilder::transparentShadow(bool const transparentShadow
     return *this;
 }
 
+MaterialBuilder& MaterialBuilder::coloredPenumbra(bool const coloredPenumbra) noexcept {
+    mColoredPenumbra = coloredPenumbra;
+    return *this;
+}
+
 MaterialBuilder& MaterialBuilder::specularAntiAliasing(bool const specularAntiAliasing) noexcept {
     mSpecularAntiAliasing = specularAntiAliasing;
     return *this;
@@ -658,7 +663,7 @@ void MaterialBuilder::prepareToBuild(MaterialInfo& info) noexcept {
         auto const& param = mParameters[i];
         assert_invariant(!param.isSubpass());
         if (param.isSampler()) {
-            ShaderStageFlags stages = param.stages.value_or(defaultShaderStages);
+            ShaderStageFlags const stages = param.stages.value_or(defaultShaderStages);
             sbb.add({ param.name.data(), param.name.size() }, binding, param.samplerType,
                     param.format, param.precision, param.filterable, param.multisample,
                     { param.transformName.data(), param.transformName.size() }, stages);
@@ -726,6 +731,7 @@ void MaterialBuilder::prepareToBuild(MaterialInfo& info) noexcept {
     info.shading = mShading;
     info.hasShadowMultiplier = mShadowMultiplier;
     info.hasTransparentShadow = mTransparentShadow;
+    info.hasColoredPenumbra = mColoredPenumbra;
     info.multiBounceAO = mMultiBounceAO;
     info.multiBounceAOSet = mMultiBounceAOSet;
     info.specularAO = mSpecularAO;
@@ -840,16 +846,15 @@ bool MaterialBuilder::runSemanticAnalysis(MaterialInfo* inOutInfo,
 }
 
 static void showErrorMessage(const char* materialName, filament::Variant const variant,
-        MaterialBuilder::TargetApi const targetApi, backend::ShaderStage const shaderType,
-        MaterialBuilder::FeatureLevel const featureLevel,
-        const std::string& shaderCode) {
-    using ShaderStage = backend::ShaderStage;
+        MaterialBuilder::TargetApi const targetApi, ShaderStage const shaderType,
+        MaterialBuilder::FeatureLevel const featureLevel) {
     using TargetApi = MaterialBuilder::TargetApi;
 
     const char* targetApiString = "unknown";
     switch (targetApi) {
         case TargetApi::OPENGL:
-            targetApiString = (featureLevel == MaterialBuilder::FeatureLevel::FEATURE_LEVEL_0) ? "GLES 2.0" : "OpenGL";
+            targetApiString = (featureLevel == MaterialBuilder::FeatureLevel::FEATURE_LEVEL_0) ?
+                    "GLES 2.0" : "OpenGL";
             break;
         case TargetApi::VULKAN:
             targetApiString = "Vulkan";
@@ -881,7 +886,8 @@ static void showErrorMessage(const char* materialName, filament::Variant const v
     LOG(ERROR)
             << "Error in \"" << materialName << "\""
             << ", " << shaderStageString
-            << ", Variant " << io::hex << +variant.key;
+            << ", Variant " << io::hex << +variant.key
+            << ", API " << targetApiString;
 }
 
 bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Variant>& variants,
@@ -920,7 +926,7 @@ bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Va
             return false;
         }
 
-        const ShaderModel shaderModel = ShaderModel(params.shaderModel);
+        const ShaderModel shaderModel = params.shaderModel;
         const TargetApi targetApi = params.targetApi;
         const TargetLanguage targetLanguage = params.targetLanguage;
         const FeatureLevel featureLevel = params.featureLevel;
@@ -1031,7 +1037,7 @@ bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Va
                     };
                     char filename[256];
                     snprintf(filename, sizeof(filename), "%s_0x%02x_fl%d.%s",
-                            mMaterialName.c_str_safe(), variantKey, (int) featureLevel,
+                            mMaterialName.c_str_safe(), variantKey, int(featureLevel),
                             getExtension(v.stage));
                     printf("Writing variant 0x%02x to %s\n", variantKey, filename);
                     std::ofstream file(filename);
@@ -1069,7 +1075,7 @@ bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Va
                 bool const ok = postProcessor.process(shader, config, pGlsl, pSpirv, pMsl, pWgsl);
                 if (!ok) {
                     showErrorMessage(mMaterialName.c_str_safe(), v.variant, targetApi, v.stage,
-                                     featureLevel, shader);
+                            featureLevel);
                     cancelJobs = true;
                     if (mPrintShaders) {
                         LOG(ERROR) << shader;
@@ -1153,8 +1159,10 @@ bool MaterialBuilder::generateShaders(JobSystem& jobSystem, const std::vector<Va
     auto compare = [](const auto& a, const auto& b) {
         static_assert(sizeof(decltype(a.variant.key)) == 1);
         static_assert(sizeof(decltype(b.variant.key)) == 1);
-        const uint32_t akey = (uint32_t(a.shaderModel) << 16) | (uint32_t(a.variant.key) << 8) | uint32_t(a.stage);
-        const uint32_t bkey = (uint32_t(b.shaderModel) << 16) | (uint32_t(b.variant.key) << 8) | uint32_t(b.stage);
+        const uint32_t akey =
+            (uint32_t(a.shaderModel) << 16) | (uint32_t(a.variant.key) << 8)  | uint32_t(a.stage);
+        const uint32_t bkey =
+            (uint32_t(b.shaderModel) << 16) | (uint32_t(b.variant.key) << 8)  | uint32_t(b.stage);
         return akey < bkey;
     };
     std::sort(glslEntries.begin(), glslEntries.end(), compare);
@@ -1279,12 +1287,12 @@ MaterialBuilder& MaterialBuilder::useLegacyMorphing() noexcept {
     return *this;
 }
 
-MaterialBuilder& MaterialBuilder::materialSource(std::string_view source) noexcept {
+MaterialBuilder& MaterialBuilder::materialSource(std::string_view const source) noexcept {
     mMaterialSource = source;
     return *this;
 }
 
-MaterialBuilder& MaterialBuilder::setApiLevel(uint32_t apiLevel) noexcept {
+MaterialBuilder& MaterialBuilder::setApiLevel(uint32_t const apiLevel) noexcept {
     mApiLevel = apiLevel;
     return *this;
 }
@@ -1344,9 +1352,9 @@ error:
         goto error;
     }
 
-    if (mApiLevel < 1 || mApiLevel > filament::UNSTABLE_MATERIAL_API_LEVEL) {
+    if (mApiLevel < 1 || mApiLevel > UNSTABLE_MATERIAL_API_LEVEL) {
         LOG(ERROR) << "Error: api level can't be set below 1 or above unstable material level(" <<
-                filament::UNSTABLE_MATERIAL_API_LEVEL << ")";
+                UNSTABLE_MATERIAL_API_LEVEL << ")";
         goto error;
     }
 
@@ -1374,6 +1382,13 @@ error:
 
     if (!findAllProperties(semanticCodeGenParams)) {
         goto error;
+    }
+
+    if (mProperties[size_t(Property::CLIP_SPACE_TRANSFORM)] &&
+        mProperties[size_t(Property::CLIP_SPACE_POSITION)]) {
+        LOG(WARNING) << "Warning: material \"" << mMaterialName.c_str()
+                     << "\" writes to both clipSpaceTransform and clipSpacePosition. "
+                     << "clipSpacePosition will take precedence and clipSpaceTransform will be ignored.";
     }
 
     if (!runSemanticAnalysis(&info, semanticCodeGenParams)) {
@@ -1418,14 +1433,14 @@ error:
 
     Package package(signedContainerSize);
     Flattener f{ package.getData() };
-    size_t flattenSize = container.flatten(f);
+    size_t const flattenSize = container.flatten(f);
 
     std::vector<uint32_t> crc32Table;
     hash::crc32GenerateTable(crc32Table);
-    uint32_t crc = hash::crc32Update(0, f.getStartPtr(), flattenSize, crc32Table);
-    f.writeUint64(static_cast<uint64_t>(MaterialCrc32));
-    f.writeUint32(static_cast<uint32_t>(sizeof(crc)));
-    f.writeUint32(static_cast<uint32_t>(crc));
+    uint32_t const crc = hash::crc32Update(0, f.getStartPtr(), flattenSize, crc32Table);
+    f.writeUint64(MaterialCrc32);
+    f.writeUint32(sizeof(crc));
+    f.writeUint32(crc);
 
     assert_invariant(flattenSize == originalContainerSize);
     assert_invariant(signedContainerSize == f.getBytesWritten());
@@ -1505,10 +1520,10 @@ bool MaterialBuilder::checkMaterialLevelFeatures(MaterialInfo const& info) const
             }
             auto const& samplerList = info.sib.getSamplerInfoList();
             using SamplerInfo = SamplerInterfaceBlock::SamplerInfo;
-            if (std::any_of(samplerList.begin(), samplerList.end(),
-                    [](const SamplerInfo& sampler) {
-                        return sampler.type == SamplerType::SAMPLER_CUBEMAP_ARRAY;
-                    })) {
+            // TODO: can be replaced with std::ranges once client fully supports c++20
+            if (std::any_of(samplerList.begin(), samplerList.end(), [](const SamplerInfo& sampler) {
+                    return sampler.type == SamplerType::SAMPLER_CUBEMAP_ARRAY;
+                })) {
                 LOG(ERROR) << "Error: material \"" << mMaterialName.c_str()
                        << "\" has feature level " << +info.featureLevel
                        << " and uses a samplerCubemapArray.";

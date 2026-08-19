@@ -315,6 +315,17 @@ public class Engine {
         }
 
         /**
+         * Sets the builder used to create the default ColorGrading object.
+         * @param colorGrading Builder used to create the default color grading.
+         * @return A reference to this Builder for chaining calls.
+         */
+        @NonNull
+        public Builder colorGrading(@NonNull ColorGrading.Builder colorGrading) {
+            nSetBuilderColorGrading(mNativeBuilder, colorGrading.getNativeBuilder());
+            return this;
+        }
+
+        /**
          * Creates an instance of Engine
          *
          * @return A newly created <code>Engine</code>, or <code>null</code> if the GPU driver couldn't
@@ -359,6 +370,11 @@ public class Engine {
         private static final long FILAMENT_MIN_COMMAND_BUFFERS_SIZE_IN_MB = 1;
         private static final long FILAMENT_COMMAND_BUFFER_SIZE_IN_MB =
                 FILAMENT_MIN_COMMAND_BUFFERS_SIZE_IN_MB * 3;
+
+        /**
+         * Special value for jobSystemThreadCount, forcing the JobSystem to be single-threaded.
+         */
+        public static final long SINGLE_THREADED = 0xFFFFFFFFL;
 
         /**
          * Size in MiB of the low-level command buffer arena.
@@ -1617,5 +1633,6 @@ public class Engine {
     private static native void nSetBuilderSharedContext(long nativeBuilder, long sharedContext);
     private static native void nSetBuilderPaused(long nativeBuilder, boolean paused);
     private static native void nSetBuilderFeature(long nativeBuilder, String name, boolean value);
+    private static native void nSetBuilderColorGrading(long nativeBuilder, long nativeColorGradingBuilder);
     private static native long nBuilderBuild(long nativeBuilder);
 }

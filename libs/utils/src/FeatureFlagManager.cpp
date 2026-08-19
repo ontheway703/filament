@@ -27,12 +27,12 @@
 #include <optional>
 #include <string_view>
 
-#include <stdlib.h>
-#include <stdio.h>
-
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
 #endif
+
+#include <stdio.h>
+#include <stdlib.h>
 
 namespace utils {
 
@@ -68,7 +68,7 @@ void overrideFeatureDefaults(Slice<FeatureFlagManager::FeatureFlag> const& featu
             } else if (value == "0" || value == "false") {
                 *const_cast<bool*>(feature.value) = false;
             }
-            DLOG(INFO) << "overriding " << feature.name << " to " << *feature.value;
+            LOG(INFO) << "FeatureFlagManager: overriding " << feature.name << " to " << *feature.value;
         }
     }
 }
@@ -91,12 +91,18 @@ FeatureFlagManager::FeatureFlagManager() : mFeatures{{
         { "backend.enable_asynchronous_operation",
           "Enable asynchronous operation for resource management.",
           &features.backend.enable_asynchronous_operation },
+        { "backend.enable_priority_override_mitigation",
+          "Enable thread priority elevation to mitigate priority inversion during shader compilation.",
+          &features.backend.enable_priority_override_mitigation },
         { "backend.opengl.assert_native_window_is_valid",
           "Asserts that the ANativeWindow is valid when rendering starts.",
           &features.backend.opengl.assert_native_window_is_valid },
         { "engine.color_grading.use_1d_lut",
           "Uses a 1D LUT for color grading.",
           &features.engine.color_grading.use_1d_lut, false },
+        { "engine.color_grading.use_optimized_default_builder",
+          "Uses NEON fast math for color grading LUT generation.",
+          &features.engine.color_grading.use_optimized_default_builder, false },
         { "engine.shadows.use_shadow_atlas",
           "Uses an array of atlases to store shadow maps.",
           &features.engine.shadows.use_shadow_atlas, false },
@@ -138,7 +144,7 @@ FeatureFlagManager::FeatureFlagManager() : mFeatures{{
           &features.material.enable_material_instance_uniform_batching },
         { "engine.frame_info.disable_gpu_complete_metric",
           "Disable Renderer::FrameInfo::gpuFrameComplete reporting",
-          &features.engine.frame_info.disable_gpu_frame_complete_metric },
+          &features.engine.frame_info.disable_gpu_complete_metric },
         { "engine.skip_frame_when_cpu_ahead_of_display",
           "Automatically skip frames when the CPU gets ahead of the display.",
           &features.engine.skip_frame_when_cpu_ahead_of_display },

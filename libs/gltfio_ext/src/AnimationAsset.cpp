@@ -94,12 +94,12 @@ bool AnimationAsset::Animation::validate() const {
             return false;
         }
 
-        // 检查时间数组单调递增（glTF 2.0 规范要求）
+        // 检查时间数组严格单调递增（glTF 2.0 规范要求）
         // 这是插值算法的前提条件，否则无法正确查找关键帧
         for (size_t j = 1; j < sampler.times.size(); ++j) {
-            if (sampler.times[j] < sampler.times[j - 1]) {
+            if (sampler.times[j] <= sampler.times[j - 1]) {
                 slog.e << "Animation '" << name << "': Sampler " << i
-                       << " has unsorted time values at index " << j
+                       << " has non-increasing time values at index " << j
                        << " (" << sampler.times[j-1] << " → " << sampler.times[j] << ")"
                        << io::endl;
                 return false;
