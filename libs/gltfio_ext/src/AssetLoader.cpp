@@ -988,6 +988,12 @@ bool FAssetLoader::createPrimitive(const cgltf_primitive& inPrim, const char* na
 
     Material* material = getMaterial(fAsset->mSourceAsset->hierarchy,
                 inPrim.material, &outPrim->uvmap, primitiveHasVertexColor(inPrim));
+    if (UTILS_UNLIKELY(material == nullptr)) {
+        utils::slog.e << "Unable to create a material for primitive " << name
+                      << utils::io::endl;
+        mError = true;
+        return false;
+    }
     AttributeBitset requiredAttributes = material->getRequiredAttributes();
 
     // TODO: populate a mapping of Texture Index => [MaterialInstance, const char*] slots.
