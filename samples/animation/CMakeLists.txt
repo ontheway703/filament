@@ -5,7 +5,7 @@ project(animation-samples C CXX)
 # Find SDL2
 # ==================================================================================================
 
-find_package(SDL2 REQUIRED)
+find_package(SDL2 QUIET)
 
 if (NOT SDL2_FOUND)
     message(WARNING "SDL2 not found. Animation samples will not be built.")
