@@ -97,6 +97,8 @@ option(FILAMENT_DISABLE_GTAO "Disable GTAO" OFF)
 
 option(FILAMENT_BUILD_TESTING "Build tests" ON)
 
+option(FILAMENT_DEBUG_MUTEX "Enable utils::Mutex lock order and deadlock debugging" OFF)
+
 set(FILAMENT_NDK_VERSION "" CACHE STRING
     "Android NDK version or version prefix to be used when building for Android."
 )
@@ -139,6 +141,10 @@ endif()
 
 if (NOT FILAMENT_ENABLE_RTTI)
     add_compile_options(-fno-rtti)
+endif()
+
+if (FILAMENT_DEBUG_MUTEX)
+    add_compile_definitions(FILAMENT_DEBUG_MUTEX)
 endif()
 
 # ==================================================================================================
@@ -398,7 +404,7 @@ else()
     if(FILAMENT_USING_GCC)
       set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CXX_STANDARD} -Wno-changes-meaning -Wno-return-type -Wno-attributes -Wno-unknown-pragmas -Wno-class-memaccess -Wno-multichar -Wno-deprecated-declarations -Wno-subobject-linkage -Wno-invalid-constexpr")
     else()
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CXX_STANDARD} -fstrict-aliasing -Wno-unknown-pragmas -Wno-unused-function -Wno-deprecated-declarations")
+      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CXX_STANDARD} -fstrict-aliasing -Wno-unknown-pragmas -Wno-unused-function -Wno-deprecated-declarations -D_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS")
     endif()
     if (APPLE)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-nullability-extension")
@@ -909,6 +915,7 @@ add_subdirectory(${LIBRARIES}/filagui)
 add_subdirectory(${LIBRARIES}/filameshio)
 add_subdirectory(${LIBRARIES}/generatePrefilterMipmap)
 add_subdirectory(${LIBRARIES}/gltfio)
+add_subdirectory(${LIBRARIES}/gltfio_ext)
 add_subdirectory(${LIBRARIES}/ibl)
 add_subdirectory(${LIBRARIES}/iblprefilter)
 add_subdirectory(${LIBRARIES}/image)
@@ -988,12 +995,13 @@ if (WASM)
     add_subdirectory(web/examples)
 endif()
 
+if (IS_HOST_PLATFORM OR ANDROID)
+   add_subdirectory(${LIBRARIES}/filamentapp)
+endif()
+
 if (IS_HOST_PLATFORM)
     if (FILAMENT_SUPPORTS_OPENGL)
         add_subdirectory(${LIBRARIES}/bluegl)
-    endif()
-    if (NOT FILAMENT_SKIP_SDL2)
-      add_subdirectory(${LIBRARIES}/filamentapp)
     endif()
     add_subdirectory(${LIBRARIES}/imageio)
     add_subdirectory(${LIBRARIES}/filament-matp)

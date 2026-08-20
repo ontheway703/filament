@@ -14,51 +14,55 @@
  * limitations under the License.
  */
 
-#include <array>
-#include <cmath>
-#include <cstring>
-#include <functional>
-#include <cstddef>
-#include <cstdint>
-#include <iostream>
-#include <limits>
-#include <random>
-#include <utility>
-#include <vector>
+#include "Allocators.h"
+#include "Froxelizer.h"
+#include "UniformBuffer.h"
 
-#include <gtest/gtest.h>
+#include "components/RenderableManager.h"
+#include "components/TransformManager.h"
 
+#include "details/Camera.h"
+#include "details/Engine.h"
+#include "details/Renderer.h"
+#include "details/View.h"
+
+#include <private/filament/BufferInterfaceBlock.h>
+
+#include <filament/Box.h>
+#include <filament/Camera.h>
+#include <filament/Color.h>
+#include <filament/ColorGrading.h>
+#include <filament/Engine.h>
+#include <filament/FrameHistoryStream.h>
+#include <filament/Frustum.h>
+#include <filament/ToneMapper.h>
+
+#include <private/backend/BackendUtils.h>
+
+#include <backend/DriverEnums.h>
+
+#include <utils/NameComponentManager.h>
+#include <utils/Slice.h>
+
+#include <math/half.h>
 #include <math/mat3.h>
 #include <math/mat4.h>
 #include <math/quat.h>
 #include <math/scalar.h>
 #include <math/vec3.h>
 #include <math/vec4.h>
-#include <math/half.h>
 
-#include <filament/Box.h>
-#include <filament/Camera.h>
-#include <filament/Color.h>
-#include <filament/ColorGrading.h>
-#include <filament/Frustum.h>
-#include <filament/Material.h>
-#include <filament/Engine.h>
-#include <filament/ToneMapper.h>
+#include <gtest/gtest.h>
 
-#include <private/filament/BufferInterfaceBlock.h>
-#include <private/backend/BackendUtils.h>
-
-#include <utils/Slice.h>
-
-#include "Allocators.h"
-#include "backend/DriverEnums.h"
-#include "details/Camera.h"
-#include "Froxelizer.h"
-#include "details/Engine.h"
-#include "details/View.h"
-#include "components/RenderableManager.h"
-#include "components/TransformManager.h"
-#include "UniformBuffer.h"
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <functional>
+#include <iostream>
+#include <limits>
+#include <random>
+#include <utility>
+#include <vector>
 
 using namespace filament;
 using namespace filament::math;
@@ -195,8 +199,8 @@ TEST(FilamentTest, SkinningMath) {
 }
 
 TEST(FilamentTest, TransformManagerSimple) {
-    FTransformManager tcm;
     EntityManager& em = EntityManager::get();
+    FTransformManager tcm(em);
     Entity const root = em.create();
     tcm.create(root);
 
@@ -212,9 +216,9 @@ TEST(FilamentTest, TransformManagerSimple) {
 }
 
 TEST(FilamentTest, TransformManager) {
-    FTransformManager tcm;
-    tcm.setAccurateTranslationsEnabled(true);
     EntityManager& em = EntityManager::get();
+    FTransformManager tcm(em);
+    tcm.setAccurateTranslationsEnabled(true);
     std::array<Entity, 3> entities;
     em.create(entities.size(), entities.data());
 
@@ -334,8 +338,8 @@ TEST(FilamentTest, TransformManager) {
 }
 
 TEST(FilamentTest, TransformManagerChildrenIteration) {
-    FTransformManager tcm;
     EntityManager& em = EntityManager::get();
+    FTransformManager tcm(em);
 
     std::array<Entity, 5> entities;
     em.create(entities.size(), entities.data());
@@ -439,34 +443,34 @@ TEST(FilamentTest, RenderableManagerCallback) {
     auto& rm = engine->getRenderableManager();
     EntityManager& em = EntityManager::get();
     Entity const e = em.create();
-    
+
     int callbackCount = 0;
     auto callback = [&](Slice<const Entity> entities) {
         callbackCount += entities.size();
     };
-    
+
     rm.registerChangeCallback(&rm, std::move(callback));
-    
+
     // Test addComponent
     RenderableManager::Builder(1).boundingBox({{0,0,0},{1,1,1}}).build(*engine, e);
     rm.flushNotifications();
     EXPECT_GT(callbackCount, 0);
-    
+
     callbackCount = 0;
-    
+
     // Test modify
     auto const instance = rm.getInstance(e);
     rm.setLayerMask(instance, 0x2);
     rm.flushNotifications();
     EXPECT_EQ(callbackCount, 1);
-    
+
     callbackCount = 0;
-    
+
     // Test removeComponent
     rm.destroy(e, engine->getDriverApi());
     rm.flushNotifications();
     EXPECT_EQ(callbackCount, 1);
-    
+
     rm.unregisterChangeCallback(&rm);
     em.destroy(e);
     Engine::destroy((Engine**)&engine);
@@ -477,34 +481,34 @@ TEST(FilamentTest, LightManagerCallback) {
     auto& lm = engine->getLightManager();
     EntityManager& em = EntityManager::get();
     Entity const e = em.create();
-    
+
     int callbackCount = 0;
     auto callback = [&](Slice<const Entity> entities) {
         callbackCount += entities.size();
     };
-    
+
     lm.registerChangeCallback(&lm, std::move(callback));
-    
+
     // Test addComponent
     LightManager::Builder(LightManager::Type::POINT).build(*engine, e);
     lm.flushNotifications();
     EXPECT_GT(callbackCount, 0);
-    
+
     callbackCount = 0;
-    
+
     // Test modify
     auto const instance = lm.getInstance(e);
     lm.setIntensity(instance, 2000.0f, FLightManager::IntensityUnit::LUMEN_LUX);
     lm.flushNotifications();
     EXPECT_EQ(callbackCount, 1);
-    
+
     callbackCount = 0;
-    
+
     // Test removeComponent
     lm.destroy(e);
     lm.flushNotifications();
     EXPECT_EQ(callbackCount, 1);
-    
+
     lm.unregisterChangeCallback(&lm);
     em.destroy(e);
     Engine::destroy((Engine**)&engine);
@@ -515,40 +519,40 @@ TEST(FilamentTest, TransformManagerCallback) {
     auto& tcm = engine->getTransformManager();
     EntityManager& em = EntityManager::get();
     Entity const e = em.create();
-    
+
     int callbackCount = 0;
     auto callback = [&](Slice<const Entity> entities) {
         callbackCount += entities.size();
     };
-    
+
     tcm.registerChangeCallback(&tcm, std::move(callback));
-    
+
     // Test addComponent
     tcm.create(e);
     tcm.flushNotifications();
     EXPECT_GT(callbackCount, 0);
-    
+
     callbackCount = 0;
-    
+
     // Test modify without transaction
     auto const instance = tcm.getInstance(e);
     constexpr auto t = mat4f::translation(float3{ 1, 2, 3 });
     tcm.setTransform(instance, t);
     tcm.flushNotifications();
     EXPECT_EQ(callbackCount, 1);
-    
+
     callbackCount = 0;
-    
+
     // Test transaction
     tcm.openLocalTransformTransaction();
     tcm.setTransform(instance, mat4f::translation(float3{ 4, 5, 6 }));
     tcm.flushNotifications();
     EXPECT_EQ(callbackCount, 0);
-    
+
     tcm.commitLocalTransformTransaction();
     tcm.flushNotifications();
     EXPECT_EQ(callbackCount, 1);
-    
+
     tcm.unregisterChangeCallback(&tcm);
     tcm.destroy(e);
     em.destroy(e);
@@ -1105,7 +1109,7 @@ TEST(FilamentTest, GridSnapping) {
     // Test case 6: Automatic grid size (Perspective)
     view->setGridSize(0.0); // Enable auto
     static_cast<Camera*>(camera)->setProjection(90.0, 1.0, 0.1, 100.0, Camera::Fov::VERTICAL); // Set far plane to 100
-    
+
     // FOV 90, aspect 1.0 -> baseScale = 2.0. Width at far plane = 200.
     // Auto grid size should be 2.0 * 100 * 0.1 = 20.
     camera->setModelMatrix(mat4::translation(double3{0.0, 0.0, 0.0}));
@@ -1142,6 +1146,7 @@ TEST(FilamentTest, ColorGradingNeonValidation) {
             .backend(Engine::Backend::NOOP)
             .feature("engine.color_grading.use_optimized_default_builder", true)
             .build();
+    ASSERT_NE(engine, nullptr);
 
     struct LutData {
         std::vector<uint32_t> pixels;
@@ -1195,6 +1200,7 @@ TEST(FilamentTest, ColorGradingMediumNeonValidation) {
             .backend(Engine::Backend::NOOP)
             .feature("engine.color_grading.use_optimized_default_builder", true)
             .build();
+    ASSERT_NE(engine, nullptr);
 
     struct LutData {
         std::vector<uint32_t> pixels;
@@ -1266,6 +1272,7 @@ TEST(FilamentTest, ColorGradingAdvancedNeonValidation) {
             .backend(Engine::Backend::NOOP)
             .feature("engine.color_grading.use_optimized_default_builder", true)
             .build();
+    ASSERT_NE(engine, nullptr);
 
     struct LutData {
         std::vector<uint32_t> pixels;
@@ -1327,6 +1334,7 @@ TEST(FilamentTest, ColorGradingHalfNeonValidation) {
             .backend(Engine::Backend::NOOP)
             .feature("engine.color_grading.use_optimized_default_builder", true)
             .build();
+    ASSERT_NE(engine, nullptr);
 
     struct LutDataHalf {
         std::vector<half> pixels;
@@ -1606,6 +1614,7 @@ TEST(FilamentTest, ColorGradingExportLutValidation) {
         .backend(Engine::Backend::NOOP)
         .feature("engine.color_grading.use_1d_lut", true)
         .build();
+    ASSERT_NE(engine, nullptr);
 
 
     struct LutMetadata {
@@ -1683,6 +1692,147 @@ TEST(FilamentTest, ColorGradingExportLutValidation) {
     Engine* baseEngine = engine;
     Engine::destroy(&baseEngine);
 }
+
+TEST(FilamentTest, FrameHistoryStreamTest) {
+    Engine* engine = Engine::create(Engine::Backend::NOOP);
+    Renderer* renderer = engine->createRenderer();
+    SwapChain* swapChain = engine->createSwapChain(100, 100);
+
+    FrameHistoryStream logger(renderer);
+
+    for (int i = 0; i < 5; ++i) {
+        if (renderer->beginFrame(swapChain, (i + 1) * 16666666)) {
+            renderer->endFrame();
+        }
+        engine->flushAndWait();
+        downcast(renderer)->waitForFrameHistory();
+    }
+
+    size_t count = 0;
+    for (auto fi : logger.getNewFrames()) {
+        if (fi) {
+            EXPECT_GT(fi.getFrameId(), 0u);
+            EXPECT_EQ(fi->frameId, fi.getFrameId());
+            count++;
+        } else {
+            FAIL() << "Unexpected missing frame: " << fi.getMissingId();
+        }
+    }
+
+    // Exactly 4 frames (1, 2, 3, 4) are ready during the last
+    // updateUserHistory call inside beginFrame of the 5th frame.
+    EXPECT_EQ(count, 4u);
+
+    size_t count2 = 0;
+    for (auto fi : logger.getNewFrames()) {
+        (void)fi;
+        count2++;
+    }
+    EXPECT_EQ(count2, 0u);
+
+    renderer->skipFrame((6 + 1) * 16666666);
+    engine->flushAndWait();
+    downcast(renderer)->waitForFrameHistory();
+
+    if (renderer->beginFrame(swapChain, (7 + 1) * 16666666)) {
+        renderer->endFrame();
+    }
+    engine->flushAndWait();
+    downcast(renderer)->waitForFrameHistory();
+
+    renderer->skipFrame();
+    engine->flushAndWait();
+    downcast(renderer)->waitForFrameHistory();
+
+    size_t validCount = 0;
+    size_t missingCount = 0;
+    for (auto fi : logger.getNewFrames()) {
+        if (fi) {
+            validCount++;
+        } else {
+            missingCount++;
+        }
+    }
+
+    // Across the entire test, 6 valid frames were submitted (5 initially, 1 after skipping).
+    size_t const totalValid = count + count2 + validCount;
+    EXPECT_EQ(totalValid, 6u);
+    EXPECT_EQ(missingCount, 1u);
+
+    engine->destroy(swapChain);
+    engine->destroy(renderer);
+    Engine::destroy(&engine);
+}
+
+TEST(FilamentTest, ECREpochBasedReclamationManagers) {
+    Engine* engine = Engine::Builder().backend(Engine::Backend::NOOP).build();
+    auto& em = engine->getEntityManager();
+    auto& tcm = engine->getTransformManager();
+    auto& lcm = engine->getLightManager();
+    auto& rcm = engine->getRenderableManager();
+
+    NameComponentManager ncm(em);
+
+    Entity e1 = em.create();
+    Entity e2 = em.create();
+
+    // Add components
+    tcm.create(e1, 0, mat4f());
+    LightManager::Builder(LightManager::Type::POINT).build(*engine, e1);
+    RenderableManager::Builder(1).boundingBox({{0,0,0},{1,1,1}}).build(*engine, e1);
+    ncm.addComponent(e1);
+    engine->createCamera(e1);
+
+    tcm.create(e2, 0, mat4f());
+    LightManager::Builder(LightManager::Type::POINT).build(*engine, e2);
+    RenderableManager::Builder(1).boundingBox({{0,0,0},{1,1,1}}).build(*engine, e2);
+    ncm.addComponent(e2);
+    engine->createCamera(e2);
+
+    EXPECT_TRUE(tcm.hasComponent(e1));
+    EXPECT_TRUE(lcm.hasComponent(e1));
+    EXPECT_TRUE(rcm.hasComponent(e1));
+    EXPECT_TRUE(ncm.hasComponent(e1));
+    EXPECT_NE(engine->getCameraComponent(e1), nullptr);
+
+    EXPECT_TRUE(tcm.hasComponent(e2));
+    EXPECT_TRUE(lcm.hasComponent(e2));
+    EXPECT_TRUE(rcm.hasComponent(e2));
+    EXPECT_TRUE(ncm.hasComponent(e2));
+    EXPECT_NE(engine->getCameraComponent(e2), nullptr);
+
+    em.advanceEpoch();
+
+    em.destroy(e1);
+
+    EXPECT_FALSE(em.isAlive(e1));
+    EXPECT_TRUE(em.isAlive(e2));
+
+    em.advanceEpoch();
+
+    downcast(engine)->gc();
+    ncm.gc();
+
+    EXPECT_FALSE(tcm.hasComponent(e1));
+    EXPECT_FALSE(lcm.hasComponent(e1));
+    EXPECT_FALSE(rcm.hasComponent(e1));
+    EXPECT_FALSE(ncm.hasComponent(e1));
+    EXPECT_EQ(engine->getCameraComponent(e1), nullptr);
+
+    EXPECT_TRUE(tcm.hasComponent(e2));
+    EXPECT_TRUE(lcm.hasComponent(e2));
+    EXPECT_TRUE(rcm.hasComponent(e2));
+    EXPECT_TRUE(ncm.hasComponent(e2));
+    EXPECT_NE(engine->getCameraComponent(e2), nullptr);
+
+    em.destroy(e2);
+    downcast(engine)->gc();
+    ncm.gc();
+
+    Engine::destroy(&engine);
+}
+
+
 
 int main(int argc, char** argv) {
     testing::InitGoogleTest(&argc, argv);

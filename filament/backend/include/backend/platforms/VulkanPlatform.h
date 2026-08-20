@@ -23,6 +23,7 @@
 
 #include <bluevk/BlueVK.h>
 
+#include <utils/compiler.h>
 #include <utils/CString.h>
 #include <utils/FixedCapacityVector.h>
 #include <utils/Hash.h>
@@ -53,7 +54,7 @@ struct VulkanCmdFence;
 /**
  * A Platform interface that creates a Vulkan backend.
  */
-class VulkanPlatform : public Platform, utils::PrivateImplementation<VulkanPlatformPrivate> {
+class UTILS_SHARED_LINKING VulkanPlatform : public Platform, utils::PrivateImplementation<VulkanPlatformPrivate> {
 public:
     /**
      * Encapsulates information required to instantiate a known external format,
@@ -365,6 +366,11 @@ public:
         uint32_t height;
 
         /**
+         * The number of mipmap levels of the external image
+         */
+        uint32_t mipLevels;
+
+        /**
          * The layer count of the external image
          */
         uint32_t layers;
@@ -479,7 +485,9 @@ public:
     }
 
 protected:
-    struct VulkanSync : public Platform::Sync {
+    struct VulkanSync : public Sync {
+        explicit VulkanSync(std::shared_ptr<VulkanCmdFence> fence) noexcept
+            : fenceStatus(std::move(fence)) {}
         std::shared_ptr<VulkanCmdFence> fenceStatus;
     };
 

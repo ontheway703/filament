@@ -13,20 +13,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <gtest/gtest.h>
 
-#include <filamat/MaterialBuilder.h>
+#include "DynamicSpecConstKey.h"
+#include "filament_test_resources.h"
+
+#include "details/Engine.h"
+#include "details/Material.h"
+#include "details/View.h"
 
 #include <filament/Engine.h>
 #include <filament/Material.h>
 #include <filament/MaterialInstance.h>
 
-#include "filament_test_resources.h"
+#include <filamat/MaterialBuilder.h>
+
+#include <gtest/gtest.h>
 
 using namespace filament;
 
 TEST(MaterialTransformName, QuerySamplerWithTransform) {
     Engine* engine = Engine::create(Engine::Backend::NOOP);
+    ASSERT_NE(engine, nullptr);
 
     Material* material = Material::Builder()
                                  .package(FILAMENT_TEST_RESOURCES_TEST_MATERIAL_TRANSFORMNAME_DATA,
@@ -42,6 +49,7 @@ TEST(MaterialTransformName, QuerySamplerWithTransform) {
 
 TEST(MaterialTransformName, QueryMultipleSamplersWithTransforms) {
     Engine* engine = Engine::create(Engine::Backend::NOOP);
+    ASSERT_NE(engine, nullptr);
 
     Material* material = Material::Builder()
                                  .package(FILAMENT_TEST_RESOURCES_TEST_MATERIAL_TRANSFORMNAME_DATA,
@@ -58,6 +66,7 @@ TEST(MaterialTransformName, QueryMultipleSamplersWithTransforms) {
 
 TEST(MaterialTransformName, QuerySamplerWithoutTransform) {
     Engine* engine = Engine::create(Engine::Backend::NOOP);
+    ASSERT_NE(engine, nullptr);
     Material* material = Material::Builder()
                                  .package(FILAMENT_TEST_RESOURCES_TEST_MATERIAL_TRANSFORMNAME_DATA,
                                          FILAMENT_TEST_RESOURCES_TEST_MATERIAL_TRANSFORMNAME_SIZE)
@@ -72,6 +81,7 @@ TEST(MaterialTransformName, QuerySamplerWithoutTransform) {
 
 TEST(MaterialTransformName, QueryMultipleSamplersWithoutTransforms) {
     Engine* engine = Engine::create(Engine::Backend::NOOP);
+    ASSERT_NE(engine, nullptr);
 
     Material* material = Material::Builder()
                                  .package(FILAMENT_TEST_RESOURCES_TEST_MATERIAL_TRANSFORMNAME_DATA,
@@ -89,6 +99,7 @@ TEST(MaterialTransformName, QueryMultipleSamplersWithoutTransforms) {
 TEST(Material, MaterialWithSourceMaterialSuccessfullyRetrieveSource) {
     // Need to set a specific backend to create a proper MaterialParser.
     Engine* engine = Engine::create(Engine::Backend::NOOP);
+    ASSERT_NE(engine, nullptr);
 
     std::string shaderCode(R"(
         void material(inout MaterialInputs material) {
@@ -117,6 +128,7 @@ TEST(Material, MaterialWithSourceMaterialSuccessfullyRetrieveSource) {
 TEST(Material, MaterialWithoutSourceMaterialReturnsEmptySource) {
     // Need to set a specific backend to create a proper MaterialParser.
     Engine* engine = Engine::create(Engine::Backend::NOOP);
+    ASSERT_NE(engine, nullptr);
     filamat::MaterialBuilder builder;
     builder.init();
     filamat::Package result = builder.build(engine->getJobSystem());
@@ -135,6 +147,7 @@ TEST(Material, MaterialWithoutSourceMaterialReturnsEmptySource) {
 
 TEST(Material, MaterialSettingValidApiLevelReturnsAnValidPackage) {
     Engine* engine = Engine::create(Engine::Backend::NOOP);
+    ASSERT_NE(engine, nullptr);
 
     filamat::MaterialBuilder builder;
     builder.init();
@@ -152,6 +165,7 @@ TEST(Material, MaterialSettingValidApiLevelReturnsAnValidPackage) {
 
 TEST(Material, MaterialSettingInvalidApiLevelReturnsAnInvalidPackage) {
     Engine* engine = Engine::create(Engine::Backend::NOOP);
+    ASSERT_NE(engine, nullptr);
 
     filamat::MaterialBuilder builder;
     builder.init();
@@ -171,6 +185,7 @@ TEST(Material, MaterialSettingInvalidApiLevelReturnsAnInvalidPackage) {
 
 TEST(MaterialInstanceTest, SetConstant) {
     Engine* engine = Engine::create(Engine::Backend::NOOP);
+    ASSERT_NE(engine, nullptr);
 
     std::string shaderCode(R"(
         void material(inout MaterialInputs material) {
@@ -214,6 +229,256 @@ TEST(MaterialInstanceTest, SetConstant) {
     EXPECT_EQ(instance->getConstant<bool>("myBool"), true);
 
     engine->destroy(instance);
+    engine->destroy(material);
+    Engine::destroy(engine);
+}
+
+TEST(Material, CompileMaterialWithSkinningEnabled) {
+    Engine* engine = Engine::create(Engine::Backend::NOOP);
+
+    filamat::MaterialBuilder builder;
+    builder.init();
+
+    builder.name("UnlitMaterial");
+    builder.shading(Shading::UNLIT);
+
+    filamat::Package result = builder.build(engine->getJobSystem());
+    ASSERT_TRUE(result.isValid());
+
+    View* view = engine->createView();
+    ASSERT_NE(view, nullptr);
+
+    Material* material = Material::Builder()
+                                 .package(result.getData(), result.getSize())
+                                 .build(*engine);
+    ASSERT_NE(material, nullptr);
+
+    auto variants = FEngine::getMaterialCompileVariants(
+            downcast(view), downcast(material),
+            /* shadowReceiver= */ utils::tribool(false),
+            /* skinning= */ utils::tribool(true));
+
+    for (auto const v : variants) {
+        EXPECT_FALSE(filament::Variant::isShadowReceiverVariant(v));
+        EXPECT_TRUE(v.hasSkinningOrMorphing());
+    }
+
+    engine->destroy(view);
+    engine->destroy(material);
+    Engine::destroy(engine);
+}
+
+TEST(Material, CompileLitMaterialWithShadowReceiverEnabled) {
+    Engine* engine = Engine::create(Engine::Backend::NOOP);
+
+    filamat::MaterialBuilder builder;
+    builder.init();
+
+    builder.name("LitMaterial");
+    builder.shading(Shading::LIT);
+
+    filamat::Package result = builder.build(engine->getJobSystem());
+    ASSERT_TRUE(result.isValid());
+
+    View* view = engine->createView();
+    ASSERT_NE(view, nullptr);
+
+    Material* material = Material::Builder()
+                                 .package(result.getData(), result.getSize())
+                                 .build(*engine);
+    ASSERT_NE(material, nullptr);
+
+    auto variants = FEngine::getMaterialCompileVariants(
+            downcast(view), downcast(material),
+            /* shadowReceiver= */ utils::tribool(true),
+            /* skinning= */ utils::tribool(false));
+
+    // Verify that SRE is successfully generated for the lit material.
+    bool hasShadowReceiver = false;
+    for (auto const v : variants) {
+        if (filament::Variant::isShadowReceiverVariant(v)) {
+            hasShadowReceiver = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasShadowReceiver);
+
+    FEngine const& fengine = downcast(*engine);
+    MaterialDefinition const& definition = downcast(material)->getDefinition();
+    DynamicSpecConstKey dynamicLighting;
+    dynamicLighting.setDynamicLighting(true);
+
+    EXPECT_TRUE(definition.isValidProgram(
+            Variant(Variant::S2D | Variant::SRE), DynamicSpecConstKey{},
+            fengine.getShaderModel(), fengine.isStereoSupported()));
+    EXPECT_TRUE(definition.isValidProgram(
+            Variant(Variant::S2D | Variant::SRE), dynamicLighting,
+            fengine.getShaderModel(), fengine.isStereoSupported()));
+    EXPECT_TRUE(definition.isValidProgram(
+            Variant(Variant::SPECIAL_SSR_VARIANT), DynamicSpecConstKey{},
+            fengine.getShaderModel(), fengine.isStereoSupported()));
+
+    engine->destroy(view);
+    engine->destroy(material);
+    Engine::destroy(engine);
+}
+
+TEST(MaterialVariant, DynamicLightingSpecKeySupportsPunctualShadowReceivers) {
+    DynamicSpecConstKey dynamicLighting;
+    dynamicLighting.setDynamicLighting(true);
+
+    constexpr Variant::type_t SHADOW_VARIANTS[] = {
+            Variant::SRE,
+            Variant::SRE | Variant::FOG,
+            Variant::SRE | Variant::SKN,
+            Variant::SRE | Variant::DIR,
+            Variant::S2D | Variant::SRE,
+            Variant::S2D | Variant::SRE | Variant::FOG,
+            Variant::S2D | Variant::SRE | Variant::SKN,
+            Variant::S2D | Variant::SRE | Variant::DIR,
+            Variant::S2D | Variant::SRE | Variant::STE,
+    };
+
+    for (Variant::type_t const key : SHADOW_VARIANTS) {
+        Variant const variant(key);
+        EXPECT_FALSE(Variant::isSSRVariant(variant));
+        EXPECT_TRUE(Variant::isShadowReceiverVariant(variant));
+        EXPECT_TRUE(DynamicSpecConstKey::filterProgramSpecKey(
+                variant, dynamicLighting, MaterialDomain::SURFACE, true).hasDynamicLighting());
+    }
+
+    EXPECT_FALSE(DynamicSpecConstKey::filterProgramSpecKey(
+            Variant(Variant::SPECIAL_SSR_VARIANT), dynamicLighting,
+            MaterialDomain::SURFACE, true).hasDynamicLighting());
+    EXPECT_FALSE(DynamicSpecConstKey::filterProgramSpecKey(
+            Variant(Variant::DEPTH_VARIANT), dynamicLighting,
+            MaterialDomain::SURFACE, true).hasDynamicLighting());
+    EXPECT_FALSE(DynamicSpecConstKey::filterProgramSpecKey(
+            Variant(Variant::S2D | Variant::SRE), dynamicLighting,
+            MaterialDomain::SURFACE, false).hasDynamicLighting());
+}
+
+TEST(Material, SsrFilteredLitMaterialContainsPunctualShadowPrograms) {
+    Engine* engine = Engine::create(Engine::Backend::NOOP);
+
+    filamat::MaterialBuilder builder;
+    builder.init();
+    builder.name("LitMaterialWithoutSsr");
+    builder.shading(Shading::LIT);
+    builder.variantFilter(uint32_t(UserVariantFilterBit::SSR));
+
+    filamat::Package result = builder.build(engine->getJobSystem());
+    ASSERT_TRUE(result.isValid());
+
+    Material* material = Material::Builder()
+                                 .package(result.getData(), result.getSize())
+                                 .build(*engine);
+    ASSERT_NE(material, nullptr);
+
+    FEngine const& fengine = downcast(*engine);
+    MaterialDefinition const& definition = downcast(material)->getDefinition();
+    DynamicSpecConstKey dynamicLighting;
+    dynamicLighting.setDynamicLighting(true);
+    constexpr Variant::type_t SHADOW_VARIANTS[] = {
+            Variant::SRE,
+            Variant::SRE | Variant::FOG,
+            Variant::SRE | Variant::SKN,
+            Variant::S2D | Variant::SRE,
+            Variant::S2D | Variant::SRE | Variant::FOG,
+            Variant::S2D | Variant::SRE | Variant::SKN,
+    };
+
+    for (Variant::type_t const key : SHADOW_VARIANTS) {
+        EXPECT_TRUE(definition.isValidProgram(
+                Variant(key), DynamicSpecConstKey{}, fengine.getShaderModel(),
+                fengine.isStereoSupported()));
+        EXPECT_TRUE(definition.isValidProgram(
+                Variant(key), dynamicLighting, fengine.getShaderModel(),
+                fengine.isStereoSupported()));
+    }
+    EXPECT_FALSE(definition.isValidProgram(
+            Variant(Variant::SPECIAL_SSR_VARIANT), DynamicSpecConstKey{},
+            fengine.getShaderModel(), fengine.isStereoSupported()));
+
+    engine->destroy(material);
+    Engine::destroy(engine);
+}
+
+TEST(Material, SsrFilteredShadowMultiplierContainsPunctualShadowPrograms) {
+    Engine* engine = Engine::create(Engine::Backend::NOOP);
+
+    filamat::MaterialBuilder builder;
+    builder.init();
+    builder.name("ShadowMultiplierWithoutSsr");
+    builder.shading(Shading::UNLIT);
+    builder.shadowMultiplier(true);
+    builder.variantFilter(uint32_t(UserVariantFilterBit::SSR));
+
+    filamat::Package result = builder.build(engine->getJobSystem());
+    ASSERT_TRUE(result.isValid());
+
+    Material* material = Material::Builder()
+                                 .package(result.getData(), result.getSize())
+                                 .build(*engine);
+    ASSERT_NE(material, nullptr);
+
+    FEngine const& fengine = downcast(*engine);
+    MaterialDefinition const& definition = downcast(material)->getDefinition();
+    DynamicSpecConstKey dynamicLighting;
+    dynamicLighting.setDynamicLighting(true);
+
+    EXPECT_TRUE(definition.isValidProgram(
+            Variant(Variant::SRE), dynamicLighting,
+            fengine.getShaderModel(), fengine.isStereoSupported()));
+    EXPECT_TRUE(definition.isValidProgram(
+            Variant(Variant::S2D | Variant::SRE), dynamicLighting,
+            fengine.getShaderModel(), fengine.isStereoSupported()));
+    EXPECT_FALSE(definition.isValidProgram(
+            Variant(Variant::SPECIAL_SSR_VARIANT), DynamicSpecConstKey{},
+            fengine.getShaderModel(), fengine.isStereoSupported()));
+
+    engine->destroy(material);
+    Engine::destroy(engine);
+}
+
+TEST(Material, CompileUnlitMaterialShadowMultiplierWithShadowReceiverEnabled) {
+    Engine* engine = Engine::create(Engine::Backend::NOOP);
+
+    filamat::MaterialBuilder builder;
+    builder.init();
+
+    builder.name("UnlitMaterial");
+    builder.shading(Shading::UNLIT);
+    // This is necessary for the shadow receiver variant to be generated.
+    builder.shadowMultiplier(true);
+
+    filamat::Package result = builder.build(engine->getJobSystem());
+    ASSERT_TRUE(result.isValid());
+
+    View* view = engine->createView();
+    ASSERT_NE(view, nullptr);
+
+    Material* material = Material::Builder()
+                                 .package(result.getData(), result.getSize())
+                                 .build(*engine);
+    ASSERT_NE(material, nullptr);
+
+    auto variants = FEngine::getMaterialCompileVariants(
+            downcast(view), downcast(material),
+            /* shadowReceiver= */ utils::tribool(true),
+            /* skinning= */ utils::tribool(false));
+
+    // Verify that SRE is successfully generated for the lit material.
+    bool hasShadowReceiver = false;
+    for (auto const v : variants) {
+        if (filament::Variant::isShadowReceiverVariant(v)) {
+            hasShadowReceiver = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasShadowReceiver);
+
+    engine->destroy(view);
     engine->destroy(material);
     Engine::destroy(engine);
 }

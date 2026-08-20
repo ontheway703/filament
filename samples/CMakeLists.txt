@@ -264,6 +264,10 @@ endfunction()
 
 if (NOT ANDROID)
     add_demo(animation)
+    # The XMuscle animation suite is a source subdirectory with the same name.
+    # Keep the upstream sample's filename while avoiding a file/directory clash.
+    set_target_properties(animation PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/upstream-samples")
     add_demo(depthtesting)
     add_demo(frame_generator)
     add_demo(gltf_viewer)
@@ -361,3 +365,13 @@ set_target_properties(assets PROPERTIES FOLDER Samples/Assets)
 add_custom_target(envs DEPENDS ${target_envmaps})
 add_dependencies(filament envs)
 set_target_properties(envs PROPERTIES FOLDER Samples/Assets)
+
+# ==================================================================================================
+# gltfio_ext animation samples
+# ==================================================================================================
+
+if (NOT WEBGL AND NOT ANDROID AND NOT IOS)
+    # Keep the XMuscle sample build tree distinct from the upstream `animation`
+    # executable, which is emitted as `${PROJECT_BINARY_DIR}/samples/animation`.
+    add_subdirectory(animation xmuscle-animation)
+endif()

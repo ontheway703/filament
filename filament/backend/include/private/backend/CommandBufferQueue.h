@@ -19,6 +19,7 @@
 
 #include <private/backend/CircularBuffer.h>
 
+#include <utils/compiler.h>
 #include <utils/Condition.h>
 #include <utils/Mutex.h>
 
@@ -54,7 +55,10 @@ public:
 
     size_t getCapacity() const noexcept { return mRequiredSize; }
 
-    size_t getHighWatermark() const noexcept { return mHighWatermark; }
+    size_t getHighWatermark() const noexcept {
+        std::lock_guard const lock(mLock);
+        return mHighWatermark;
+    }
 
     // wait for commands to be available and returns an array containing these commands
     std::vector<Range> waitForCommands() const;
@@ -105,11 +109,11 @@ private:
 
     mutable utils::Mutex mLock;
     mutable utils::Condition mCondition;
-    mutable std::vector<Range> mCommandBuffersToExecute;
-    size_t mFreeSpace = 0;
-    size_t mHighWatermark = 0;
-    uint32_t mExitRequested = 0;
-    bool mPaused = false;
+    mutable std::vector<Range> mCommandBuffersToExecute UTILS_GUARDED_BY(mLock);
+    size_t mFreeSpace UTILS_GUARDED_BY(mLock) = 0;
+    size_t mHighWatermark UTILS_GUARDED_BY(mLock) = 0;
+    uint32_t mExitRequested UTILS_GUARDED_BY(mLock) = 0;
+    bool mPaused UTILS_GUARDED_BY(mLock) = false;
 
     static constexpr uint32_t EXIT_REQUESTED = 0x31415926;
 

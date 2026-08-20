@@ -21,15 +21,15 @@
 #include "MaterialInfo.h"
 #include "UibGenerator.h"
 
-#include <filamat/MaterialBuilder.h>
+#include <private/filament/BufferInterfaceBlock.h>
+#include <private/filament/EngineEnums.h>
+#include <private/filament/SamplerInterfaceBlock.h>
+#include <private/filament/SubpassInfo.h>
+#include <private/filament/Variant.h>
 
 #include <filament/MaterialEnums.h>
 
-#include <private/filament/EngineEnums.h>
-#include <private/filament/SamplerInterfaceBlock.h>
-#include <private/filament/BufferInterfaceBlock.h>
-#include <private/filament/SubpassInfo.h>
-#include <private/filament/Variant.h>
+#include <filamat/MaterialBuilder.h>
 
 #include <backend/DriverEnums.h>
 
@@ -111,7 +111,8 @@ public:
     // generate declarations for non-custom "in" variables
     utils::io::sstream& generateSurfaceShaderInputs(utils::io::sstream& out, ShaderStage stage,
             const filament::AttributeBitset& attributes, filament::Interpolation interpolation,
-            MaterialBuilder::PushConstantList const& pushConstants) const;
+            MaterialBuilder::PushConstantList const& pushConstants,
+            uint32_t pushConstantOffset = 0) const;
     static utils::io::sstream& generatePostProcessInputs(utils::io::sstream& out, ShaderStage stage);
 
     // generate declarations for custom output variables
@@ -161,9 +162,11 @@ public:
 
     utils::io::sstream& generateQualityDefine(utils::io::sstream& out, ShaderQuality quality) const;
 
-    static utils::io::sstream& generateDefine(utils::io::sstream& out, const char* name, bool value);
-    static utils::io::sstream& generateDefine(utils::io::sstream& out, const char* name, uint32_t value);
-    static utils::io::sstream& generateDefine(utils::io::sstream& out, const char* name, const char* string);
+    static utils::io::sstream& generateDefine(utils::io::sstream& out, const char* name);
+    static utils::io::sstream& generateValueDefine(utils::io::sstream& out, const char* name,
+            uint32_t value);
+    static utils::io::sstream& generateValueDefine(utils::io::sstream& out, const char* name,
+            const char* string);
     static utils::io::sstream& generateIndexedDefine(utils::io::sstream& out, const char* name,
             uint32_t index, uint32_t value);
 
@@ -172,7 +175,7 @@ public:
 
     utils::io::sstream& generatePushConstants(utils::io::sstream& out,
             MaterialBuilder::PushConstantList const& pushConstants,
-            size_t const layoutLocation) const;
+            size_t const layoutLocation, uint32_t startOffset) const;
 
     static utils::io::sstream& generatePostProcessGetters(utils::io::sstream& out, ShaderStage stage);
     static utils::io::sstream& generateSurfaceGetters(utils::io::sstream& out, ShaderStage stage);

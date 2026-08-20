@@ -119,7 +119,8 @@ public:
     // The allocation granularity of the Arena, expressed as a bit-shift (2^12 = 4096 bits).
     // This is the "Page Size". Every active 4096-bit range allocates exactly one 512-byte
     // Page in memory. This balances L2 Directory footprint against sparse memory overhead.
-    static constexpr uint32_t PAGE_SHIFT = 12;
+    // Note: This is prefixed with FILAMENT_ to avoid collision with a iOS simulator #define.
+    static constexpr uint32_t FILAMENT_PAGE_SHIFT = 12;
 
     // The hardware execution width, expressed as a bit-shift (2^6 = 64 bits).
     // This binds the bitset to the CPU's native 64-bit architecture (uint64_t), ensuring
@@ -364,6 +365,9 @@ public:
 
     static PagedArenaBitset merge(const PagedArenaBitset& a, const PagedArenaBitset& b);
 
+    static PagedArenaBitset& mergeSpan(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
+            Slice<const PagedArenaBitset* const> inputs);
+
     // ----------------------------------------------------------------------------------------------------------------
     // difference
     // ----------------------------------------------------------------------------------------------------------------
@@ -400,6 +404,24 @@ public:
      */
     template <typename Func>
     void forEachSetBit(Func&& callback) const {
+        const_cast<PagedArenaBitset*>(this)->traverseSetBits<false>(std::forward<Func>(callback));
+    }
+
+    /**
+     * @brief Traverses set bits in ascending order, popping (clearing) each bit upon successful processing.
+     * @tparam Func A callable taking `uint32_t` and returning `bool` (or convertible to `bool`).
+     * @param callback Invoked for each set bit. Return `true` to consume/pop the bit; `false` to STOP and leave the bit set.
+     * @return The number of bits successfully popped.
+     */
+    template <typename Func>
+    uint32_t popSetBits(Func&& callback) {
+        return traverseSetBits<true>(std::forward<Func>(callback));
+    }
+
+private:
+    template <bool Destructive, typename Func>
+    uint32_t traverseSetBits(Func&& callback) {
+        uint32_t count = 0;
         for (uint32_t m = 0; m < MASTER_WORDS; ++m) {
             uint64_t masterMask = mMasterMask[m];
             while (masterMask) {
@@ -417,7 +439,7 @@ public:
                     uint16_t const physicalIdx = mDirectory[dirIdx];
 
                     assert(physicalIdx != INVALID_PAGE && "Summary mask desynchronized");
-                    auto const& [activeWordsMask, words] = mArena[physicalIdx];
+                    auto& [activeWordsMask, words] = mArena[physicalIdx];
                     uint64_t activeMask = activeWordsMask;
 
                     while (activeMask != 0) {
@@ -428,12 +450,31 @@ public:
                             word &= word - 1;
 
                             // Calculate the unique Entity ID from the hierarchy indices
-                            uint32_t const id = (dirIdx << PAGE_SHIFT) | (w << WORD_SHIFT) | wBit;
+                            uint32_t const id = (dirIdx << FILAMENT_PAGE_SHIFT) | (w << WORD_SHIFT) | wBit;
 
+                            bool proceed = true;
                             if constexpr (std::is_convertible_v<std::invoke_result_t<Func, uint32_t>, bool>) {
-                                if (!callback(id)) return;
+                                proceed = callback(id);
                             } else {
                                 callback(id);
+                            }
+
+                            if constexpr (Destructive) {
+                                if (UTILS_LIKELY(proceed)) {
+                                    words[w] &= ~(1ULL << wBit);
+                                    if (words[w] == 0) {
+                                        activeWordsMask &= ~(1ULL << w);
+                                    }
+                                    mSize--;
+                                    count++;
+                                } else {
+                                    return count;
+                                }
+                            } else {
+                                if (UTILS_UNLIKELY(!proceed)) {
+                                    return count;
+                                }
+                                count++;
                             }
                         }
                         activeMask &= (activeMask - 1);
@@ -441,8 +482,10 @@ public:
                 }
             }
         }
+        return count;
     }
 
+public:
     // ----------------------------------------------------------------------------------------------------------------
     // subset / superset queries
     // ----------------------------------------------------------------------------------------------------------------
@@ -488,7 +531,7 @@ private:
     explicit PagedArenaBitset(NoInit) noexcept;
 
     // Directory Size
-    static constexpr uint32_t DIR_SIZE = 1U << (DOMAIN_BITS - PAGE_SHIFT);
+    static constexpr uint32_t DIR_SIZE = 1U << (DOMAIN_BITS - FILAMENT_PAGE_SHIFT);
 
     // Summary Mask Size (1 bit per Directory Entry)
     // Shifting right by WORD_SHIFT is equivalent to dividing by 64.
@@ -499,16 +542,16 @@ private:
     // in case a small domain results in MASK_WORDS < 64.
     static constexpr uint32_t MASTER_WORDS = (MASK_WORDS + ((1U << WORD_SHIFT) - 1)) >> WORD_SHIFT;
 
-    static constexpr uint32_t WORDS_PER_PAGE = 1U << (PAGE_SHIFT - WORD_SHIFT);
+    static constexpr uint32_t WORDS_PER_PAGE = 1U << (FILAMENT_PAGE_SHIFT - WORD_SHIFT);
     static constexpr uint32_t WORD_MASK = ((1U << WORD_SHIFT) - 1);
     static constexpr uint16_t INVALID_PAGE = 0xFFFF;
 
     static_assert(WORDS_PER_PAGE == 64, "WORDS_PER_PAGE must be 64 to match the 64-bit activeWordsMask!");
 
     // Do NOT pad or align this struct to 64 bytes (576) or 512 bytes.
-    // Maintaining a non-cache-line-multiple size (520) creates a natural 
-    // memory stagger. In Multi-Way operations (Merge6, Intersect6), this stagger 
-    // prevents 4K Cache Set Aliasing and L1 Cache Thrashing, resulting in 
+    // Maintaining a non-cache-line-multiple size (520) creates a natural
+    // memory stagger. In Multi-Way operations (Merge6, Intersect6), this stagger
+    // prevents 4K Cache Set Aliasing and L1 Cache Thrashing, resulting in
     // up to an 8x performance increase.
     struct Page {
         uint64_t activeWordsMask = 0;
@@ -542,9 +585,6 @@ private:
     template<typename Collection>
     static PagedArenaBitset& mergeInternal(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL out,
             const Collection& inputs);
-
-    static PagedArenaBitset& mergeSpan(PagedArenaBitset* UTILS_RESTRICT UTILS_NONNULL
-            out, Slice<const PagedArenaBitset* const> inputs);
 
     template<typename Collection>
     static uint32_t mergeSizeInternal(const Collection& inputs);

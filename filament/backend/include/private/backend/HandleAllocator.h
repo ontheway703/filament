@@ -41,7 +41,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(FILAMENT_DEBUG_MUTEX) || defined(UTILS_DEBUG_MUTEX)
+#define HandleAllocatorGL   HandleAllocator<32,  96, 312>
+#else
 #define HandleAllocatorGL   HandleAllocator<32,  96, 184>    // ~4520 / pool / MiB
+#endif
 #define HandleAllocatorVK   HandleAllocator<64, 160, 312>    // ~1820 / pool / MiB
 #define HandleAllocatorMTL  HandleAllocator<32,  64, 552>    // ~1660 / pool / MiB
 // TODO WebGPU examine right size of handles
@@ -62,7 +66,7 @@ private:
     // driver thread, but it can be accessed from any thread, because it's called from handle_cast<>
     // which is used by synchronous calls.
     mutable utils::Mutex mDebugTagLock;
-    tsl::robin_map<HandleBase::HandleId, utils::ImmutableCString> mDebugTags;
+    tsl::robin_map<HandleBase::HandleId, utils::ImmutableCString> mDebugTags UTILS_GUARDED_BY(mDebugTagLock);
 };
 
 /*
@@ -394,7 +398,7 @@ private:
 
     // Below is only used when running out of space in the HandleArena
     mutable utils::Mutex mLock;
-    tsl::robin_map<HandleBase::HandleId, void*> mOverflowMap;
+    tsl::robin_map<HandleBase::HandleId, void*> mOverflowMap UTILS_GUARDED_BY(mLock);
     std::atomic<HandleBase::HandleId> mId = 0;
 
     // constants

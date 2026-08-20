@@ -21,6 +21,7 @@
 #include <utils/CString.h>
 #include <utils/Log.h>
 #include <utils/Logger.h>
+#include <utils/Mutex.h>
 #include <utils/ostream.h>
 #include <utils/Panic.h>
 
@@ -30,11 +31,19 @@
 #include <new>
 #include <string_view>
 #include <utility>
+#if defined(__ANDROID__)
+#    include <android/log.h>                // __android_log_default_aborter
+#    include <android/set_abort_message.h>  // android_set_abort_message
+#endif
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(__ANDROID__)
+extern "C" __attribute__((weak)) void android_set_abort_message(const char *);
+#endif
 
 namespace utils {
 
@@ -51,11 +60,11 @@ class UserPanicHandler {
         }
     };
 
-    mutable std::mutex mLock{};
+    mutable Mutex mLock{};
     CallBack mCallBack{};
 
     CallBack getCallback() const noexcept {
-        std::lock_guard const lock(mLock);
+        LockGuard const lock(mLock);
         return mCallBack;
     }
 
@@ -70,7 +79,7 @@ public:
     }
 
     void set(Panic::PanicHandlerCallback const handler, void* user) noexcept {
-        std::lock_guard const lock(mLock);
+        LockGuard const lock(mLock);
         mCallBack = { handler, user };
     }
 };
@@ -106,7 +115,7 @@ static CString sprintfToString(const char* format, ...) noexcept {
 }
 
 static CString buildPanicString(
-        std::string_view const& msg, const char* function, int line,
+        std::string_view const& msg, const char* function, int const line,
         const char* file, const char* reason) {
 #ifndef NDEBUG
     return sprintfToString("%.*s\nin %s:%d\nin file %s\nreason: %s",
@@ -184,8 +193,8 @@ const CallStack& TPanic<T>::getCallStack() const noexcept {
 
 template<typename T>
 void TPanic<T>::log() const noexcept {
-    slog.e << what() << io::endl;
-    slog.e << mCallstack << io::endl;
+    LOG(ERROR) << what();
+    LOG(ERROR) << mCallstack;
 }
 
 UTILS_ALWAYS_INLINE
@@ -228,6 +237,19 @@ void TPanic<T>::panic(char const* function, char const* file, int line, char con
     throw std::move(e);
 #endif
 
+    // Register the full panic message as the tombstone "Abort message:" so that it
+    // appears in crash reports collected by Google Play Console and other tools that
+    // read tombstones from field devices (which never have access to logcat output).
+#if defined(__ANDROID__)
+    if (__builtin_available(android 30, *)) {
+        __android_log_default_aborter(e.what());
+    } else {
+        // For API < 30, we can try to use this private API if it's available.
+        if (&android_set_abort_message) {
+            android_set_abort_message(e.what());
+        }
+    }
+#endif
     // and finally abort if we somehow get here
     std::abort();
 }
@@ -242,19 +264,17 @@ void panicLog(char const* function, char const* file, int const line, const char
     CString const reason{ sprintfToString(format, args) };
     va_end(args);
 
-    CString const msg = buildPanicString("PanicLog",
-            function, line, file, reason.c_str());
-
-    slog.e << msg << io::endl;
-    slog.e << CallStack::unwind(1) << io::endl;
+    CString const msg = buildPanicString("PanicLog", function, line, file, reason.c_str());
+    LOG(ERROR) << msg;
+    LOG(ERROR) << CallStack::unwind(1);
 }
 
 PanicStream::PanicStream(
         char const* function,
         char const* file,
         int const line,
-        char const* condition) noexcept
-        : mFunction(function), mFile(file), mLine(line), mLiteral(condition) {
+        char const* message) noexcept
+    : mFunction(function), mFile(file), mLine(line), mLiteral(message) {
 }
 
 PanicStream::~PanicStream() = default;

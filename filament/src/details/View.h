@@ -104,12 +104,12 @@ public:
     ~FView() noexcept;
 
     FScene::RenderableSoa& getRenderableData() const noexcept {
-        assert_invariant(mCurrentViewCache);
-        return mCurrentViewCache->renderableData;
+        assert_invariant(mSceneCache);
+        return mSceneCache->renderableData;
     }
     FScene::LightSoa& getLightData() const noexcept {
-        assert_invariant(mCurrentViewCache);
-        return mCurrentViewCache->lightData;
+        assert_invariant(mSceneCache);
+        return mSceneCache->lightData;
     }
 
     void terminate(FEngine& engine);
@@ -127,7 +127,7 @@ public:
     FScene* getScene() noexcept { return mScene; }
 
     bool hasContactShadows() const noexcept;
-    void invalidateCache(FScene* scene) const noexcept;
+    void detachScene(FScene const* scene) noexcept;
 
     void setCullingCamera(FCamera* camera) noexcept { mCullingCamera = camera; }
     void setViewingCamera(FCamera* camera) noexcept { mViewingCamera = camera; }
@@ -215,8 +215,7 @@ public:
     bool needsShadowMap() const noexcept { return mNeedsShadowMap; }
     bool hasFog() const noexcept { return mFogOptions.enabled && mFogOptions.density > 0.0f; }
     bool hasVSM() const noexcept { return mShadowType == ShadowType::VSM; }
-    bool hasDPCF() const noexcept { return mShadowType == ShadowType::DPCF; }
-    bool hasPCSS() const noexcept { return mShadowType == ShadowType::PCSS; }
+    bool hasPCSS() const noexcept { return mShadowType == ShadowType::PCSS || mShadowType == ShadowType::DPCF; }
     bool hasPicking() const noexcept { return mActivePickingQueriesList != nullptr; }
     bool hasStereo() const noexcept {
         return mIsStereoSupported && mStereoscopicOptions.enabled;
@@ -445,6 +444,10 @@ public:
         return mVisibleRenderables;
     }
 
+    int32_t getVisibleRenderableCount() const noexcept {
+        return mVisibleRenderableCount;
+    }
+
     Range const& getVisibleDirectionalShadowCasters() const noexcept {
         return mVisibleDirectionalShadowCasters;
     }
@@ -554,6 +557,8 @@ private:
         PickingQueryResult result{};
     };
 
+    void invalidateSceneCache() noexcept;
+
     void prepareVisibleRenderables(utils::JobSystem& js,
             Frustum const& frustum, FScene::RenderableSoa& renderableData) const noexcept;
 
@@ -591,7 +596,7 @@ private:
     DescriptorSet mCommonRenderableDescriptorSet;
 
     FScene* mScene = nullptr;
-    mutable FScene::SceneCacheData* mCurrentViewCache = nullptr;
+    std::unique_ptr<FScene::SceneCacheData> mSceneCache;
     // The camera set by the user, used for culling and viewing
     FCamera* mCullingCamera = nullptr;
     // The optional (debug) camera, used only for viewing
@@ -662,6 +667,7 @@ private:
     Range mVisibleRenderables;
     Range mVisibleDirectionalShadowCasters;
     Range mSpotLightShadowCasters;
+    int32_t mVisibleRenderableCount = -1;
     uint32_t mRenderableUBOElementCount = 0;
     mutable bool mHasDirectionalLighting = false;
     mutable bool mHasDynamicLighting = false;

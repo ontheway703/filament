@@ -41,9 +41,15 @@ using namespace utils;
 
 UTILS_NOINLINE
 JavaVM* VirtualMachineEnv::getVirtualMachine() {
-    std::lock_guard const lock(sLock);
+    LockGuard const lock(sLock);
     assert_invariant(sVirtualMachine);
     return sVirtualMachine;
+}
+
+UTILS_NOINLINE
+bool VirtualMachineEnv::hasVirtualMachine() noexcept {
+    LockGuard const lock(sLock);
+    return sVirtualMachine != nullptr;
 }
 
 /*
@@ -56,7 +62,7 @@ JavaVM* VirtualMachineEnv::getVirtualMachine() {
 UTILS_PUBLIC
 UTILS_NOINLINE
 jint VirtualMachineEnv::JNI_OnLoad(JavaVM* vm) {
-    std::lock_guard const lock(sLock);
+    LockGuard const lock(sLock);
     if (sVirtualMachine) {
         // It doesn't make sense for JNI_OnLoad() to be called more than once
         return JNI_VERSION_1_6;

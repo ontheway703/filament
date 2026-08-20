@@ -17,14 +17,15 @@
 #ifndef TNT_FILAMENT_BACKEND_PRIVATE_JOBQUEUE_H
 #define TNT_FILAMENT_BACKEND_PRIVATE_JOBQUEUE_H
 
+#include <utils/compiler.h>
+#include <utils/Condition.h>
 #include <utils/FixedCapacityVector.h>
 #include <utils/Invocable.h>
 #include <utils/JobSystem.h>
+#include <utils/Mutex.h>
 
-#include <condition_variable>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <queue>
 #include <thread>
 #include <unordered_map>
@@ -151,14 +152,14 @@ private:
     JobQueue(const JobQueue&) = delete;
     JobQueue& operator=(const JobQueue&) = delete;
 
-    JobId genNextJobId() noexcept;
+    JobId genNextJobId() noexcept UTILS_REQUIRES(mQueueMutex);
 
-    std::mutex mQueueMutex;
-    std::condition_variable mQueueCondition;
-    std::unordered_map<JobId, Job> mJobsMap;
-    std::queue<JobId> mJobOrder;
-    JobId mNextJobId = 0;
-    bool mIsStopping = false;
+    utils::Mutex mQueueMutex;
+    utils::Condition mQueueCondition;
+    std::unordered_map<JobId, Job> mJobsMap UTILS_GUARDED_BY(mQueueMutex);
+    std::queue<JobId> mJobOrder UTILS_GUARDED_BY(mQueueMutex);
+    JobId mNextJobId UTILS_GUARDED_BY(mQueueMutex) = 0;
+    bool mIsStopping UTILS_GUARDED_BY(mQueueMutex) = false;
 };
 
 /**

@@ -17,9 +17,12 @@
 #include "CodeGenerator.h"
 
 #include "MaterialInfo.h"
+
 #include "../PushConstantDefinitions.h"
 
 #include "generated/shaders.h"
+
+#include <private/filament/Variant.h>
 
 #include <backend/DriverEnums.h>
 
@@ -204,30 +207,40 @@ utils::io::sstream& CodeGenerator::generateCommonProlog(utils::io::sstream& out,
 
     switch (material.stereoscopicType) {
     case StereoscopicType::INSTANCED:
-        generateDefine(out, "FILAMENT_STEREO_INSTANCED", true);
+        generateDefine(out, "FILAMENT_STEREO_INSTANCED");
         break;
     case StereoscopicType::MULTIVIEW:
-        generateDefine(out, "FILAMENT_STEREO_MULTIVIEW", true);
+        generateDefine(out, "FILAMENT_STEREO_MULTIVIEW");
         break;
     case StereoscopicType::NONE:
         break;
     }
 
     if (stage == ShaderStage::VERTEX) {
-        generateDefine(out, "FLIP_UV_ATTRIBUTE", material.flipUV);
-        generateDefine(out, "LEGACY_MORPHING", material.useLegacyMorphing);
+        if (material.flipUV) {
+            generateDefine(out, "FLIP_UV_ATTRIBUTE");
+        }
+        if (material.useLegacyMorphing) {
+            generateDefine(out, "LEGACY_MORPHING");
+        }
     }
     if (stage == ShaderStage::FRAGMENT) {
-        generateDefine(out, "FILAMENT_LINEAR_FOG", material.linearFog);
-        generateDefine(out, "FILAMENT_SHADOW_FAR_ATTENUATION", material.shadowFarAttenuation);
-        generateDefine(out, "MATERIAL_HAS_CUSTOM_DEPTH", material.userMaterialHasCustomDepth);
+        if (material.linearFog) {
+            generateDefine(out, "FILAMENT_LINEAR_FOG");
+        }
+        if (material.shadowFarAttenuation) {
+            generateDefine(out, "FILAMENT_SHADOW_FAR_ATTENUATION");
+        }
+        if (material.userMaterialHasCustomDepth) {
+            generateDefine(out, "MATERIAL_HAS_CUSTOM_DEPTH");
+        }
     }
 
     if (stage == ShaderStage::VERTEX) {
-        generateDefine(out, "VARYING", "out");
-        generateDefine(out, "ATTRIBUTE", "in");
+        generateValueDefine(out, "VARYING", "out");
+        generateValueDefine(out, "ATTRIBUTE", "in");
     } else if (stage == ShaderStage::FRAGMENT) {
-        generateDefine(out, "VARYING", "in");
+        generateValueDefine(out, "VARYING", "in");
     }
 
     auto getShadingDefine = [](Shading shading) -> const char* {
@@ -240,7 +253,7 @@ utils::io::sstream& CodeGenerator::generateCommonProlog(utils::io::sstream& out,
         }
     };
 
-    generateDefine(out, getShadingDefine(material.shading), true);
+    generateDefine(out, getShadingDefine(material.shading));
 
     generateQualityDefine(out, material.quality);
 
@@ -327,12 +340,23 @@ utils::io::sstream& CodeGenerator::generateCommonProlog(utils::io::sstream& out,
                 +ReservedSpecializationConstants::CONFIG_SRGB_SWAPCHAIN_EMULATION, false);
     }
 
+    bool const isDepthVariant = filament::Variant::isValidDepthVariant(v);
+    if (isDepthVariant) {
+        out << "const bool RUNTIME_CONFIG_HAS_DYNAMIC_LIGHTING = false;\n";
+    } else {
+        bool const litVariants = material.isLit || material.hasShadowMultiplier;
+        generateSpecializationConstant(out, "RUNTIME_CONFIG_HAS_DYNAMIC_LIGHTING",
+                CONFIG_MAX_RESERVED_SPEC_CONSTANTS +
+                        +DynamicSpecializationConstants::RUNTIME_CONFIG_HAS_DYNAMIC_LIGHTING,
+                litVariants);
+    }
+
     out << '\n';
     out << SHADERS_COMMON_DEFINES_GLSL_DATA;
 
     // Api level enforcement.
-    generateDefine(out, "CLIENT_MATERIAL_API_LEVEL", apiLevel);
-    generateDefine(out, "UNSTABLE_MATERIAL_API_LEVEL", filament::UNSTABLE_MATERIAL_API_LEVEL);
+    generateValueDefine(out, "CLIENT_MATERIAL_API_LEVEL", apiLevel);
+    generateValueDefine(out, "UNSTABLE_MATERIAL_API_LEVEL", filament::UNSTABLE_MATERIAL_API_LEVEL);
 
     out << "\n";
     return out;
@@ -431,7 +455,7 @@ io::sstream& CodeGenerator::generateCommonVariable(io::sstream& out, ShaderStage
 
 io::sstream& CodeGenerator::generateSurfaceShaderInputs(io::sstream& out, ShaderStage stage,
         const AttributeBitset& attributes, Interpolation interpolation,
-        MaterialBuilder::PushConstantList const& pushConstants) const {
+        MaterialBuilder::PushConstantList const& pushConstants, uint32_t pushConstantOffset) const {
     auto const& attributeDatabase = MaterialBuilder::getAttributeDatabase();
 
     const char* shading = getInterpolationQualifier(interpolation);
@@ -439,7 +463,7 @@ io::sstream& CodeGenerator::generateSurfaceShaderInputs(io::sstream& out, Shader
 
     out << "\n";
     attributes.forEachSetBit([&out, &attributeDatabase](size_t i) {
-        generateDefine(out, attributeDatabase[i].getDefineName().c_str(), true);
+        generateDefine(out, attributeDatabase[i].getDefineName().c_str());
     });
 
     if (stage == ShaderStage::VERTEX) {
@@ -457,8 +481,8 @@ io::sstream& CodeGenerator::generateSurfaceShaderInputs(io::sstream& out, Shader
         });
 
         out << "\n";
-        generatePushConstants(out, pushConstants, attributes.size());
     }
+    generatePushConstants(out, pushConstants, attributes.size(), pushConstantOffset);
 
     out << "\n";
     out << SHADERS_SURFACE_VARYINGS_GLSL_DATA;
@@ -850,19 +874,18 @@ void CodeGenerator::fixupExternalSamplers(
 }
 
 
-io::sstream& CodeGenerator::generateDefine(io::sstream& out, const char* name, bool value) {
-    if (value) {
-        out << "#define " << name << "\n";
-    }
+io::sstream& CodeGenerator::generateDefine(io::sstream& out, const char* name) {
+    out << "#define " << name << "\n";
     return out;
 }
 
-io::sstream& CodeGenerator::generateDefine(io::sstream& out, const char* name, uint32_t value) {
+io::sstream& CodeGenerator::generateValueDefine(io::sstream& out, const char* name, uint32_t value) {
     out << "#define " << name << " " << value << "\n";
     return out;
 }
 
-io::sstream& CodeGenerator::generateDefine(io::sstream& out, const char* name, const char* string) {
+io::sstream& CodeGenerator::generateValueDefine(io::sstream& out, const char* name,
+        const char* string) {
     out << "#define " << name << " " << string << "\n";
     return out;
 }
@@ -899,12 +922,9 @@ utils::io::sstream& CodeGenerator::generateSpecializationConstant(utils::io::sst
     return out;
 }
 
-// Note that we've only introduced push constants to the vertex stage.  If we want to add push
-// constants to the fragment stage, in vulkan, we would have to offset the definition of the field
-// by the size of the constant struct in the vertex stage. This is due to vulkan having essentially
-// one block of memory for push constants that is shared across all stages).
 utils::io::sstream& CodeGenerator::generatePushConstants(utils::io::sstream& out,
-        MaterialBuilder::PushConstantList const& pushConstants, size_t const layoutLocation) const {
+        MaterialBuilder::PushConstantList const& pushConstants, size_t const layoutLocation,
+        uint32_t startOffset) const {
     if (UTILS_UNLIKELY(pushConstants.empty())) {
         return out;
     }
@@ -923,14 +943,19 @@ utils::io::sstream& CodeGenerator::generatePushConstants(utils::io::sstream& out
     bool const outputSpirv =
             mTargetLanguage == TargetLanguage::SPIRV && mTargetApi != TargetApi::OPENGL;
     if (outputSpirv) {
-        out << "layout(push_constant) uniform " << STRUCT_NAME << " {\n ";
+        out << "layout(push_constant) uniform " << STRUCT_NAME << " {\n";
     } else {
         out << "struct " << STRUCT_NAME << " {\n";
     }
 
     for (auto const& constant: pushConstants) {
+        if (outputSpirv && startOffset != 0) {
+            out << "layout(offset=" << startOffset << ") ";
+            startOffset = 0;
+        }
         out << getType(constant.type) << " " << constant.name.c_str() << ";\n";
     }
+
 
     if (outputSpirv) {
         out << "} " << PUSH_CONSTANT_STRUCT_VAR_NAME << ";\n";
@@ -1109,10 +1134,8 @@ io::sstream& CodeGenerator::generateSurfaceLit(io::sstream& out, ShaderStage sta
         if (variant.hasDirectionalLighting()) {
             out << SHADERS_SURFACE_LIGHT_DIRECTIONAL_FS_DATA;
         }
-        if (variant.hasDynamicLighting()) {
-            out << SHADERS_SURFACE_LIGHT_PUNCTUAL_FS_DATA;
-        }
 
+        out << SHADERS_SURFACE_LIGHT_PUNCTUAL_FS_DATA;
         out << SHADERS_SURFACE_SHADING_LIT_FS_DATA;
     }
     return out;
@@ -1176,6 +1199,7 @@ char const* CodeGenerator::getConstantName(MaterialBuilder::Property property) n
         case Property::SPECULAR_FACTOR:             return "SPECULAR_FACTOR";
         case Property::SPECULAR_COLOR_FACTOR:       return "SPECULAR_COLOR_FACTOR";
         case Property::SHADOW_STRENGTH:             return "SHADOW_STRENGTH";
+        case Property::CLIP_SPACE_POSITION:         return "CLIP_SPACE_POSITION";
     }
 }
 

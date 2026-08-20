@@ -88,6 +88,14 @@ enum class ReservedSpecializationConstants : uint8_t {
     // check CONFIG_NEXT_RESERVED_SPEC_CONSTANT and CONFIG_MAX_RESERVED_SPEC_CONSTANTS below
 };
 
+// Dynamic specialization constants are for those spec constants which act like a variant,
+// might be changed in the middle of the render pass. The values are always determined by the system and
+// users should not modify the value of these constants by themselves.
+enum class DynamicSpecializationConstants : uint8_t {
+    RUNTIME_CONFIG_HAS_DYNAMIC_LIGHTING = 0,
+    // check CONFIG_NEXT_DYNAMIC_SPEC_CONSTANT and CONFIG_MAX_DYNAMIC_SPEC_CONSTANTS below
+};
+
 enum class PushConstantIds : uint8_t  {
     MORPHING_BUFFER_OFFSET = 0,
 };
@@ -102,12 +110,23 @@ constexpr size_t CONFIG_RENDERPASS_CHANNEL_COUNT = 8;
 constexpr size_t CONFIG_MAX_LIGHT_COUNT = 255;
 constexpr size_t CONFIG_MAX_LIGHT_INDEX = CONFIG_MAX_LIGHT_COUNT - 1;
 
-// The number of specialization constants that Filament reserves for its own use. These are always
-// the first constants (from 0 to CONFIG_MAX_RESERVED_SPEC_CONSTANTS - 1).
-// Updating this value necessitates a material version bump.
+// The number of specialization constants that Filament reserves for its own
+// use. It includes the static (ReservedSpecializationConstants) and dynamic
+// (DynamicSpecializationConstants) ones.
+// They are always the first constants (from 0 to
+// CONFIG_MAX_INTERNAL_SPEC_CONSTANTS - 1). Updating this value necessitates a
+// material version bump.
+constexpr size_t CONFIG_MAX_INTERNAL_SPEC_CONSTANTS = 32;
 constexpr size_t CONFIG_MAX_RESERVED_SPEC_CONSTANTS = 16;
+constexpr size_t CONFIG_MAX_DYNAMIC_SPEC_CONSTANTS = 16;
+static_assert(CONFIG_MAX_DYNAMIC_SPEC_CONSTANTS + CONFIG_MAX_RESERVED_SPEC_CONSTANTS ==
+       CONFIG_MAX_INTERNAL_SPEC_CONSTANTS, "Inconsistent specialization constant counts");
+
 // The number of the next unassigned reserved spec constant.
 constexpr size_t CONFIG_NEXT_RESERVED_SPEC_CONSTANT = 12;
+
+// The number of the next unassigned dynamic spec constant.
+constexpr size_t CONFIG_NEXT_DYNAMIC_SPEC_CONSTANT = CONFIG_MAX_RESERVED_SPEC_CONSTANTS + 1;
 
 // The maximum number of shadow maps possible.
 // There is currently a maximum limit of 128 shadow maps.
@@ -127,10 +146,10 @@ constexpr size_t CONFIG_MAX_SHADOW_LAYERS = 64;
 // The maximum number of shadow cascades that can be used for directional lights.
 constexpr size_t CONFIG_MAX_SHADOW_CASCADES = 4;
 
-// The maximum UBO size, in bytes. This value is set to 16 KiB due to the ES3.0 spec.
+// The maximum UBO size, in bytes. This value is set to 32 KiB to support 512 bones.
 // Note that this value constrains the maximum number of skinning bones, morph targets,
 // instances, and shadow casting spotlights.
-constexpr size_t CONFIG_MINSPEC_UBO_SIZE = 16384;
+constexpr size_t CONFIG_MINSPEC_UBO_SIZE = 32768;
 
 // The maximum number of instances that Filament automatically creates as an optimization.
 // Use a much smaller number for WebGL as a workaround for the following Chrome issues:
@@ -146,7 +165,7 @@ constexpr size_t CONFIG_MAX_INSTANCES = 64;
 
 // The maximum number of bones that can be associated with a single renderable.
 // We store 32 bytes per bone. Must be a power-of-two, and must fit within CONFIG_MINSPEC_UBO_SIZE.
-constexpr size_t CONFIG_MAX_BONE_COUNT = 256;
+constexpr size_t CONFIG_MAX_BONE_COUNT = 512;
 
 // The maximum number of morph targets associated with a single renderable.
 // Note that ES3.0 only guarantees 256 layers in an array texture.
@@ -171,6 +190,8 @@ struct utils::EnableIntegerOperators<filament::PerMaterialBindingPoints> : publi
 
 template<>
 struct utils::EnableIntegerOperators<filament::ReservedSpecializationConstants> : public std::true_type {};
+template<>
+struct utils::EnableIntegerOperators<filament::DynamicSpecializationConstants> : public std::true_type {};
 template<>
 struct utils::EnableIntegerOperators<filament::PushConstantIds> : public std::true_type {};
 template<>

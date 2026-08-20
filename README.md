@@ -1,5 +1,7 @@
 # Filament
 
+> XMuscle fork maintenance notes: see [XMUSCLE_README.md](XMUSCLE_README.md).
+
 [![Android Build Status](https://github.com/google/filament/actions/workflows/status-android.yml/badge.svg)](https://github.com/google/filament/actions/workflows/status-android.yml)
 [![iOS Build Status](https://github.com/google/filament/actions/workflows/status-ios.yml/badge.svg)](https://github.com/google/filament/actions/workflows/status-ios.yml)
 [![Linux Build Status](https://github.com/google/filament/actions/workflows/status-linux.yml/badge.svg)](https://github.com/google/filament/actions/workflows/status-linux.yml)
@@ -31,7 +33,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'com.google.android.filament:filament-android:1.71.4'
+    implementation 'com.google.android.filament:filament-android:1.75.0'
 }
 ```
 
@@ -50,7 +52,7 @@ Here are all the libraries available in the group `com.google.android.filament`:
 iOS projects can use CocoaPods to install the latest release:
 
 ```shell
-pod 'Filament', '~> 1.71.4'
+pod 'Filament', '~> 1.75.0'
 ```
 
 ## Documentation

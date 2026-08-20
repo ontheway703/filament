@@ -4,6 +4,7 @@ project(utils)
 set(TARGET utils)
 set(TARGET_LINUX ${TARGET}/linux)
 set(TARGET_GENERIC ${TARGET}/generic)
+set(TARGET_DEBUG ${TARGET}/debug)
 set(PUBLIC_HDR_DIR include)
 
 # ==================================================================================================
@@ -40,6 +41,7 @@ set(DIST_HDRS
         ${PUBLIC_HDR_DIR}/${TARGET}/NameComponentManager.h
         ${PUBLIC_HDR_DIR}/${TARGET}/ostream.h
         ${PUBLIC_HDR_DIR}/${TARGET}/PagedArenaBitset.h
+        ${PUBLIC_HDR_DIR}/${TARGET}/PagedArenaBitsetPool.h
         ${PUBLIC_HDR_DIR}/${TARGET}/Panic.h
         ${PUBLIC_HDR_DIR}/${TARGET}/Path.h
         ${PUBLIC_HDR_DIR}/${TARGET}/PrivateImplementation.h
@@ -64,17 +66,23 @@ set(DIST_GENERIC_HDRS
         ${PUBLIC_HDR_DIR}/${TARGET_GENERIC}/Mutex.h
 )
 
+set(DIST_DEBUG_HDRS
+        ${PUBLIC_HDR_DIR}/${TARGET_DEBUG}/Mutex.h
+)
+
 set(SRCS
         src/api_level.cpp
         src/architecture.cpp
         src/ashmem.cpp
         src/debug.cpp
+        src/debug/Mutex.cpp
         src/Allocator.cpp
         src/AsyncJobQueue.cpp
         src/CallStack.cpp
         src/CString.cpp
         src/CountDownLatch.cpp
         src/CyclicBarrier.cpp
+        src/InternalDebugRegistry.cpp
         src/EntityManager.cpp
         src/EntityManagerImpl.h
         src/FeatureFlagManager.cpp
@@ -94,6 +102,7 @@ set(SRCS
         src/ThreadUtils.cpp
         src/Status.cpp
         src/PagedArenaBitset.cpp
+        src/PagedArenaBitsetPool.cpp
 )
 
 if (WIN32)
@@ -162,6 +171,10 @@ if (LINUX)
     target_link_libraries(${TARGET} PRIVATE dl)
 endif()
 
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    target_compile_options(${TARGET} PRIVATE -Wthread-safety)
+endif()
+
 # ==================================================================================================
 # Installation
 # ==================================================================================================
@@ -173,6 +186,7 @@ if (ANDROID)
 else()
     install(FILES ${DIST_GENERIC_HDRS} DESTINATION include/${TARGET_GENERIC})
 endif()
+install(FILES ${DIST_DEBUG_HDRS} DESTINATION include/${TARGET_DEBUG})
 
 # ==================================================================================================
 # Test executables
@@ -184,6 +198,7 @@ if (FILAMENT_BUILD_TESTING)
             test/test_Allocators.cpp
             test/test_bitset.cpp
             test/test_EntitySet.cpp
+            test/test_PagedArenaBitsetPool.cpp
             test/test_tribool.cpp
             test/test_CountDownLatch.cpp
             test/test_CString.cpp
@@ -209,6 +224,7 @@ if (FILAMENT_BUILD_TESTING)
             test/test_Zip2Iterator.cpp
             test/test_BinaryTreeArray.cpp
             test/test_Status.cpp
+            test/test_Mutex.cpp
     )
 
     if (WASM_PTHREADS)
@@ -246,7 +262,8 @@ if (FILAMENT_BUILD_TESTING AND NOT WASM)
             benchmark/benchmark_JobSystem.cpp
             benchmark/benchmark_mutex.cpp
             benchmark/benchmark_memcpy.cpp
-            benchmark/benchmark_EntitySet.cpp)
+            benchmark/benchmark_EntitySet.cpp
+            benchmark/benchmark_EntityManager.cpp)
 
 
     add_executable(benchmark_${TARGET} ${BENCHMARK_SRCS})

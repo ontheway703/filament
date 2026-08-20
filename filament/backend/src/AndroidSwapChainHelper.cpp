@@ -20,6 +20,7 @@
 
 #include <utils/compiler.h>
 #include <utils/Logger.h>
+#include <utils/Mutex.h>
 
 #include <android/native_window.h>
 
@@ -39,7 +40,7 @@ bool AndroidSwapChainHelper::setPresentFrameId(
     uint64_t sysFrameId{};
     int const status = NativeWindow::getNextFrameId(anw, &sysFrameId);
     if (status == 0) {
-        std::lock_guard const lock(mLock);
+        utils::LockGuard const lock(mLock);
         // frameIds must be strictly monotonic, if that's not the case (i.e. the new frameId is
         // less or equal to the last one in the map), we have to clear the map, because the
         // map's find() assume sorted keys.
@@ -65,7 +66,7 @@ bool AndroidSwapChainHelper::setPresentFrameId(
 }
 
 uint64_t AndroidSwapChainHelper::getFrameId(uint64_t const frameId) const noexcept {
-    std::lock_guard const lock(mLock);
+    utils::LockGuard const lock(mLock);
     if (auto const* const pos = mFrameIdToSystemFrameId.find(frameId)) {
         return *pos;
     }

@@ -29,15 +29,15 @@
 #include <filament/VertexBuffer.h>
 
 #include <utils/EntityManager.h>
+#include <utils/Log.h>
 
-#include <math/vec3.h>
 #include <math/mat4.h>
+#include <math/vec3.h>
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 #include <vector>
-#include <utils/Log.h>
 
 using namespace filament;
 
@@ -61,6 +61,8 @@ Grid::Grid(Engine& engine, Material const* material, float3 linearColor)
     RenderableManager::Builder(1)
             .boundingBox({ { -1.0f, -1.0f, -1.0f }, { 1.0f, 1.0f, 1.0f } })
             .material(0, mMaterialInstanceWireFrame)
+            .castShadows(false)
+            .receiveShadows(false)
             .priority(6)
             .culling(false)
             .build(engine, mWireFrameRenderable);
