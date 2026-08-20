@@ -16,17 +16,17 @@ xmuscle-engine/third_party/filament
 
 ## Branch Policy
 
-Use these branches consistently:
+Use these branches and tags consistently:
 
 | Branch or tag | Purpose |
 | --- | --- |
-| `main` | Mirror of upstream Filament. Do not put XMuscle-specific changes here. |
-| `custom-modifications` | Long-lived XMuscle branch used by `xmuscle-engine`. |
+| `main` | Reviewed integration branch: official release baseline plus XMuscle changes. |
 | `xmuscle/sync-vX.Y.Z` | Temporary branch for syncing an official Filament release. |
 | `xmuscle-before-...` | Backup tag before a sync or risky maintenance operation. |
+| `xmuscle-filament-vX.Y.Z-xmuscle-vA.B.C` | Immutable Engine consumption point after validation. |
 
-`xmuscle-engine` should pin the submodule to a verified commit from
-`custom-modifications`, not to `main` or `upstream/main`.
+`xmuscle-engine` should pin the submodule to a validated XMuscle release tag, not to a moving
+branch such as `main` or `upstream/main`.
 
 ## XMuscle Changes
 
@@ -34,12 +34,13 @@ The XMuscle branch currently carries project-specific changes including:
 
 - Increased bone / UBO limits for 512-bone skeletal animation.
 - `libs/gltfio_ext`, an extended glTF loading and animation library used by XMuscle.
-- iOS / Apple Silicon simulator build script adjustments.
 
-The current synchronization baseline is the official Filament `v1.75.0` tag. Do not use
-`upstream/main` as a release baseline.
+The current synchronization baseline is the official Filament `v1.75.0` tag. Official v1.75.0
+already provides iOS device, arm64 simulator, and x86_64 simulator build paths. XMuscle carries no
+functional Apple Silicon simulator patch; build validation still covers the arm64 simulator used by
+the Engine package.
 
-Keep these changes isolated from `main` so that the fork always has a clean upstream baseline.
+Do not use `upstream/main` as a production release baseline.
 
 ## Sync Strategy
 
@@ -53,7 +54,7 @@ Recommended flow:
 git fetch origin
 git fetch upstream --tags
 
-git checkout custom-modifications
+git checkout main
 git tag xmuscle-before-filament-vX.Y.Z-sync
 git push origin xmuscle-before-filament-vX.Y.Z-sync
 
@@ -61,8 +62,8 @@ git checkout -b xmuscle/sync-vX.Y.Z
 git merge vX.Y.Z
 ```
 
-Resolve conflicts on the sync branch, validate the result, then merge the sync branch back into
-`custom-modifications` and push it to the fork.
+Resolve conflicts on the sync branch, validate the result, then merge it to `main` through a pull
+request. Create the immutable XMuscle release tag on the validated integration commit.
 
 After the fork is updated and validated, update the submodule pointer in `xmuscle-engine`.
 
