@@ -80,7 +80,7 @@ Apply these changes from `gltfio` to `gltfio_ext`:
 - Upstream baseline: official Filament tag `v1.75.0` (`0e58877c09afb1aacd09ff640f74d2adcd2a7e80`)
 - Previous upstream baseline: official Filament tag `v1.71.4` (`a0ecdbbeba5f1005bbad0a4c8b2fe6955788cdee`)
 - Fixture source: deterministic generators under `test/fixtures/`, verified by SHA-256
-- Expected host result: 124 tests total, 119 passed, 5 explicitly skipped, 0 failed
+- Expected host result: 129 tests total, 124 passed, 5 explicitly skipped, 0 failed
 
 The five skips exercise bone-matrix updates on the NOOP backend. They are not evidence that the
 327- or 512-bone path works on a real GPU; release validation still requires Metal and Android GPU
@@ -100,9 +100,8 @@ Before starting synchronization:
 
 - [ ] **Run baseline tests**: Verify all tests pass before sync
   ```bash
-  cd out/cmake-debug/libs/gltfio_ext
-  ./run_tests.sh
-  # Expected: 124 tests (119 passing + 5 explicitly skipped)
+  ./libs/gltfio_ext/run_tests.sh
+  # Expected: 129 tests (124 passing + 5 explicitly skipped)
   ```
 
 - [ ] **Review gltfio changes**: Inspect upstream commits
@@ -313,6 +312,7 @@ gltfio_ext 单元测试套件
 ✓ test_gltfio_ext: 10 tests passed
 ✓ test_asset_loader: 12 tests passed
 ✓ test_animation_binding: 9 tests passed
+✓ test_instance_lifecycle: 5 tests passed
 ⊘ test_bone_matrices: 5 tests skipped (NOOP backend)
 ✓ test_animator_lifecycle: 9 tests passed
 ✓ test_animator_playback: 14 tests passed  # Including compatibility tests
@@ -323,8 +323,8 @@ gltfio_ext 单元测试套件
 ========================================
 测试总结
 ========================================
-总测试数: 124
-通过: 119
+总测试数: 129
+通过: 124
 跳过: 5
 失败: 0
 
@@ -429,7 +429,7 @@ Preserved gltfio_ext features:
 - Multi-instance animator support
 - External animation loading
 
-Tests: 119 passed, 5 explicitly skipped, 0 failed (124 total)
+Tests: 124 passed, 5 explicitly skipped, 0 failed (129 total)
 "
 ```
 

@@ -368,6 +368,16 @@ if (TNT_DEV AND NOT WASM AND NOT ANDROID AND NOT IOS)
     endif()
     set_target_properties(${ANIMATOR_CROSSFADE_TEST_TARGET} PROPERTIES FOLDER Tests)
 
+    # FilamentInstance ownership, scene membership, source-data, and reuse feasibility tests
+    set(INSTANCE_LIFECYCLE_TEST_TARGET test_instance_lifecycle)
+    add_executable(${INSTANCE_LIFECYCLE_TEST_TARGET} test/test_instance_lifecycle.cpp)
+    add_dependencies(${INSTANCE_LIFECYCLE_TEST_TARGET} test_gltfio_ext_files)
+    target_link_libraries(${INSTANCE_LIFECYCLE_TEST_TARGET} PRIVATE ${TARGET} gtest uberarchive_ext)
+    if (NOT MSVC)
+        target_compile_options(${INSTANCE_LIFECYCLE_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
+    endif()
+    set_target_properties(${INSTANCE_LIFECYCLE_TEST_TARGET} PROPERTIES FOLDER Tests)
+
     # Animation cache test (Phase 2-3 lightweight cache)
     set(ANIMATION_CACHE_TEST_TARGET test_animation_cache)
     add_executable(${ANIMATION_CACHE_TEST_TARGET} test/test_animation_cache.cpp)
@@ -377,6 +387,21 @@ if (TNT_DEV AND NOT WASM AND NOT ANDROID AND NOT IOS)
         target_compile_options(${ANIMATION_CACHE_TEST_TARGET} PRIVATE ${GLTFIO_EXT_WARNINGS})
     endif()
     set_target_properties(${ANIMATION_CACHE_TEST_TARGET} PROPERTIES FOLDER Tests)
+endif()
+
+if (APPLE AND NOT IOS)
+    # Phase 0 capacity probe. The model path is supplied at runtime so production assets are never
+    # copied into the Filament fork. This uses public APIs only and is available in Release builds.
+    set(INSTANCE_CAPACITY_BENCHMARK_TARGET benchmark_instance_capacity)
+    add_executable(${INSTANCE_CAPACITY_BENCHMARK_TARGET}
+            test/benchmark_instance_capacity.mm)
+    add_dependencies(${INSTANCE_CAPACITY_BENCHMARK_TARGET} test_gltfio_ext_files)
+    target_link_libraries(${INSTANCE_CAPACITY_BENCHMARK_TARGET}
+            PRIVATE ${TARGET} uberarchive_ext "-framework Metal")
+    target_compile_options(${INSTANCE_CAPACITY_BENCHMARK_TARGET}
+            PRIVATE ${GLTFIO_EXT_WARNINGS})
+    set_target_properties(${INSTANCE_CAPACITY_BENCHMARK_TARGET}
+            PROPERTIES FOLDER Benchmarks)
 endif()
 
 # ==================================================================================================

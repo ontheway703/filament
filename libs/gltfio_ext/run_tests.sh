@@ -40,6 +40,7 @@ TESTS=(
     "test_animator_playback"
     "test_animator_cache"
     "test_animator_crossfade"
+    "test_instance_lifecycle"
     # 缓存系统测试
     "test_animation_cache"
 )
