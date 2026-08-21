@@ -18,6 +18,7 @@ cmake --build out/cmake-debug --target test_animation_asset -j8
 cmake --build out/cmake-debug --target test_gltfio_ext -j8
 cmake --build out/cmake-debug --target test_asset_loader -j8
 cmake --build out/cmake-debug --target test_animation_binding -j8
+cmake --build out/cmake-debug --target test_instance_lifecycle -j8
 ```
 
 ### 运行测试
@@ -35,6 +36,7 @@ cd out/cmake-debug/libs/gltfio_ext
 ./test_gltfio_ext
 ./test_asset_loader
 ./test_animation_binding
+./test_instance_lifecycle
 
 # 运行特定测试用例
 ./test_animation_asset --gtest_filter="AnimationAssetTest.FindNodeByName"
@@ -47,8 +49,8 @@ cd out/cmake-debug/libs/gltfio_ext
 
 ## 测试概览
 
-总计：**10个测试可执行文件，124个测试用例**。当前 host 基线为
-**119 passed / 5 explicitly skipped / 0 failed**；缺少 fixture 或测试可执行文件时 runner 会失败，
+总计：**11个测试可执行文件，129个测试用例**。当前 host 基线为
+**124 passed / 5 explicitly skipped / 0 failed**；缺少 fixture 或测试可执行文件时 runner 会失败，
 不会把依赖缺失记为通过。
 
 | 测试文件 | 类型 | 用例数 | 依赖库 | 需要资源 | 功能覆盖 |
@@ -57,6 +59,7 @@ cd out/cmake-debug/libs/gltfio_ext
 | test_gltfio_ext.cpp | 集成测试 | 10 | gltfio_ext + uberarchive_ext | 是 | 基础加载流程与上游损坏输入回归测试 |
 | test_asset_loader.cpp | 集成测试 | 12 | gltfio_ext + uberarchive_ext | 是 | loadAnimationAsset() API |
 | test_animation_binding.cpp | 集成测试 | 9 | gltfio_ext + uberarchive_ext | 是 | 骨骼名称映射（含实例化）|
+| test_instance_lifecycle.cpp | 集成测试 | 5 | gltfio_ext + uberarchive_ext | 是 | 多实例隔离、Scene 迁移、扩容、冻结与销毁 |
 | test_bone_matrices.cpp | 集成测试 | 5 | gltfio_ext + uberarchive_ext | 是 | 骨骼矩阵更新 |
 | test_animator_lifecycle.cpp | 集成测试 | 9 | gltfio_ext + uberarchive_ext | 是 | 资源生命周期 |
 | test_animator_playback.cpp | 集成测试 | 14 | gltfio_ext + uberarchive_ext | 是 | 外部动画播放 |
@@ -203,6 +206,22 @@ joint，并由内嵌动画驱动该 joint；327 / 512 的 GPU smoke 因此会实
 - ≥90% 骨骼匹配率（允许 10% 容差）
 - 验证从 animation-only 到 full-mesh 的骨骼绑定
 - 验证多实例独立性（createInstance + createForInstance）
+
+---
+
+### test_instance_lifecycle.cpp
+
+**功能**：验证同一 `FilamentAsset` 预创建的多个 `FilamentInstance` 可以作为独立运行时实例使用，且资产仍是实例实体的唯一销毁边界。
+
+**5个测试用例**：
+
+- `InstancedAssetHasIndependentMutableState` - 验证 root、Animator、Transform、layer mask 和 MaterialInstance 相互隔离
+- `InstanceEntitiesMoveBetweenScenesIndependently` - 验证实例可独立加入、移除和迁移 Scene
+- `PreallocatedInstancesSurviveSourceDataRelease` - 验证冻结后不能再创建实例，但既有实例仍可独立使用外部动画
+- `RetainedSourceDataSupportsLateInstanceExpansion` - 验证资源加载后可用保留的 source data 晚创建独立实例，释放后停止扩容
+- `AssetOwnsEveryInstanceEntity` - 验证销毁资产会回收所有实例实体
+
+这些测试保护 Phase 0 的关键假设：资源数据可以被多个运行时实例共享，但实例状态不能互相污染；`FilamentAsset` 的既有 ownership 语义保持不变。
 
 ---
 
