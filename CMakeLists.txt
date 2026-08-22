@@ -44,6 +44,14 @@ project(TNT C CXX ${EXTRA_LANGS})
 # ==================================================================================================
 option(FILAMENT_USE_EXTERNAL_GLES3 "Experimental: Compile Filament against OpenGL ES 3" OFF)
 
+# WebGL2 only guarantees 16 KiB uniform blocks. Keep this opt-in so desktop and
+# native mobile builds retain Filament's normal 32 KiB / 512-bone configuration.
+# Consumers must enable it for both the host material tools and WASM build.
+option(FILAMENT_USE_WEBGL2_LIMITS
+    "Use WebGL2-guaranteed skinning uniform limits (16 KiB / 256 bones)"
+    OFF
+)
+
 # Note: If you intend to use the JNI library (Android/Java build), you need to have
 # exceptions enabled (the default). If you are using Filament on Android as a pure
 # native library and want to save space, you can disable them.
@@ -145,6 +153,10 @@ endif()
 
 if (FILAMENT_DEBUG_MUTEX)
     add_compile_definitions(FILAMENT_DEBUG_MUTEX)
+endif()
+
+if (FILAMENT_USE_WEBGL2_LIMITS)
+    add_compile_definitions(FILAMENT_USE_WEBGL2_LIMITS=1)
 endif()
 
 # ==================================================================================================

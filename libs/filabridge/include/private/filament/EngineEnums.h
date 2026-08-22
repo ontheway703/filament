@@ -146,10 +146,16 @@ constexpr size_t CONFIG_MAX_SHADOW_LAYERS = 64;
 // The maximum number of shadow cascades that can be used for directional lights.
 constexpr size_t CONFIG_MAX_SHADOW_CASCADES = 4;
 
-// The maximum UBO size, in bytes. This value is set to 32 KiB to support 512 bones.
+// The maximum UBO size, in bytes. WebGL2 only guarantees 16 KiB; the opt-in
+// WebGL2 profile therefore pairs this with a 256-bone skinning limit. Other
+// profiles retain the 32 KiB / 512-bone configuration.
 // Note that this value constrains the maximum number of skinning bones, morph targets,
 // instances, and shadow casting spotlights.
+#if defined(FILAMENT_USE_WEBGL2_LIMITS)
+constexpr size_t CONFIG_MINSPEC_UBO_SIZE = 16384;
+#else
 constexpr size_t CONFIG_MINSPEC_UBO_SIZE = 32768;
+#endif
 
 // The maximum number of instances that Filament automatically creates as an optimization.
 // Use a much smaller number for WebGL as a workaround for the following Chrome issues:
@@ -165,7 +171,11 @@ constexpr size_t CONFIG_MAX_INSTANCES = 64;
 
 // The maximum number of bones that can be associated with a single renderable.
 // We store 32 bytes per bone. Must be a power-of-two, and must fit within CONFIG_MINSPEC_UBO_SIZE.
+#if defined(FILAMENT_USE_WEBGL2_LIMITS)
+constexpr size_t CONFIG_MAX_BONE_COUNT = 256;
+#else
 constexpr size_t CONFIG_MAX_BONE_COUNT = 512;
+#endif
 
 // The maximum number of morph targets associated with a single renderable.
 // Note that ES3.0 only guarantees 256 layers in an array texture.
